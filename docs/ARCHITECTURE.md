@@ -45,6 +45,7 @@ Ports
   TaxonomyProvider
   SearchIndex
   EventSink
+  RunQueue
 ```
 
 ## Fast Processing Model
@@ -87,8 +88,20 @@ SQLite schema changes live in `src/librarian/storage/migrations` and are applied
 
 ## Jobs And Events
 
-The API submits processing work through an application-level job runner instead of FastAPI `BackgroundTasks`. The current runner is bounded and in-process; it can be replaced by a durable external queue behind the same route behavior. Run events can be fetched as JSON or streamed over server-sent events.
+The API submits processing work through an application-level job runner instead of FastAPI
+`BackgroundTasks`. The default runner is bounded and in-process for local use. Production
+deployments can set `LIBRARIAN_JOB_BACKEND=sqlite` and run `librarian worker` as a separate
+process. The SQLite queue uses leases, retry backoff, attempt limits, and persisted state so API
+processes can restart independently of workers.
+
+Run events can be fetched as JSON or streamed over server-sent events.
 
 ## Benchmarking
 
 The `librarian benchmark` command uses deterministic synthetic text and the configured cleaner to measure chunking and cleaning throughput. This is the baseline harness for comparing chunking policies, coherence modes, providers, and concurrency settings.
+
+## Evaluation
+
+The `librarian eval` command runs JSON eval suites against the configured chunking, prompt, and
+provider stack. Evals are intentionally file-based so contributors can add sanitized cases without
+coupling the harness to private corpora.

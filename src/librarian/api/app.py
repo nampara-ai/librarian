@@ -19,6 +19,7 @@ from librarian.application.jobs import InProcessJobRunner
 from librarian.config import Settings
 from librarian.domain.ids import DocumentId, RunId
 from librarian.domain.models import Document, ProcessingRun, RunStatus
+from librarian.storage.sqlite import SQLiteRunQueue
 from librarian.taxonomy.dewey import DeweyTaxonomy
 from librarian.version import __version__
 
@@ -173,8 +174,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             run = await container.process_document.start(DocumentId(request.document_id))
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        runner = _job_runner(http_request)
-        await runner.submit(run.id, lambda: _execute_run(settings, run.id))
+        await _submit_run(settings, http_request, run.id)
         return _run_response(run)
 
     @app.get("/runs/{run_id}", response_model=RunResponse)
@@ -209,6 +209,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "data_dir": str(settings.data_dir),
             "llm_provider": settings.llm_provider,
             "llm_model": settings.llm_model,
+            "job_backend": settings.job_backend,
             "coherence_mode": settings.coherence_mode,
             "chunk_target_chars": settings.chunk_target_chars,
             "chunk_overlap_chars": settings.chunk_overlap_chars,
@@ -246,6 +247,18 @@ def _safe_filename(filename: str) -> str:
 async def _execute_run(settings: Settings, run_id: RunId) -> None:
     container = await build_container(settings)
     await container.process_document.execute_existing(run_id)
+
+
+async def _submit_run(settings: Settings, request: Request, run_id: RunId) -> None:
+    if settings.job_backend == "in-process":
+        runner = _job_runner(request)
+        await runner.submit(run_id, lambda: _execute_run(settings, run_id))
+        return
+    if settings.job_backend == "sqlite":
+        container = await build_container(settings)
+        await SQLiteRunQueue(container.database).enqueue(run_id)
+        return
+    raise RuntimeError(f"Unsupported job backend: {settings.job_backend}")
 
 
 def _job_runner(request: Request) -> InProcessJobRunner:

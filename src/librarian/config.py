@@ -41,4 +41,8 @@ class Settings(BaseSettings):
     api_host: str = Field(default="127.0.0.1")
     api_port: int = Field(default=8080)
     api_key: str | None = Field(default=None)
+    job_backend: str = Field(default="in-process")
     job_max_concurrency: int = Field(default=2)
+    job_worker_id: str = Field(default="worker-local")
+    job_lease_seconds: int = Field(default=300)
+    job_max_attempts: int = Field(default=3)

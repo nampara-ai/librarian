@@ -6,10 +6,12 @@ import asyncio
 import json
 import sqlite3
 from collections.abc import Sequence
+from datetime import timedelta
 from importlib.resources import files
 from pathlib import Path
 
 from librarian.application.clean_chunks import CleanedChunk
+from librarian.application.jobs import QueuedRun, QueueStatus
 from librarian.domain.ids import ChunkId, DocumentId, RunId
 from librarian.domain.models import (
     Chunk,
@@ -650,6 +652,140 @@ class SQLiteRepository:
         return [f"{row['stage']}: {row['message']}" for row in rows]
 
 
+class SQLiteRunQueue:
+    """SQLite-backed durable processing queue."""
+
+    def __init__(self, database: SQLiteDatabase) -> None:
+        self.database = database
+
+    async def enqueue(self, run_id: RunId) -> None:
+        """Enqueue a run for external worker processing."""
+        await asyncio.to_thread(self._enqueue_sync, run_id)
+
+    async def claim(self, *, worker_id: str, lease_seconds: int) -> QueuedRun | None:
+        """Claim one available run for a worker."""
+        return await asyncio.to_thread(self._claim_sync, worker_id, lease_seconds)
+
+    async def complete(self, run_id: RunId) -> None:
+        """Mark a queued run complete."""
+        await asyncio.to_thread(self._complete_sync, run_id)
+
+    async def fail(self, run_id: RunId, *, error: str, max_attempts: int) -> None:
+        """Mark a queued run failed or schedule a retry."""
+        await asyncio.to_thread(self._fail_sync, run_id, error, max_attempts)
+
+    def _enqueue_sync(self, run_id: RunId) -> None:
+        now = utc_now().isoformat()
+        with self.database.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO run_queue (
+                  run_id, status, attempts, available_at, created_at, updated_at
+                )
+                VALUES (?, ?, 0, ?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                  status = excluded.status,
+                  available_at = excluded.available_at,
+                  locked_at = NULL,
+                  locked_by = NULL,
+                  updated_at = excluded.updated_at,
+                  last_error = NULL
+                WHERE run_queue.status IN ('failed', 'succeeded')
+                """,
+                (str(run_id), QueueStatus.QUEUED.value, now, now, now),
+            )
+
+    def _claim_sync(self, worker_id: str, lease_seconds: int) -> QueuedRun | None:
+        now = utc_now()
+        lease_cutoff = now - timedelta(seconds=lease_seconds)
+        with self.database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT *
+                FROM run_queue
+                WHERE status IN (?, ?)
+                  AND available_at <= ?
+                  AND (locked_at IS NULL OR locked_at <= ?)
+                ORDER BY updated_at ASC
+                LIMIT 1
+                """,
+                (
+                    QueueStatus.QUEUED.value,
+                    QueueStatus.RETRY.value,
+                    now.isoformat(),
+                    lease_cutoff.isoformat(),
+                ),
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return None
+
+            connection.execute(
+                """
+                UPDATE run_queue
+                SET status = ?, attempts = attempts + 1, locked_at = ?, locked_by = ?,
+                    updated_at = ?
+                WHERE run_id = ?
+                """,
+                (
+                    QueueStatus.RUNNING.value,
+                    now.isoformat(),
+                    worker_id,
+                    now.isoformat(),
+                    str(row["run_id"]),
+                ),
+            )
+            updated = connection.execute(
+                "SELECT * FROM run_queue WHERE run_id = ?",
+                (str(row["run_id"]),),
+            ).fetchone()
+            connection.commit()
+
+        return _queued_run_from_row(updated) if updated else None
+
+    def _complete_sync(self, run_id: RunId) -> None:
+        now = utc_now().isoformat()
+        with self.database.connect() as connection:
+            connection.execute(
+                """
+                UPDATE run_queue
+                SET status = ?, locked_at = NULL, locked_by = NULL, updated_at = ?
+                WHERE run_id = ?
+                """,
+                (QueueStatus.SUCCEEDED.value, now, str(run_id)),
+            )
+
+    def _fail_sync(self, run_id: RunId, error: str, max_attempts: int) -> None:
+        now = utc_now()
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT attempts FROM run_queue WHERE run_id = ?",
+                (str(run_id),),
+            ).fetchone()
+            attempts = int(row["attempts"]) if row else 0
+            status = QueueStatus.FAILED if attempts >= max_attempts else QueueStatus.RETRY
+            backoff_seconds = min(300, max(1, 2 ** max(attempts - 1, 0)))
+            available_at = now if status is QueueStatus.FAILED else now + timedelta(
+                seconds=backoff_seconds
+            )
+            connection.execute(
+                """
+                UPDATE run_queue
+                SET status = ?, available_at = ?, locked_at = NULL, locked_by = NULL,
+                    updated_at = ?, last_error = ?
+                WHERE run_id = ?
+                """,
+                (
+                    status.value,
+                    available_at.isoformat(),
+                    now.isoformat(),
+                    error,
+                    str(run_id),
+                ),
+            )
+
+
 def _document_from_row(row: sqlite3.Row) -> Document:
     return Document(
         id=DocumentId(str(row["id"])),
@@ -714,6 +850,19 @@ def _classification_from_row(row: sqlite3.Row) -> Classification:
         summary=str(row["summary"]),
         taxonomy=str(row["taxonomy"]),
         confidence=float(confidence) if confidence is not None else None,
+    )
+
+
+def _queued_run_from_row(row: sqlite3.Row) -> QueuedRun:
+    locked_at = row["locked_at"]
+    return QueuedRun(
+        run_id=RunId(str(row["run_id"])),
+        status=QueueStatus(str(row["status"])),
+        attempts=int(row["attempts"]),
+        available_at=_parse_datetime(str(row["available_at"])),
+        locked_at=_parse_datetime(str(locked_at)) if locked_at is not None else None,
+        locked_by=str(row["locked_by"]) if row["locked_by"] is not None else None,
+        last_error=str(row["last_error"]) if row["last_error"] is not None else None,
     )
 
 

@@ -66,8 +66,8 @@ def test_api_key_auth(tmp_path: Path) -> None:
 
 def _wait_for_run(client: TestClient, run_id: str):
     response = client.get(f"/runs/{run_id}")
-    for _ in range(20):
-        if response.json()["status"] != "queued":
+    for _ in range(40):
+        if response.json()["status"] in {"succeeded", "failed", "canceled"}:
             return response
         sleep(0.05)
         response = client.get(f"/runs/{run_id}")

@@ -13,13 +13,15 @@ from rich.console import Console
 from rich.table import Table
 
 from librarian.application.benchmark import run_benchmark, synthetic_text
+from librarian.application.eval import eval_result_json, load_eval_suite, run_eval_suite
 from librarian.application.export_document import ExportedDocument, ExportFormat
 from librarian.application.factory import build_container
+from librarian.application.jobs import QueueWorker
 from librarian.config import Settings
 from librarian.domain.ids import DocumentId, RunId, digest_text
 from librarian.ingest.extractors import CompositeExtractor
 from librarian.pipeline.chunking import ChunkingPolicy, chunk_text
-from librarian.storage.sqlite import SQLiteDatabase
+from librarian.storage.sqlite import SQLiteDatabase, SQLiteRunQueue
 from librarian.version import __version__
 
 app = typer.Typer(no_args_is_help=True)
@@ -57,6 +59,14 @@ def init(
     )
     asyncio.run(SQLiteDatabase(root / settings.database_path).initialize())
     console.print(f"Initialized Librarian workspace at {data_dir}")
+
+
+@app.command()
+def migrate() -> None:
+    """Apply database migrations."""
+    settings = Settings()
+    asyncio.run(SQLiteDatabase(settings.database_path).initialize())
+    console.print(f"Applied migrations to {settings.database_path}")
 
 
 @app.command()
@@ -114,6 +124,35 @@ def process(
         container = await build_container()
         result = await container.process_document.execute(DocumentId(document_id))
         console.print(f"Run {result.id}: {result.status.value}")
+
+    asyncio.run(run())
+
+
+@app.command()
+def worker(
+    once: Annotated[bool, typer.Option(help="Process at most one queued run.")] = False,
+    worker_id: Annotated[str | None, typer.Option(help="Stable worker identifier.")] = None,
+    poll_interval: Annotated[float, typer.Option(help="Queue poll interval in seconds.")] = 1.0,
+) -> None:
+    """Run an external SQLite queue worker."""
+    settings = Settings()
+
+    async def run() -> None:
+        container = await build_container(settings)
+        queue = SQLiteRunQueue(container.database)
+        worker_runner = QueueWorker(
+            queue=queue,
+            processor=container.process_document.execute_existing,
+            worker_id=worker_id or settings.job_worker_id,
+            lease_seconds=settings.job_lease_seconds,
+            max_attempts=settings.job_max_attempts,
+            poll_interval_seconds=poll_interval,
+        )
+        if once:
+            did_work = await worker_runner.run_once()
+            console.print("processed one run" if did_work else "no queued runs")
+            return
+        await worker_runner.run_forever()
 
     asyncio.run(run())
 
@@ -250,6 +289,22 @@ def benchmark(
                 "chars_per_second": result.chars_per_second,
             }
         )
+
+    asyncio.run(run())
+
+
+@app.command("eval")
+def eval_suite(
+    path: Annotated[Path, typer.Argument(exists=True, readable=True, dir_okay=False)],
+) -> None:
+    """Run a prompt/model evaluation suite."""
+
+    async def run() -> None:
+        container = await build_container()
+        result = await run_eval_suite(container, load_eval_suite(path))
+        console.print(eval_result_json(result))
+        if not result.passed:
+            raise typer.Exit(code=1)
 
     asyncio.run(run())
 

@@ -21,8 +21,10 @@ pip install -e ".[dev,pdf]"
 ```bash
 librarian version
 librarian init
+librarian migrate
 librarian ingest path/to/transcript.txt
 librarian process doc_...
+librarian worker --once
 librarian status run_...
 librarian list
 librarian show doc_...
@@ -30,6 +32,7 @@ librarian search "horse training"
 librarian export doc_... --output cleaned.txt
 librarian export doc_... --format md --output cleaned.md
 librarian benchmark
+librarian eval examples/eval_cases.json
 librarian chunk path/to/transcript.txt
 librarian api
 ```
@@ -57,9 +60,19 @@ Initial endpoints:
 
 If `LIBRARIAN_API_KEY` is set, requests other than `/health` and `/version` must include `x-api-key`.
 
+By default, API-created runs execute in-process with bounded concurrency. To run the API and
+workers as separate processes, set `LIBRARIAN_JOB_BACKEND=sqlite`, start the API, and run one or
+more workers:
+
+```bash
+LIBRARIAN_JOB_BACKEND=sqlite librarian api
+librarian worker
+```
+
 ## Architecture
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/PRD.md](docs/PRD.md).
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/PRD.md](docs/PRD.md),
+[docs/MIGRATIONS.md](docs/MIGRATIONS.md), and [docs/RELEASE.md](docs/RELEASE.md).
 
 ## Privacy
 

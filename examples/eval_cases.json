@@ -1,0 +1,10 @@
+{
+  "cases": [
+    {
+      "name": "clean transcript and classify equestrian notes",
+      "input_text": "Speaker 1: Today we worked on canter transitions, saddle fit, and keeping the horse relaxed through the corner.",
+      "expected_contains": ["canter transitions", "saddle fit"],
+      "expected_classification_prefix": "636"
+    }
+  ]
+}
