@@ -47,6 +47,7 @@ uvicorn librarian.api.app:create_app --factory --host 127.0.0.1 --port 8080
 Initial endpoints:
 
 - `GET /health`
+- `GET /metrics`
 - `GET /version`
 - `POST /documents`
 - `GET /documents`
@@ -90,7 +91,15 @@ Use the resulting JSON to compare `LIBRARIAN_CHUNK_TARGET_CHARS`,
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/PRD.md](docs/PRD.md),
 [docs/MIGRATIONS.md](docs/MIGRATIONS.md), [docs/EVALUATION.md](docs/EVALUATION.md), and
-[docs/RELEASE.md](docs/RELEASE.md).
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), and [docs/RELEASE.md](docs/RELEASE.md).
+
+## Docker
+
+```bash
+docker compose up --build
+```
+
+The compose stack runs the API plus a separate SQLite-backed worker.
 
 ## Privacy
 

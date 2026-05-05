@@ -13,9 +13,11 @@ __pycache__
 dist
 build
 *.egg-info
+.librarian
 library
 output
 input
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+htmlcov

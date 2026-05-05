@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import time
+import uuid
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -19,6 +22,7 @@ from librarian.application.jobs import InProcessJobRunner
 from librarian.config import Settings
 from librarian.domain.ids import DocumentId, RunId
 from librarian.domain.models import Document, ProcessingRun, RunStatus
+from librarian.observability import MetricsRecorder, configure_logging
 from librarian.storage.sqlite import SQLiteRunQueue
 from librarian.taxonomy.dewey import DeweyTaxonomy
 from librarian.version import __version__
@@ -45,6 +49,9 @@ class DocumentResponse(BaseModel):
 
 class DocumentsResponse(BaseModel):
     documents: list[DocumentResponse]
+    total: int
+    limit: int
+    offset: int
 
 
 class RunRequest(BaseModel):
@@ -79,12 +86,15 @@ class SearchResponse(BaseModel):
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Create the Librarian API app."""
     settings = settings or Settings()
+    configure_logging(level=settings.log_level, log_format=settings.log_format)
+    logger = logging.getLogger("librarian.api")
     taxonomy = DeweyTaxonomy()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         runner = InProcessJobRunner(max_concurrency=settings.job_max_concurrency)
         app.state.job_runner = runner
+        app.state.metrics = MetricsRecorder()
         try:
             yield
         finally:
@@ -104,6 +114,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if supplied != settings.api_key:
                 return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
         return await call_next(request)
+
+    @app.middleware("http")
+    async def request_observability(request: Request, call_next: Any):
+        request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+        start = time.perf_counter()
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = int(response.status_code)
+            response.headers["x-request-id"] = request_id
+            return response
+        finally:
+            duration_ms = (time.perf_counter() - start) * 1000
+            metrics = getattr(request.app.state, "metrics", None)
+            if isinstance(metrics, MetricsRecorder) and settings.metrics_enabled:
+                metrics.record(status_code=status_code, duration_ms=duration_ms)
+            logger.info(
+                "http_request",
+                extra={
+                    "request_id": request_id,
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status_code": status_code,
+                    "duration_ms": round(duration_ms, 3),
+                },
+            )
 
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
@@ -128,11 +164,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ingested = await container.ingest_document.execute(destination)
         return _document_response(ingested.document)
 
+    @app.get("/metrics")
+    async def metrics(request: Request) -> dict[str, object]:
+        current = getattr(request.app.state, "metrics", None)
+        if not isinstance(current, MetricsRecorder) or not settings.metrics_enabled:
+            raise HTTPException(status_code=404, detail="Metrics disabled")
+        return current.snapshot()
+
     @app.get("/documents", response_model=DocumentsResponse)
-    async def list_documents() -> DocumentsResponse:
+    async def list_documents(
+        limit: Annotated[int, Query(ge=1, le=500)] = 100,
+        offset: Annotated[int, Query(ge=0)] = 0,
+    ) -> DocumentsResponse:
         container = await build_container(settings)
-        documents = await container.repository.list()
-        return DocumentsResponse(documents=[_document_response(document) for document in documents])
+        documents = list(await container.repository.list())
+        page = documents[offset : offset + limit]
+        return DocumentsResponse(
+            documents=[_document_response(document) for document in page],
+            total=len(documents),
+            limit=limit,
+            offset=offset,
+        )
 
     @app.get("/documents/{document_id}", response_model=DocumentResponse)
     async def get_document(document_id: str) -> DocumentResponse:

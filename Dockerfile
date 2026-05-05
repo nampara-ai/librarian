@@ -1,15 +1,23 @@
-FROM python:3.12-slim
+FROM python:3.12-slim AS runtime
 
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    LIBRARIAN_API_HOST=0.0.0.0 \
+    LIBRARIAN_DATA_DIR=/data \
+    LIBRARIAN_DATABASE_PATH=/data/librarian.sqlite
 
 WORKDIR /app
 
-COPY pyproject.toml README.md LICENSE ./
+RUN adduser --disabled-password --gecos "" librarian
+
+COPY pyproject.toml README.md ./
 COPY src ./src
 
-RUN pip install --no-cache-dir .
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir ".[pdf]"
 
+USER librarian
+VOLUME ["/data"]
 EXPOSE 8080
 
-CMD ["uvicorn", "librarian.api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["librarian", "api", "--host", "0.0.0.0", "--port", "8080"]

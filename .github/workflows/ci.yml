@@ -26,3 +26,5 @@ jobs:
         run: pytest
       - name: Pyright
         run: pyright
+      - name: Docker build
+        run: docker build -t librarian-ci .

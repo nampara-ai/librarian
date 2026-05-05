@@ -64,6 +64,28 @@ def test_api_key_auth(tmp_path: Path) -> None:
         assert client.get("/documents", headers={"x-api-key": "secret"}).status_code == 200
 
 
+def test_api_document_pagination(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    with TestClient(create_app(settings)) as client:
+        for index in range(3):
+            response = client.post(
+                "/documents",
+                files={"file": (f"notes-{index}.txt", f"Text {index}".encode(), "text/plain")},
+            )
+            assert response.status_code == 200
+
+        page = client.get("/documents?limit=2&offset=1")
+
+        assert page.status_code == 200
+        assert page.json()["total"] == 3
+        assert page.json()["limit"] == 2
+        assert page.json()["offset"] == 1
+        assert len(page.json()["documents"]) == 2
+
+
 def _wait_for_run(client: TestClient, run_id: str):
     response = client.get(f"/runs/{run_id}")
     for _ in range(40):
