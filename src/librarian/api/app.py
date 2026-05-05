@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
+from librarian.application.export_document import ExportedDocument
 from librarian.application.factory import build_container
+from librarian.application.jobs import InProcessJobRunner
 from librarian.config import Settings
 from librarian.domain.ids import DocumentId, RunId
-from librarian.domain.models import Document, ProcessingRun
+from librarian.domain.models import Document, ProcessingRun, RunStatus
 from librarian.taxonomy.dewey import DeweyTaxonomy
 from librarian.version import __version__
 
@@ -61,13 +66,6 @@ class ContentResponse(BaseModel):
     text: str
 
 
-class ExportResponse(BaseModel):
-    document_id: str
-    filename: str
-    classification: str | None
-    text: str
-
-
 class SearchRequest(BaseModel):
     query: str
     limit: int = 20
@@ -82,10 +80,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     taxonomy = DeweyTaxonomy()
 
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+        runner = InProcessJobRunner(max_concurrency=settings.job_max_concurrency)
+        app.state.job_runner = runner
+        try:
+            yield
+        finally:
+            await runner.shutdown()
+
     app = FastAPI(
         title="Librarian API",
         version=__version__,
         summary="Local-first corpus cleaner and organizer.",
+        lifespan=lifespan,
     )
 
     @app.middleware("http")
@@ -141,8 +149,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Cleaned output not found")
         return ContentResponse(document_id=document_id, text=output.text)
 
-    @app.get("/documents/{document_id}/export", response_model=ExportResponse)
-    async def export_document(document_id: str) -> ExportResponse:
+    @app.get("/documents/{document_id}/export")
+    async def export_document(document_id: str, format: str = "json"):
         container = await build_container(settings)
         document = await container.repository.get_document(DocumentId(document_id))
         if document is None:
@@ -151,23 +159,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if output is None:
             raise HTTPException(status_code=404, detail="Cleaned output not found")
         classification = await container.repository.get_classification(DocumentId(document_id))
-        return ExportResponse(
-            document_id=document_id,
-            filename=document.source.filename,
-            classification=(
-                f"{classification.code} - {classification.label}" if classification else None
-            ),
-            text=output.text,
+        exported = ExportedDocument(
+            document=document,
+            output=output,
+            classification=classification,
         )
+        return _export_response(exported, format)
 
     @app.post("/runs", response_model=RunResponse)
-    async def create_run(request: RunRequest, background_tasks: BackgroundTasks) -> RunResponse:
+    async def create_run(request: RunRequest, http_request: Request) -> RunResponse:
         container = await build_container(settings)
         try:
             run = await container.process_document.start(DocumentId(request.document_id))
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        background_tasks.add_task(_execute_run, settings, run.id)
+        runner = _job_runner(http_request)
+        await runner.submit(run.id, lambda: _execute_run(settings, run.id))
         return _run_response(run)
 
     @app.get("/runs/{run_id}", response_model=RunResponse)
@@ -182,6 +189,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def get_run_events(run_id: str) -> dict[str, list[str]]:
         container = await build_container(settings)
         return {"events": list(await container.repository.list_events(RunId(run_id)))}
+
+    @app.get("/runs/{run_id}/events/stream")
+    async def stream_run_events(run_id: str) -> StreamingResponse:
+        return StreamingResponse(
+            _event_stream(settings, RunId(run_id)),
+            media_type="text/event-stream",
+        )
 
     @app.post("/search", response_model=SearchResponse)
     async def search(request: SearchRequest) -> SearchResponse:
@@ -232,3 +246,36 @@ def _safe_filename(filename: str) -> str:
 async def _execute_run(settings: Settings, run_id: RunId) -> None:
     container = await build_container(settings)
     await container.process_document.execute_existing(run_id)
+
+
+def _job_runner(request: Request) -> InProcessJobRunner:
+    runner = request.app.state.job_runner
+    if not isinstance(runner, InProcessJobRunner):
+        raise RuntimeError("Job runner is not initialized")
+    return runner
+
+
+async def _event_stream(settings: Settings, run_id: RunId) -> AsyncIterator[str]:
+    seen = 0
+    while True:
+        container = await build_container(settings)
+        events = list(await container.repository.list_events(run_id))
+        for event in events[seen:]:
+            yield f"data: {event}\n\n"
+        seen = len(events)
+        run = await container.repository.get_run(run_id)
+        if run is None or run.status in {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELED}:
+            yield "event: done\ndata: done\n\n"
+            break
+        await asyncio.sleep(0.2)
+
+
+def _export_response(payload: ExportedDocument, format: str):
+    normalized = format.lower()
+    if normalized == "json":
+        return JSONResponse(json.loads(payload.render("json")))
+    if normalized == "txt":
+        return PlainTextResponse(payload.render("txt"))
+    if normalized == "md":
+        return PlainTextResponse(payload.render("md"), media_type="text/markdown")
+    raise HTTPException(status_code=400, detail="Unsupported export format")

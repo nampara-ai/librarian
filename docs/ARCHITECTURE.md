@@ -80,3 +80,15 @@ The prototype used a max-coherence style. Production defaults should start with 
 ## Prompt Governance
 
 Prompts live under `src/librarian/prompts`. Prompt text is versioned and recorded in run metadata. The cleaning prompt is intentionally ported from the prototype without wording changes until evals justify changes.
+
+## Migrations
+
+SQLite schema changes live in `src/librarian/storage/migrations` and are applied in filename order. Applied versions are recorded in `schema_migrations`.
+
+## Jobs And Events
+
+The API submits processing work through an application-level job runner instead of FastAPI `BackgroundTasks`. The current runner is bounded and in-process; it can be replaced by a durable external queue behind the same route behavior. Run events can be fetched as JSON or streamed over server-sent events.
+
+## Benchmarking
+
+The `librarian benchmark` command uses deterministic synthetic text and the configured cleaner to measure chunking and cleaning throughput. This is the baseline harness for comparing chunking policies, coherence modes, providers, and concurrency settings.

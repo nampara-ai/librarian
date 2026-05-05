@@ -13,3 +13,7 @@ async def test_sqlite_initializes_schema(tmp_path: Path) -> None:
     await database.initialize()
 
     assert database_path.exists()
+    with database.connect() as connection:
+        rows = connection.execute("SELECT version FROM schema_migrations").fetchall()
+
+    assert [row["version"] for row in rows] == ["0001_initial.sql"]

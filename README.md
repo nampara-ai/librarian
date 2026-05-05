@@ -28,6 +28,8 @@ librarian list
 librarian show doc_...
 librarian search "horse training"
 librarian export doc_... --output cleaned.txt
+librarian export doc_... --format md --output cleaned.md
+librarian benchmark
 librarian chunk path/to/transcript.txt
 librarian api
 ```
@@ -48,8 +50,9 @@ Initial endpoints:
 - `POST /runs`
 - `GET /runs/{id}`
 - `GET /runs/{id}/events`
+- `GET /runs/{id}/events/stream`
 - `GET /documents/{id}/content`
-- `GET /documents/{id}/export`
+- `GET /documents/{id}/export?format=json|txt|md`
 - `POST /search`
 
 If `LIBRARIAN_API_KEY` is set, requests other than `/health` and `/version` must include `x-api-key`.

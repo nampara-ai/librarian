@@ -51,6 +51,10 @@ librarian = "librarian.cli.app:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/librarian"]
+artifacts = [
+  "src/librarian/prompts/**/*.md",
+  "src/librarian/storage/migrations/*.sql",
+]
 
 [tool.ruff]
 line-length = 100

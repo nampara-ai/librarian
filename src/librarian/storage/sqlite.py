@@ -36,9 +36,28 @@ class SQLiteDatabase:
 
     def _initialize_sync(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        schema = files("librarian.storage").joinpath("schema.sql").read_text(encoding="utf-8")
         with sqlite3.connect(self.path) as connection:
-            connection.executescript(schema)
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                  version TEXT PRIMARY KEY,
+                  applied_at TEXT NOT NULL
+                )
+                """
+            )
+            applied = {
+                str(row[0])
+                for row in connection.execute("SELECT version FROM schema_migrations").fetchall()
+            }
+            migration_root = files("librarian.storage.migrations")
+            for migration in sorted(migration_root.iterdir(), key=lambda item: item.name):
+                if not migration.name.endswith(".sql") or migration.name in applied:
+                    continue
+                connection.executescript(migration.read_text(encoding="utf-8"))
+                connection.execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                    (migration.name, utc_now().isoformat()),
+                )
 
     def connect(self) -> sqlite3.Connection:
         """Open a configured SQLite connection."""

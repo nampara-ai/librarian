@@ -5,13 +5,15 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 import typer
 import uvicorn
 from rich.console import Console
 from rich.table import Table
 
+from librarian.application.benchmark import run_benchmark, synthetic_text
+from librarian.application.export_document import ExportedDocument, ExportFormat
 from librarian.application.factory import build_container
 from librarian.config import Settings
 from librarian.domain.ids import DocumentId, RunId, digest_text
@@ -198,10 +200,14 @@ def search(
 def export(
     document_id: Annotated[str, typer.Argument(help="Document ID to export.")],
     output: Annotated[Path | None, typer.Option(help="Optional output path.")] = None,
+    format: Annotated[str, typer.Option(help="Export format: txt, md, json.")] = "txt",
 ) -> None:
-    """Export cleaned text for a document."""
+    """Export cleaned text and metadata for a document."""
 
     async def run() -> None:
+        export_format = cast(ExportFormat, format.lower())
+        if export_format not in {"txt", "md", "json"}:
+            raise typer.BadParameter("format must be one of: txt, md, json")
         container = await build_container()
         document = await container.repository.get_document(DocumentId(document_id))
         if document is None:
@@ -210,20 +216,40 @@ def export(
         if cleaned is None:
             raise typer.BadParameter(f"Cleaned output not found: {document_id}")
         classification = await container.repository.get_classification(DocumentId(document_id))
-        header = [
-            "---",
-            f"Document ID: {document.id}",
-            f"Source: {document.source.filename}",
-        ]
-        if classification:
-            header.append(f"Classification: {classification.code} - {classification.label}")
-        header.extend(["---", "", cleaned.text])
-        rendered = "\n".join(header)
+        rendered = ExportedDocument(document, cleaned, classification).render(export_format)
         if output:
             await asyncio.to_thread(output.write_text, rendered, encoding="utf-8")
             console.print(f"Exported {document.id} to {output}")
         else:
             console.print(rendered)
+
+    asyncio.run(run())
+
+
+@app.command()
+def benchmark(
+    paragraphs: Annotated[int, typer.Option(help="Synthetic paragraph count.")] = 100,
+    paragraph_chars: Annotated[int, typer.Option(help="Characters per paragraph.")] = 1_000,
+) -> None:
+    """Benchmark chunking and mock cleaning throughput."""
+
+    async def run() -> None:
+        container = await build_container()
+        result = await run_benchmark(
+            cleaner=container.process_document.cleaner,
+            document_id=DocumentId("doc_benchmark"),
+            text=synthetic_text(paragraphs=paragraphs, paragraph_chars=paragraph_chars),
+            policy=container.process_document.chunking_policy,
+        )
+        console.print_json(
+            data={
+                "input_chars": result.input_chars,
+                "chunks": result.chunks,
+                "chunking_seconds": result.chunking_seconds,
+                "cleaning_seconds": result.cleaning_seconds,
+                "chars_per_second": result.chars_per_second,
+            }
+        )
 
     asyncio.run(run())
 
