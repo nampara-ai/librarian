@@ -1,0 +1,75 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nampara-librarian"
+version = "0.1.0"
+description = "Local-first corpus cleaner and library organizer with CLI and API surfaces."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+authors = [
+  { name = "Nampara AI" }
+]
+keywords = ["llm", "documents", "transcripts", "knowledge-management", "cli", "fastapi"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Framework :: FastAPI",
+  "Intended Audience :: Developers",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Text Processing",
+]
+dependencies = [
+  "fastapi>=0.115.0",
+  "httpx>=0.27.0",
+  "openai>=1.50.0",
+  "pydantic>=2.9.0",
+  "pydantic-settings>=2.5.0",
+  "python-docx>=1.1.2",
+  "python-multipart>=0.0.12",
+  "rich>=13.8.0",
+  "typer>=0.12.5",
+  "uvicorn[standard]>=0.30.6",
+]
+
+[project.optional-dependencies]
+pdf = ["pdfplumber>=0.11.4"]
+dev = [
+  "pytest>=8.3.0",
+  "pytest-asyncio>=0.24.0",
+  "ruff>=0.6.9",
+  "pyright>=1.1.384",
+]
+
+[project.scripts]
+librarian = "librarian.cli.app:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/librarian"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC", "S"]
+ignore = [
+  "S101",
+]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+include = ["src", "tests"]
+venvPath = "."
+venv = ".venv"
+reportUnusedFunction = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

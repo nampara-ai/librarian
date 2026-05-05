@@ -1,0 +1,34 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+.python-version
+.ruff_cache/
+.pytest_cache/
+.pyright/
+.mypy_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+node_modules/
+
+# Librarian runtime data
+.librarian/
+library/
+output/
+input/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+
+# Logs and temp files
+*.log
+*.tmp
+tmp/

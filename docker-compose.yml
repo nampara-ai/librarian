@@ -1,0 +1,12 @@
+services:
+  librarian-api:
+    build: .
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    volumes:
+      - librarian-data:/app/.librarian
+
+volumes:
+  librarian-data:
