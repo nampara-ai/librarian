@@ -20,6 +20,13 @@ pip install -e ".[dev,pdf]"
 
 ```bash
 librarian version
+librarian init
+librarian ingest path/to/transcript.txt
+librarian process doc_...
+librarian status run_...
+librarian list
+librarian show doc_...
+librarian search "horse training"
 librarian chunk path/to/transcript.txt
 librarian api
 ```
@@ -29,6 +36,19 @@ librarian api
 ```bash
 uvicorn librarian.api.app:create_app --factory --host 127.0.0.1 --port 8080
 ```
+
+Initial endpoints:
+
+- `GET /health`
+- `GET /version`
+- `POST /documents`
+- `GET /documents`
+- `GET /documents/{id}`
+- `POST /runs`
+- `GET /runs/{id}`
+- `GET /runs/{id}/events`
+- `GET /documents/{id}/content`
+- `POST /search`
 
 ## Architecture
 

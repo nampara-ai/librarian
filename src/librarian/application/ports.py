@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from librarian.domain.ids import DocumentId, RunId
 from librarian.domain.models import (
@@ -12,6 +12,7 @@ from librarian.domain.models import (
     Classification,
     CleanedOutput,
     Document,
+    DocumentStatus,
     ProcessingRun,
     RunStage,
     RunStatus,
@@ -21,19 +22,25 @@ from librarian.domain.models import (
 class DocumentRepository(Protocol):
     """Persistence port for documents."""
 
-    async def save(self, document: Document) -> None: ...
+    async def save_document(self, document: Document) -> None: ...
 
-    async def get(self, document_id: DocumentId) -> Document | None: ...
+    async def get_document(self, document_id: DocumentId) -> Document | None: ...
 
     async def list(self) -> Sequence[Document]: ...
+
+    async def update_document_status(
+        self,
+        document_id: DocumentId,
+        status: DocumentStatus,
+    ) -> None: ...
 
 
 class RunRepository(Protocol):
     """Persistence port for processing runs."""
 
-    async def save(self, run: ProcessingRun) -> None: ...
+    async def save_run(self, run: ProcessingRun) -> None: ...
 
-    async def get(self, run_id: RunId) -> ProcessingRun | None: ...
+    async def get_run(self, run_id: RunId) -> ProcessingRun | None: ...
 
     async def update_status(
         self,
@@ -42,6 +49,16 @@ class RunRepository(Protocol):
         status: RunStatus,
         stage: RunStage,
         error: str | None = None,
+    ) -> None: ...
+
+    async def update_run_progress(
+        self,
+        run_id: RunId,
+        *,
+        completed_chunks: int,
+        failed_chunks: int,
+        stage: RunStage,
+        status: RunStatus = RunStatus.RUNNING,
     ) -> None: ...
 
 
@@ -98,7 +115,7 @@ class EventSink(Protocol):
 
     async def emit(self, run_id: RunId, stage: RunStage, message: str) -> None: ...
 
-    async def stream(self, run_id: RunId) -> AsyncIterator[str]: ...
+    def stream(self, run_id: RunId) -> AsyncIterator[str]: ...
 
 
 class ChunkRepository(Protocol):
@@ -107,3 +124,17 @@ class ChunkRepository(Protocol):
     async def save_many(self, chunks: Sequence[Chunk]) -> None: ...
 
     async def list_for_document(self, document_id: DocumentId) -> Sequence[Chunk]: ...
+
+
+class OutputRepository(Protocol):
+    """Persistence port for generated output."""
+
+    async def save_cleaned_output(self, output: CleanedOutput) -> None: ...
+
+    async def save_cleaned_chunks(self, run_id: RunId, chunks: Sequence[Any]) -> None: ...
+
+    async def get_cleaned_output(self, document_id: DocumentId) -> CleanedOutput | None: ...
+
+    async def save_classification(self, classification: Classification) -> None: ...
+
+    async def get_classification(self, document_id: DocumentId) -> Classification | None: ...

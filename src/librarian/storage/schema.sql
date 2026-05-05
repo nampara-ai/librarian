@@ -13,6 +13,12 @@ CREATE TABLE IF NOT EXISTS documents (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS content_blobs (
+  key TEXT PRIMARY KEY,
+  text TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS chunks (
   id TEXT PRIMARY KEY,
   document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -37,6 +43,15 @@ CREATE TABLE IF NOT EXISTS runs (
   error TEXT
 );
 
+CREATE TABLE IF NOT EXISTS cleaned_chunks (
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  warnings TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(run_id, chunk_id)
+);
+
 CREATE TABLE IF NOT EXISTS cleaned_outputs (
   document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
@@ -55,6 +70,14 @@ CREATE TABLE IF NOT EXISTS classifications (
   summary TEXT NOT NULL,
   taxonomy TEXT NOT NULL,
   confidence REAL
+);
+
+CREATE TABLE IF NOT EXISTS run_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  stage TEXT NOT NULL,
+  message TEXT NOT NULL,
+  created_at TEXT NOT NULL
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS cleaned_outputs_fts
