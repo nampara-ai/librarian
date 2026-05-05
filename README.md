@@ -31,8 +31,9 @@ librarian show doc_...
 librarian search "horse training"
 librarian export doc_... --output cleaned.txt
 librarian export doc_... --format md --output cleaned.md
-librarian benchmark
-librarian eval examples/eval_cases.json
+librarian benchmark --repeats 3 --output benchmark.json
+librarian benchmark --input-path examples/benchmark_text.txt
+librarian eval examples/eval_cases.json --output eval.json
 librarian chunk path/to/transcript.txt
 librarian api
 ```
@@ -69,10 +70,27 @@ LIBRARIAN_JOB_BACKEND=sqlite librarian api
 librarian worker
 ```
 
+## Provider Evals And Benchmarks
+
+The mock provider is deterministic and used by CI. To evaluate a real OpenAI-compatible provider:
+
+```bash
+export LIBRARIAN_LLM_PROVIDER=openai-compatible
+export LIBRARIAN_LLM_MODEL=gpt-4.1-mini
+export OPENAI_API_KEY=...
+librarian eval examples/eval_cases.json --output eval-openai.json
+librarian benchmark --input-path examples/benchmark_text.txt --repeats 3 --output bench-openai.json
+```
+
+Use the resulting JSON to compare `LIBRARIAN_CHUNK_TARGET_CHARS`,
+`LIBRARIAN_CHUNK_OVERLAP_CHARS`, `LIBRARIAN_LLM_MAX_CONCURRENCY`, and
+`LIBRARIAN_COHERENCE_MODE`.
+
 ## Architecture
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/PRD.md](docs/PRD.md),
-[docs/MIGRATIONS.md](docs/MIGRATIONS.md), and [docs/RELEASE.md](docs/RELEASE.md).
+[docs/MIGRATIONS.md](docs/MIGRATIONS.md), [docs/EVALUATION.md](docs/EVALUATION.md), and
+[docs/RELEASE.md](docs/RELEASE.md).
 
 ## Privacy
 

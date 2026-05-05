@@ -104,4 +104,5 @@ The `librarian benchmark` command uses deterministic synthetic text and the conf
 
 The `librarian eval` command runs JSON eval suites against the configured chunking, prompt, and
 provider stack. Evals are intentionally file-based so contributors can add sanitized cases without
-coupling the harness to private corpora.
+coupling the harness to private corpora. See `docs/EVALUATION.md` for provider tuning commands and
+the baseline tuning matrix.

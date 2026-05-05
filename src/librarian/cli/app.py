@@ -12,7 +12,11 @@ import uvicorn
 from rich.console import Console
 from rich.table import Table
 
-from librarian.application.benchmark import run_benchmark, synthetic_text
+from librarian.application.benchmark import (
+    benchmark_result_json,
+    load_benchmark_text,
+    run_benchmark_suite,
+)
 from librarian.application.eval import eval_result_json, load_eval_suite, run_eval_suite
 from librarian.application.export_document import ExportedDocument, ExportFormat
 from librarian.application.factory import build_container
@@ -269,26 +273,34 @@ def export(
 def benchmark(
     paragraphs: Annotated[int, typer.Option(help="Synthetic paragraph count.")] = 100,
     paragraph_chars: Annotated[int, typer.Option(help="Characters per paragraph.")] = 1_000,
+    input_path: Annotated[
+        Path | None,
+        typer.Option(help="Optional UTF-8 text file to benchmark instead of synthetic text."),
+    ] = None,
+    repeats: Annotated[int, typer.Option(help="Number of repeated benchmark runs.")] = 1,
+    output: Annotated[Path | None, typer.Option(help="Optional JSON output path.")] = None,
 ) -> None:
-    """Benchmark chunking and mock cleaning throughput."""
+    """Benchmark chunking and configured cleaning provider throughput."""
 
     async def run() -> None:
         container = await build_container()
-        result = await run_benchmark(
+        result = await run_benchmark_suite(
             cleaner=container.process_document.cleaner,
             document_id=DocumentId("doc_benchmark"),
-            text=synthetic_text(paragraphs=paragraphs, paragraph_chars=paragraph_chars),
+            text=load_benchmark_text(
+                input_path,
+                paragraphs=paragraphs,
+                paragraph_chars=paragraph_chars,
+            ),
             policy=container.process_document.chunking_policy,
+            repeats=max(1, repeats),
         )
-        console.print_json(
-            data={
-                "input_chars": result.input_chars,
-                "chunks": result.chunks,
-                "chunking_seconds": result.chunking_seconds,
-                "cleaning_seconds": result.cleaning_seconds,
-                "chars_per_second": result.chars_per_second,
-            }
-        )
+        rendered = benchmark_result_json(result)
+        if output:
+            await asyncio.to_thread(output.write_text, rendered, encoding="utf-8")
+            console.print(f"Wrote benchmark results to {output}")
+            return
+        console.print(rendered)
 
     asyncio.run(run())
 
@@ -296,13 +308,19 @@ def benchmark(
 @app.command("eval")
 def eval_suite(
     path: Annotated[Path, typer.Argument(exists=True, readable=True, dir_okay=False)],
+    output: Annotated[Path | None, typer.Option(help="Optional JSON output path.")] = None,
 ) -> None:
     """Run a prompt/model evaluation suite."""
 
     async def run() -> None:
         container = await build_container()
         result = await run_eval_suite(container, load_eval_suite(path))
-        console.print(eval_result_json(result))
+        rendered = eval_result_json(result)
+        if output:
+            await asyncio.to_thread(output.write_text, rendered, encoding="utf-8")
+            console.print(f"Wrote eval results to {output}")
+        else:
+            console.print(rendered)
         if not result.passed:
             raise typer.Exit(code=1)
 

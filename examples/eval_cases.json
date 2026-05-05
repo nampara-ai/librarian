@@ -2,9 +2,27 @@
   "cases": [
     {
       "name": "clean transcript and classify equestrian notes",
+      "tags": ["classification", "transcript", "equestrian"],
       "input_text": "Speaker 1: Today we worked on canter transitions, saddle fit, and keeping the horse relaxed through the corner.",
       "expected_contains": ["canter transitions", "saddle fit"],
-      "expected_classification_prefix": "636"
+      "expected_classification_prefix": "636",
+      "min_output_chars": 80
+    },
+    {
+      "name": "classify health interview notes",
+      "tags": ["classification", "health", "interview"],
+      "input_text": "Interviewer: The doctor explained disease prevention, medicine adherence, sleep, and follow-up care after the clinic visit.",
+      "expected_contains": ["disease prevention", "follow-up care"],
+      "expected_classification_prefix": "610",
+      "min_output_chars": 80
+    },
+    {
+      "name": "classify literature seminar transcript",
+      "tags": ["classification", "literature", "seminar"],
+      "input_text": "Professor: This novel uses recurring imagery, poetry-like rhythm, and narrative voice to shape the reader's response.",
+      "expected_contains": ["novel", "narrative voice"],
+      "expected_classification_prefix": "800",
+      "min_output_chars": 80
     }
   ]
 }

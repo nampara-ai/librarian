@@ -1,0 +1,10 @@
+Speaker 1: This is a rough transcript about library processing, document cleanup, and classification.
+There are false starts, repeated phrases, and informal wording that should be cleaned without
+changing the meaning.
+
+Speaker 2: The important requirements are speed, source fidelity, durable processing, searchable
+outputs, and a classification label that helps the user browse the cleaned library later.
+
+Speaker 1: We also need enough repeated content to exercise chunking and provider throughput. The
+pipeline should preserve operational detail, remove obvious transcript clutter, and keep the
+result useful for downstream indexing.
