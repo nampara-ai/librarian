@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass
 
 from librarian.application.assemble_document import assemble_cleaned_document
+from librarian.application.classify_document import ClassifyDocument
 from librarian.application.clean_chunks import CleanChunks
 from librarian.application.ingest_document import raw_text_key
 from librarian.application.ports import (
@@ -19,7 +20,6 @@ from librarian.application.ports import (
 )
 from librarian.domain.ids import DocumentId, RunId
 from librarian.domain.models import (
-    Classification,
     CleanedOutput,
     DocumentStatus,
     ProcessingRun,
@@ -27,7 +27,6 @@ from librarian.domain.models import (
     RunStatus,
 )
 from librarian.pipeline.chunking import ChunkingPolicy, chunk_text
-from librarian.taxonomy.dewey import DeweyTaxonomy
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,8 +41,8 @@ class ProcessDocument:
     search: SearchIndex
     events: EventSink
     cleaner: CleanChunks
+    classifier: ClassifyDocument
     chunking_policy: ChunkingPolicy
-    taxonomy: DeweyTaxonomy
 
     async def start(self, document_id: DocumentId) -> ProcessingRun:
         """Create a queued run without executing it."""
@@ -94,7 +93,25 @@ class ProcessDocument:
                 total_chunks=len(chunked),
             )
             await self.runs.save_run(run)
-            cleaned_chunks = await self.cleaner.execute(chunked)
+            cached_chunks = await self.outputs.get_cached_cleaned_chunks(
+                chunked,
+                prompt_version=self.cleaner.prompt_version,
+                model_provider=self.cleaner.provider.name,
+                model_name=self.cleaner.model,
+            )
+            cached_ids = {chunk.chunk.id for chunk in cached_chunks}
+            missing_chunks = [chunk for chunk in chunked if chunk.id not in cached_ids]
+            cleaned_missing = await self.cleaner.execute(missing_chunks)
+            await self.outputs.save_cleaned_chunk_cache(
+                cleaned_missing,
+                prompt_version=self.cleaner.prompt_version,
+                model_provider=self.cleaner.provider.name,
+                model_name=self.cleaner.model,
+            )
+            cleaned_chunks = sorted(
+                [*cached_chunks, *cleaned_missing],
+                key=lambda item: item.chunk.ordinal,
+            )
             await self.outputs.save_cleaned_chunks(run_id, cleaned_chunks)
             failed_chunks = sum(1 for chunk in cleaned_chunks if not chunk.text.strip())
             completed_chunks = len(cleaned_chunks) - failed_chunks
@@ -107,7 +124,8 @@ class ProcessDocument:
             await self.events.emit(
                 run_id,
                 RunStage.CLEAN,
-                f"cleaned {completed_chunks}/{len(chunked)} chunk(s)",
+                f"cleaned {completed_chunks}/{len(chunked)} chunk(s) "
+                f"({len(cached_chunks)} cache hit(s))",
             )
 
             await self.runs.update_status(
@@ -125,7 +143,7 @@ class ProcessDocument:
                 model_name=self.cleaner.model,
             )
             await self.outputs.save_cleaned_output(output)
-            classification = _classify(document_id, assembled, self.taxonomy)
+            classification = await self.classifier.execute(document_id, assembled)
             await self.outputs.save_classification(classification)
             await self.search.index(output, classification)
             await self.events.emit(run_id, RunStage.INDEX, "stored output and search index")
@@ -151,20 +169,3 @@ class ProcessDocument:
             await self.documents.update_document_status(document_id, DocumentStatus.FAILED)
             await self.events.emit(run_id, RunStage.COMPLETE, f"processing failed: {exc}")
             raise
-
-
-def _classify(document_id: DocumentId, text: str, taxonomy: DeweyTaxonomy) -> Classification:
-    lowered = text.lower()
-    code = "000"
-    if any(term in lowered for term in ("horse", "equine", "colt", "mare", "stallion")):
-        code = "636.1"
-    elif any(term in lowered for term in ("software", "programming", "computer", "algorithm")):
-        code = "000"
-    elif any(term in lowered for term in ("medicine", "health", "doctor", "disease")):
-        code = "610"
-    elif any(term in lowered for term in ("writing", "literature", "novel", "poetry")):
-        code = "800"
-
-    label = taxonomy.label_for(code) or "General"
-    summary = text[:500].strip() or "No summary available."
-    return Classification(document_id=document_id, code=code, label=label, summary=summary)

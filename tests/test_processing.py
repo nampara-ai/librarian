@@ -35,3 +35,8 @@ async def test_ingest_process_and_search_round_trip(tmp_path: Path) -> None:
     assert classification is not None
     assert classification.code == "636.1"
     assert ingested.document.id in results
+
+    second_run = await container.process_document.execute(ingested.document.id)
+    events = await container.repository.list_events(second_run.id)
+
+    assert any("1 cache hit(s)" in event for event in events)

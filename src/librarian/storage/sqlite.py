@@ -142,6 +142,40 @@ class SQLiteRepository:
         """Save chunk-level clean outputs."""
         await asyncio.to_thread(self._save_cleaned_chunks_sync, run_id, chunks)
 
+    async def get_cached_cleaned_chunks(
+        self,
+        chunks: Sequence[Chunk],
+        *,
+        prompt_version: str,
+        model_provider: str,
+        model_name: str,
+    ) -> Sequence[CleanedChunk]:
+        """Get cached cleaned chunks for matching chunk hashes and model settings."""
+        return await asyncio.to_thread(
+            self._get_cached_cleaned_chunks_sync,
+            chunks,
+            prompt_version,
+            model_provider,
+            model_name,
+        )
+
+    async def save_cleaned_chunk_cache(
+        self,
+        chunks: Sequence[CleanedChunk],
+        *,
+        prompt_version: str,
+        model_provider: str,
+        model_name: str,
+    ) -> None:
+        """Cache cleaned chunks by chunk hash and model settings."""
+        await asyncio.to_thread(
+            self._save_cleaned_chunk_cache_sync,
+            chunks,
+            prompt_version,
+            model_provider,
+            model_name,
+        )
+
     async def save_cleaned_output(self, output: CleanedOutput) -> None:
         """Save final cleaned output."""
         await asyncio.to_thread(self._save_cleaned_output_sync, output)
@@ -398,6 +432,87 @@ class SQLiteRepository:
                         utc_now().isoformat(),
                     )
                     for chunk in chunks
+                ],
+            )
+
+    def _get_cached_cleaned_chunks_sync(
+        self,
+        chunks: Sequence[Chunk],
+        prompt_version: str,
+        model_provider: str,
+        model_name: str,
+    ) -> list[CleanedChunk]:
+        if not chunks:
+            return []
+
+        by_sha = {chunk.sha256: chunk for chunk in chunks}
+        with self.database.connect() as connection:
+            rows = [
+                row
+                for sha in by_sha
+                if (
+                    row := connection.execute(
+                        """
+                        SELECT chunk_sha256, text, warnings
+                        FROM cleaned_chunk_cache
+                        WHERE chunk_sha256 = ?
+                          AND prompt_version = ?
+                          AND model_provider = ?
+                          AND model_name = ?
+                        """,
+                        (sha, prompt_version, model_provider, model_name),
+                    ).fetchone()
+                )
+                is not None
+            ]
+
+        cached: list[CleanedChunk] = []
+        for row in rows:
+            chunk = by_sha[str(row["chunk_sha256"])]
+            warnings = tuple(str(item) for item in json.loads(str(row["warnings"])))
+            cached.append(
+                CleanedChunk(
+                    chunk=chunk,
+                    text=str(row["text"]),
+                    warnings=warnings,
+                )
+            )
+        return cached
+
+    def _save_cleaned_chunk_cache_sync(
+        self,
+        chunks: Sequence[CleanedChunk],
+        prompt_version: str,
+        model_provider: str,
+        model_name: str,
+    ) -> None:
+        if not chunks:
+            return
+
+        with self.database.connect() as connection:
+            connection.executemany(
+                """
+                INSERT INTO cleaned_chunk_cache (
+                  chunk_sha256, prompt_version, model_provider, model_name,
+                  text, warnings, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(chunk_sha256, prompt_version, model_provider, model_name)
+                DO UPDATE SET
+                  text = excluded.text,
+                  warnings = excluded.warnings
+                """,
+                [
+                    (
+                        item.chunk.sha256,
+                        prompt_version,
+                        model_provider,
+                        model_name,
+                        item.text,
+                        json.dumps(list(item.warnings)),
+                        utc_now().isoformat(),
+                    )
+                    for item in chunks
                 ],
             )
 

@@ -12,7 +12,6 @@ import uvicorn
 from rich.console import Console
 from rich.table import Table
 
-from librarian.api.app import create_app
 from librarian.application.factory import build_container
 from librarian.config import Settings
 from librarian.domain.ids import DocumentId, RunId, digest_text
@@ -196,6 +195,40 @@ def search(
 
 
 @app.command()
+def export(
+    document_id: Annotated[str, typer.Argument(help="Document ID to export.")],
+    output: Annotated[Path | None, typer.Option(help="Optional output path.")] = None,
+) -> None:
+    """Export cleaned text for a document."""
+
+    async def run() -> None:
+        container = await build_container()
+        document = await container.repository.get_document(DocumentId(document_id))
+        if document is None:
+            raise typer.BadParameter(f"Document not found: {document_id}")
+        cleaned = await container.repository.get_cleaned_output(DocumentId(document_id))
+        if cleaned is None:
+            raise typer.BadParameter(f"Cleaned output not found: {document_id}")
+        classification = await container.repository.get_classification(DocumentId(document_id))
+        header = [
+            "---",
+            f"Document ID: {document.id}",
+            f"Source: {document.source.filename}",
+        ]
+        if classification:
+            header.append(f"Classification: {classification.code} - {classification.label}")
+        header.extend(["---", "", cleaned.text])
+        rendered = "\n".join(header)
+        if output:
+            await asyncio.to_thread(output.write_text, rendered, encoding="utf-8")
+            console.print(f"Exported {document.id} to {output}")
+        else:
+            console.print(rendered)
+
+    asyncio.run(run())
+
+
+@app.command()
 def api(
     host: str | None = typer.Option(None, help="API bind host."),
     port: int | None = typer.Option(None, help="API bind port."),
@@ -203,7 +236,7 @@ def api(
     """Run the Librarian API service."""
     settings = Settings()
     uvicorn.run(
-        create_app,
+        "librarian.api.app:create_app",
         factory=True,
         host=host or settings.api_host,
         port=port or settings.api_port,

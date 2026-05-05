@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from librarian.application.factory import build_container
@@ -60,6 +61,13 @@ class ContentResponse(BaseModel):
     text: str
 
 
+class ExportResponse(BaseModel):
+    document_id: str
+    filename: str
+    classification: str | None
+    text: str
+
+
 class SearchRequest(BaseModel):
     query: str
     limit: int = 20
@@ -79,6 +87,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version=__version__,
         summary="Local-first corpus cleaner and organizer.",
     )
+
+    @app.middleware("http")
+    async def api_key_auth(request: Request, call_next: Any):
+        if settings.api_key and request.url.path not in {"/health", "/version"}:
+            supplied = request.headers.get("x-api-key")
+            if supplied != settings.api_key:
+                return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
+        return await call_next(request)
 
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
@@ -124,6 +140,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if output is None:
             raise HTTPException(status_code=404, detail="Cleaned output not found")
         return ContentResponse(document_id=document_id, text=output.text)
+
+    @app.get("/documents/{document_id}/export", response_model=ExportResponse)
+    async def export_document(document_id: str) -> ExportResponse:
+        container = await build_container(settings)
+        document = await container.repository.get_document(DocumentId(document_id))
+        if document is None:
+            raise HTTPException(status_code=404, detail="Document not found")
+        output = await container.repository.get_cleaned_output(DocumentId(document_id))
+        if output is None:
+            raise HTTPException(status_code=404, detail="Cleaned output not found")
+        classification = await container.repository.get_classification(DocumentId(document_id))
+        return ExportResponse(
+            document_id=document_id,
+            filename=document.source.filename,
+            classification=(
+                f"{classification.code} - {classification.label}" if classification else None
+            ),
+            text=output.text,
+        )
 
     @app.post("/runs", response_model=RunResponse)
     async def create_run(request: RunRequest, background_tasks: BackgroundTasks) -> RunResponse:

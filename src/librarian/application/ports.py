@@ -133,6 +133,24 @@ class OutputRepository(Protocol):
 
     async def save_cleaned_chunks(self, run_id: RunId, chunks: Sequence[Any]) -> None: ...
 
+    async def get_cached_cleaned_chunks(
+        self,
+        chunks: Sequence[Chunk],
+        *,
+        prompt_version: str,
+        model_provider: str,
+        model_name: str,
+    ) -> Sequence[Any]: ...
+
+    async def save_cleaned_chunk_cache(
+        self,
+        chunks: Sequence[Any],
+        *,
+        prompt_version: str,
+        model_provider: str,
+        model_name: str,
+    ) -> None: ...
+
     async def get_cleaned_output(self, document_id: DocumentId) -> CleanedOutput | None: ...
 
     async def save_classification(self, classification: Classification) -> None: ...

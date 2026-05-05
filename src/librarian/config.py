@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     llm_api_key_env: str = Field(default="OPENAI_API_KEY")
     llm_timeout_seconds: float = Field(default=120.0)
     llm_max_concurrency: int = Field(default=8)
+    llm_max_retries: int = Field(default=5)
+    llm_retry_base_delay_seconds: float = Field(default=0.5)
+    llm_retry_max_delay_seconds: float = Field(default=10.0)
 
     cleaning_prompt_version: str = Field(default="cmos_v1")
     classification_prompt_version: str = Field(default="dewey_v1")

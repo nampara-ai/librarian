@@ -52,6 +52,17 @@ CREATE TABLE IF NOT EXISTS cleaned_chunks (
   PRIMARY KEY(run_id, chunk_id)
 );
 
+CREATE TABLE IF NOT EXISTS cleaned_chunk_cache (
+  chunk_sha256 TEXT NOT NULL,
+  prompt_version TEXT NOT NULL,
+  model_provider TEXT NOT NULL,
+  model_name TEXT NOT NULL,
+  text TEXT NOT NULL,
+  warnings TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(chunk_sha256, prompt_version, model_provider, model_name)
+);
+
 CREATE TABLE IF NOT EXISTS cleaned_outputs (
   document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
