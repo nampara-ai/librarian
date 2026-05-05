@@ -17,6 +17,11 @@ from librarian.application.benchmark import (
     load_benchmark_text,
     run_benchmark_suite,
 )
+from librarian.application.convert_document import (
+    ConversionFormat,
+    DirectoryOutputMode,
+    DocumentConverter,
+)
 from librarian.application.eval import eval_result_json, load_eval_suite, run_eval_suite
 from librarian.application.export_document import ExportedDocument, ExportFormat
 from librarian.application.factory import build_container
@@ -97,6 +102,81 @@ def chunk(
                 f"{item.ordinal:>4} {item.id} {item.start_char}-{item.end_char} "
                 f"{len(item.text):>7} chars"
             )
+
+    asyncio.run(run())
+
+
+@app.command()
+def convert(
+    path: Annotated[Path, typer.Argument(exists=True, readable=True, dir_okay=False)],
+    output: Annotated[Path, typer.Option(help="Output .md or .txt path.")],
+    format: Annotated[str, typer.Option(help="Output format: md or txt.")] = "md",
+    overwrite: Annotated[bool, typer.Option(help="Overwrite existing output.")] = False,
+) -> None:
+    """Convert one source file to Markdown or plain text."""
+    conversion_format = _conversion_format(format)
+
+    async def run() -> None:
+        converter = DocumentConverter(CompositeExtractor())
+        result = await converter.convert_file(
+            path.resolve(),
+            output.resolve(),
+            format=conversion_format,
+            overwrite=overwrite,
+        )
+        console.print(f"Converted {result.source_path} -> {result.output_path}")
+
+    asyncio.run(run())
+
+
+@app.command("convert-dir")
+def convert_dir(
+    path: Annotated[Path, typer.Argument(exists=True, readable=True, file_okay=False)],
+    format: Annotated[str, typer.Option(help="Output format: md or txt.")] = "md",
+    output_mode: Annotated[
+        str,
+        typer.Option(help="Output mode: new-directory, original, subdirectory."),
+    ] = "subdirectory",
+    output_dir: Annotated[
+        Path | None,
+        typer.Option(help="Target directory for new-directory mode."),
+    ] = None,
+    subdirectory_name: Annotated[
+        str,
+        typer.Option(help="Subdirectory name for subdirectory mode."),
+    ] = "librarian-converted",
+    recursive: Annotated[bool, typer.Option(help="Recurse into child directories.")] = False,
+    overwrite: Annotated[bool, typer.Option(help="Overwrite existing outputs.")] = False,
+) -> None:
+    """Batch convert supported files in a directory."""
+    conversion_format = _conversion_format(format)
+    mode = _directory_output_mode(output_mode)
+
+    async def run() -> None:
+        converter = DocumentConverter(CompositeExtractor())
+        result = await converter.convert_directory(
+            path.resolve(),
+            format=conversion_format,
+            output_mode=mode,
+            output_dir=output_dir.resolve() if output_dir else None,
+            subdirectory_name=subdirectory_name,
+            recursive=recursive,
+            overwrite=overwrite,
+        )
+        table = Table("Status", "Source", "Output", "Error")
+        for item in result.items:
+            table.add_row(
+                item.status,
+                str(item.source_path),
+                str(item.output_path) if item.output_path else "",
+                item.error or "",
+            )
+        console.print(table)
+        console.print(
+            f"Converted {result.converted}, skipped {result.skipped}, failed {result.failed}"
+        )
+        if result.failed:
+            raise typer.Exit(code=1)
 
     asyncio.run(run())
 
@@ -340,3 +420,21 @@ def api(
         host=host or settings.api_host,
         port=port or settings.api_port,
     )
+
+
+def _conversion_format(value: str) -> ConversionFormat:
+    normalized = value.lower()
+    if normalized in {"md", "markdown"}:
+        return ConversionFormat.MARKDOWN
+    if normalized in {"txt", "text"}:
+        return ConversionFormat.TEXT
+    raise typer.BadParameter("format must be one of: md, txt")
+
+
+def _directory_output_mode(value: str) -> DirectoryOutputMode:
+    try:
+        return DirectoryOutputMode(value)
+    except ValueError as exc:
+        raise typer.BadParameter(
+            "output-mode must be one of: new-directory, original, subdirectory"
+        ) from exc

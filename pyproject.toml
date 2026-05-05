@@ -39,6 +39,19 @@ dependencies = [
 
 [project.optional-dependencies]
 pdf = ["pdfplumber>=0.11.4"]
+ocr = [
+  "pdf2image>=1.17.0",
+  "pillow>=10.4.0",
+  "pytesseract>=0.3.13",
+]
+universal = ["markitdown[pdf,docx,pptx,xlsx,xls,outlook]>=0.1.5"]
+all = [
+  "markitdown[pdf,docx,pptx,xlsx,xls,outlook]>=0.1.5",
+  "pdf2image>=1.17.0",
+  "pdfplumber>=0.11.4",
+  "pillow>=10.4.0",
+  "pytesseract>=0.3.13",
+]
 dev = [
   "pytest>=8.3.0",
   "pytest-asyncio>=0.24.0",

@@ -14,6 +14,8 @@ Early foundation. The current implementation includes the project skeleton, doma
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev,pdf]"
+# broad conversion and OCR:
+pip install -e ".[dev,all]"
 ```
 
 ## CLI
@@ -22,6 +24,8 @@ pip install -e ".[dev,pdf]"
 librarian version
 librarian init
 librarian migrate
+librarian convert path/to/report.docx --format md --output converted/report.md
+librarian convert-dir path/to/folder --format md --output-mode subdirectory
 librarian ingest path/to/transcript.txt
 librarian process doc_...
 librarian worker --once
@@ -90,8 +94,9 @@ Use the resulting JSON to compare `LIBRARIAN_CHUNK_TARGET_CHARS`,
 ## Architecture
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/PRD.md](docs/PRD.md),
-[docs/MIGRATIONS.md](docs/MIGRATIONS.md), [docs/EVALUATION.md](docs/EVALUATION.md), and
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), and [docs/RELEASE.md](docs/RELEASE.md).
+[docs/MIGRATIONS.md](docs/MIGRATIONS.md), [docs/CONVERSION.md](docs/CONVERSION.md),
+[docs/EVALUATION.md](docs/EVALUATION.md), [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), and
+[docs/RELEASE.md](docs/RELEASE.md).
 
 ## Docker
 
