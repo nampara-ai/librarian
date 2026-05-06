@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0a1 - 2026-05-06
 
 - Added OSS governance files, templates, Dependabot, and CodeQL.
 - Added combined import manifests, resume mode, JSON reports, and run/queue controls.
@@ -8,9 +8,6 @@
   conversion failure classification.
 - Added API endpoints for imports, document deletion/reprocess, run cancel/retry, and run listing.
 - Added release workflow support for GHCR images and SBOM artifacts.
-
-## 0.1.0
-
 - Initial production rewrite foundation.
 - CLI and FastAPI surfaces over shared application services.
 - SQLite persistence with append-only migrations.
