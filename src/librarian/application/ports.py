@@ -106,14 +106,6 @@ class TaxonomyProvider(Protocol):
     def label_for(self, code: str) -> str | None: ...
 
 
-class SearchIndex(Protocol):
-    """Search index port."""
-
-    async def index(self, output: CleanedOutput, classification: Classification | None) -> None: ...
-
-    async def search(self, query: str, *, limit: int = 20) -> Sequence[DocumentId]: ...
-
-
 class EventSink(Protocol):
     """Structured run event sink."""
 

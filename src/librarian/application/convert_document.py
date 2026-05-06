@@ -10,6 +10,9 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol, cast
 
+_MAX_METADATA_BYTES = 64 * 1024
+_LIBRARIAN_ARTIFACT_TYPES = frozenset({"conversion-sidecar", "import-report"})
+
 
 class ConversionFormat(StrEnum):
     """Supported conversion output formats."""
@@ -301,16 +304,20 @@ def _has_librarian_sidecar(path: Path) -> bool:
 
 
 def _is_librarian_metadata_file(path: Path) -> bool:
-    if not path.is_file():
-        return False
     try:
+        stat = path.stat()
+        if not path.is_file() or stat.st_size > _MAX_METADATA_BYTES:
+            return False
         payload_obj = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
     if not isinstance(payload_obj, dict):
         return False
     payload = cast(dict[str, object], payload_obj)
-    return payload.get("generated_by") == "librarian"
+    return (
+        payload.get("generated_by") == "librarian"
+        and payload.get("artifact_type") in _LIBRARIAN_ARTIFACT_TYPES
+    )
 
 
 def conversion_output_path(

@@ -90,7 +90,6 @@ async def build_container(settings: Settings | None = None) -> ApplicationContai
         chunks=repository,
         content=repository,
         outputs=repository,
-        search=repository,
         events=repository,
         cleaner=cleaner,
         classifier=classifier,

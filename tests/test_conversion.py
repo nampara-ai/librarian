@@ -8,6 +8,7 @@ from librarian.application.convert_document import (
     DocumentConverter,
     classify_conversion_error,
     conversion_output_path,
+    discover_supported_files,
     markdown_to_text,
 )
 from librarian.ingest.extractors import CompositeExtractor
@@ -171,6 +172,27 @@ def test_conversion_output_path_new_directory(tmp_path: Path) -> None:
     )
 
     assert output == output_dir / "nested" / "a.md"
+
+
+def test_discovery_does_not_parse_large_metadata_sidecars(tmp_path: Path) -> None:
+    source_dir = tmp_path / "input"
+    source_dir.mkdir()
+    source = source_dir / "a.txt"
+    source.write_text("Alpha", encoding="utf-8")
+    source.with_suffix(".txt.json").write_text(
+        '{"generated_by": "librarian", "artifact_type": "conversion-sidecar", "padding": "'
+        + ("x" * (70 * 1024))
+        + '"}',
+        encoding="utf-8",
+    )
+
+    files = discover_supported_files(
+        source_dir,
+        supported_extensions=frozenset({".txt"}),
+        recursive=True,
+    )
+
+    assert files == [source]
 
 
 def test_markdown_to_text_removes_common_markup() -> None:

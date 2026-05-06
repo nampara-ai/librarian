@@ -798,6 +798,26 @@ class SQLiteRepository:
                     RunStatus.RUNNING.value,
                 ),
             )
+            connection.executemany(
+                """
+                INSERT INTO run_events (run_id, stage, message, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    (
+                        str(output.run_id),
+                        RunStage.INDEX.value,
+                        "stored output and search index",
+                        now,
+                    ),
+                    (
+                        str(output.run_id),
+                        RunStage.COMPLETE.value,
+                        "processing complete",
+                        now,
+                    ),
+                ),
+            )
             connection.commit()
 
     def _index_sync(self, output: CleanedOutput) -> None:

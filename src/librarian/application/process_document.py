@@ -16,7 +16,6 @@ from librarian.application.ports import (
     EventSink,
     OutputRepository,
     RunRepository,
-    SearchIndex,
 )
 from librarian.domain.ids import DocumentId, RunId
 from librarian.domain.models import (
@@ -42,7 +41,6 @@ class ProcessDocument:
     chunks: ChunkRepository
     content: ContentStore
     outputs: OutputRepository
-    search: SearchIndex
     events: EventSink
     cleaner: CleanChunks
     classifier: ClassifyDocument
@@ -80,6 +78,7 @@ class ProcessDocument:
 
         await self.events.emit(run_id, RunStage.INGEST, "started processing run")
         await self.documents.update_document_status(document_id, DocumentStatus.PROCESSING)
+        published = False
 
         try:
             await self._raise_if_canceled(run_id)
@@ -161,8 +160,7 @@ class ProcessDocument:
             await self._raise_if_canceled(run_id)
 
             await self.outputs.publish_successful_run(output, classification)
-            await self.events.emit(run_id, RunStage.INDEX, "stored output and search index")
-            await self.events.emit(run_id, RunStage.COMPLETE, "processing complete")
+            published = True
             latest = await self.runs.get_run(run_id)
             if latest is None:
                 raise RuntimeError(f"Run disappeared after processing: {run_id}")
@@ -178,6 +176,8 @@ class ProcessDocument:
             await self.events.emit(run_id, RunStage.COMPLETE, f"processing canceled: {exc}")
             raise
         except Exception as exc:
+            if published:
+                raise
             await self.runs.update_status(
                 run_id,
                 status=RunStatus.FAILED,
