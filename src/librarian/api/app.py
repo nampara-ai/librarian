@@ -401,6 +401,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             subdirectory_name=request.subdirectory_name,
             recursive=request.recursive,
             overwrite=request.overwrite,
+            allowed_root=settings.api_import_root,
         )
         items = cast(list[dict[str, object]], result.to_json_dict()["items"])
         return ImportResponse(

@@ -229,6 +229,14 @@ class SQLiteRepository:
         """Get classification."""
         return await asyncio.to_thread(self._get_classification_sync, document_id)
 
+    async def publish_successful_run(
+        self,
+        output: CleanedOutput,
+        classification: Classification,
+    ) -> None:
+        """Atomically publish final output, search, classification, and run status."""
+        await asyncio.to_thread(self._publish_successful_run_sync, output, classification)
+
     async def index(
         self,
         output: CleanedOutput,
@@ -700,6 +708,97 @@ class SQLiteRepository:
                 (str(document_id),),
             ).fetchone()
         return _classification_from_row(row) if row else None
+
+    def _publish_successful_run_sync(
+        self,
+        output: CleanedOutput,
+        classification: Classification,
+    ) -> None:
+        now = utc_now().isoformat()
+        with self.database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            run_row = connection.execute(
+                "SELECT status FROM runs WHERE id = ?",
+                (str(output.run_id),),
+            ).fetchone()
+            if run_row is None:
+                raise RuntimeError(f"Run not found: {output.run_id}")
+            if str(run_row["status"]) != RunStatus.RUNNING.value:
+                raise RuntimeError(f"Run is not running and cannot be published: {output.run_id}")
+
+            connection.execute(
+                """
+                INSERT INTO cleaned_outputs (
+                  document_id, run_id, text, prompt_version, model_provider,
+                  model_name, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(document_id, run_id) DO UPDATE SET
+                  text = excluded.text
+                """,
+                (
+                    str(output.document_id),
+                    str(output.run_id),
+                    output.text,
+                    output.prompt_version,
+                    output.model_provider,
+                    output.model_name,
+                    output.created_at.isoformat(),
+                ),
+            )
+            connection.execute(
+                "DELETE FROM cleaned_outputs_fts WHERE document_id = ? AND run_id = ?",
+                (str(output.document_id), str(output.run_id)),
+            )
+            connection.execute(
+                """
+                INSERT INTO cleaned_outputs_fts (document_id, run_id, text)
+                VALUES (?, ?, ?)
+                """,
+                (str(output.document_id), str(output.run_id), output.text),
+            )
+            connection.execute(
+                """
+                INSERT INTO classifications (
+                  document_id, code, label, summary, taxonomy, confidence
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(document_id) DO UPDATE SET
+                  code = excluded.code,
+                  label = excluded.label,
+                  summary = excluded.summary,
+                  taxonomy = excluded.taxonomy,
+                  confidence = excluded.confidence
+                """,
+                (
+                    str(classification.document_id),
+                    classification.code,
+                    classification.label,
+                    classification.summary,
+                    classification.taxonomy,
+                    classification.confidence,
+                ),
+            )
+            connection.execute(
+                "UPDATE documents SET status = ?, updated_at = ? WHERE id = ?",
+                (DocumentStatus.READY.value, now, str(output.document_id)),
+            )
+            connection.execute(
+                """
+                UPDATE runs
+                SET status = ?, stage = ?, error = NULL, updated_at = ?
+                WHERE id = ?
+                  AND status = ?
+                """,
+                (
+                    RunStatus.SUCCEEDED.value,
+                    RunStage.COMPLETE.value,
+                    now,
+                    str(output.run_id),
+                    RunStatus.RUNNING.value,
+                ),
+            )
+            connection.commit()
 
     def _index_sync(self, output: CleanedOutput) -> None:
         with self.database.connect() as connection:

@@ -133,6 +133,35 @@ def test_api_import_rejects_escaping_subdirectory(tmp_path: Path) -> None:
     assert not (tmp_path / "escaped").exists()
 
 
+def test_api_import_skips_symlinked_files_outside_import_root(tmp_path: Path) -> None:
+    import_root = tmp_path / "imports"
+    source_dir = import_root / "input"
+    source_dir.mkdir(parents=True)
+    outside = tmp_path / "private.txt"
+    outside.write_text("private outside root", encoding="utf-8")
+    link = source_dir / "leak.txt"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlinks are not supported on this filesystem")
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_import_root=import_root,
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/imports",
+            json={"source_dir": str(source_dir), "processing_mode": "none"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["converted"] == 0
+    assert payload["ingested"] == 0
+    assert not (source_dir / "librarian-converted" / "leak.md").exists()
+
+
 def test_api_upload_rejects_oversized_file(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",

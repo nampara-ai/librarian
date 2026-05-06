@@ -163,7 +163,7 @@ def convert_dir(
     overwrite: Annotated[bool, typer.Option(help="Overwrite existing outputs.")] = False,
     sidecar_metadata: Annotated[
         bool,
-        typer.Option(help="Write .json sidecar metadata next to converted outputs."),
+        typer.Option(help="Deprecated; batch conversion always writes provenance sidecars."),
     ] = False,
 ) -> None:
     """Batch convert supported files in a directory."""
@@ -237,7 +237,7 @@ def import_directory(
     report: Annotated[Path | None, typer.Option(help="Write final JSON report.")] = None,
     sidecar_metadata: Annotated[
         bool,
-        typer.Option(help="Write .json sidecar metadata next to converted outputs."),
+        typer.Option(help="Deprecated; batch import always writes provenance sidecars."),
     ] = False,
 ) -> None:
     """Convert a directory, ingest outputs, and optionally process or enqueue."""
@@ -313,7 +313,7 @@ def list_runs(
     """List processing runs."""
 
     async def run() -> None:
-        container = await build_container()
+        container = await build_ingest_container()
         runs = await container.repository.list_runs(limit=limit, offset=offset)
         table = Table("ID", "Document", "Status", "Stage", "Chunks", "Error")
         for item in runs:
@@ -337,7 +337,7 @@ def cancel_run(
     """Mark a queued or running run as canceled."""
 
     async def run() -> None:
-        container = await build_container()
+        container = await build_ingest_container()
         existing = await container.repository.get_run(RunId(run_id))
         if existing is None:
             raise typer.BadParameter(f"Run not found: {run_id}")
@@ -388,7 +388,7 @@ def inspect_queue(
     """List durable queue items."""
 
     async def run() -> None:
-        container = await build_container()
+        container = await build_ingest_container()
         rows = await SQLiteRunQueue(container.database).list(limit=limit)
         table = Table("Run", "Status", "Attempts", "Available", "Locked By", "Error")
         for item in rows:
@@ -492,7 +492,7 @@ def show(
     """Show document metadata and latest output summary."""
 
     async def run() -> None:
-        container = await build_container()
+        container = await build_ingest_container()
         document = await container.repository.get_document(DocumentId(document_id))
         if document is None:
             raise typer.BadParameter(f"Document not found: {document_id}")
@@ -516,7 +516,7 @@ def status(
     """Show processing run status and events."""
 
     async def run() -> None:
-        container = await build_container()
+        container = await build_ingest_container()
         run_record = await container.repository.get_run(RunId(run_id))
         if run_record is None:
             raise typer.BadParameter(f"Run not found: {run_id}")
@@ -535,7 +535,7 @@ def search(
     """Search cleaned outputs."""
 
     async def run() -> None:
-        container = await build_container()
+        container = await build_ingest_container()
         try:
             results = await container.repository.search(query, limit=limit)
         except ValueError as exc:
@@ -558,7 +558,7 @@ def export(
         export_format = cast(ExportFormat, format.lower())
         if export_format not in {"txt", "md", "json"}:
             raise typer.BadParameter("format must be one of: txt, md, json")
-        container = await build_container()
+        container = await build_ingest_container()
         document = await container.repository.get_document(DocumentId(document_id))
         if document is None:
             raise typer.BadParameter(f"Document not found: {document_id}")

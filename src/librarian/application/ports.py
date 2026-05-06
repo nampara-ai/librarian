@@ -160,3 +160,9 @@ class OutputRepository(Protocol):
     async def save_classification(self, classification: Classification) -> None: ...
 
     async def get_classification(self, document_id: DocumentId) -> Classification | None: ...
+
+    async def publish_successful_run(
+        self,
+        output: CleanedOutput,
+        classification: Classification,
+    ) -> None: ...

@@ -149,7 +149,50 @@ async def test_import_directory_writes_manifest_and_resumes(tmp_path: Path) -> N
     assert first.ingested == 1
     assert second.skipped == 1
     assert '"skipped": 1' in report.read_text(encoding="utf-8")
+    assert '"generated_by": "librarian"' in report.read_text(encoding="utf-8")
     converted_files = sorted(
         path.name for path in (source_dir / "librarian-converted").glob("*.txt")
     )
     assert converted_files == ["a.txt"]
+
+
+@pytest.mark.asyncio
+async def test_import_directory_does_not_rediscover_manifest_in_source_tree(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "input"
+    source_dir.mkdir()
+    (source_dir / "a.txt").write_text("Alpha horse notes", encoding="utf-8")
+    manifest = source_dir / "manifest.json"
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    container = await build_container(settings)
+    importer = ImportLibrary(
+        converter=DocumentConverter(CompositeExtractor()),
+        ingest=container.ingest_document,
+        process=container.process_document,
+    )
+
+    await importer.import_directory(
+        source_dir,
+        format=ConversionFormat.MARKDOWN,
+        output_mode=DirectoryOutputMode.SUBDIRECTORY,
+        processing_mode=ImportProcessingMode.NONE,
+        recursive=True,
+        manifest_path=manifest,
+    )
+    result = await importer.import_directory(
+        source_dir,
+        format=ConversionFormat.MARKDOWN,
+        output_mode=DirectoryOutputMode.SUBDIRECTORY,
+        processing_mode=ImportProcessingMode.NONE,
+        recursive=True,
+        manifest_path=manifest,
+        resume=True,
+    )
+
+    assert result.skipped == 1
+    assert [item.source_path.name for item in result.items] == ["a.txt"]
+    assert '"generated_by": "librarian"' in manifest.read_text(encoding="utf-8")

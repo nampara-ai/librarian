@@ -1,13 +1,14 @@
-from collections.abc import Sequence
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
 from librarian.application.classify_document import ClassifyDocument
 from librarian.application.factory import build_container
+from librarian.application.ports import OutputRepository
 from librarian.application.process_document import ProcessDocument
 from librarian.config import Settings
-from librarian.domain.ids import DocumentId, RunId
+from librarian.domain.ids import RunId
 from librarian.domain.models import (
     Classification,
     CleanedOutput,
@@ -240,33 +241,35 @@ async def test_late_publish_failure_marks_run_failed_and_hides_output(tmp_path: 
     ingested = await container.ingest_document.execute(source)
     run = await container.process_document.start(ingested.document.id)
 
-    class FailingSearch:
-        async def index(
+    class FailingPublisher:
+        def __init__(self, wrapped: object) -> None:
+            self._wrapped = wrapped
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._wrapped, name)
+
+        async def publish_successful_run(
             self,
             output: CleanedOutput,
-            classification: Classification | None,
+            classification: Classification,
         ) -> None:
             del output, classification
-            raise RuntimeError("index boom")
-
-        async def search(self, query: str, *, limit: int = 20) -> Sequence[DocumentId]:
-            del query, limit
-            return ()
+            raise RuntimeError("publish boom")
 
     process = ProcessDocument(
         documents=container.repository,
         runs=container.repository,
         chunks=container.repository,
         content=container.repository,
-        outputs=container.repository,
-        search=FailingSearch(),
+        outputs=cast(OutputRepository, FailingPublisher(container.repository)),
+        search=container.repository,
         events=container.repository,
         cleaner=container.process_document.cleaner,
         classifier=container.process_document.classifier,
         chunking_policy=container.process_document.chunking_policy,
     )
 
-    with pytest.raises(RuntimeError, match="index boom"):
+    with pytest.raises(RuntimeError, match="publish boom"):
         await process.execute_existing(run.id)
 
     latest = await container.repository.get_run(run.id)
@@ -276,7 +279,7 @@ async def test_late_publish_failure_marks_run_failed_and_hides_output(tmp_path: 
     assert latest is not None
     assert document is not None
     assert latest.status == RunStatus.FAILED
-    assert latest.error == "index boom"
+    assert latest.error == "publish boom"
     assert document.status == DocumentStatus.FAILED
     assert output is None
     assert classification is None

@@ -126,6 +126,7 @@ class ImportLibrary:
         manifest_path: Path | None = None,
         resume: bool = False,
         write_sidecar: bool = False,
+        allowed_root: Path | None = None,
     ) -> ImportResult:
         """Run the full import workflow for a directory."""
         validate_directory_output(
@@ -138,6 +139,7 @@ class ImportLibrary:
             source_dir,
             recursive=recursive,
             supported_extensions=self.converter.extractor.supported_extensions,
+            allowed_root=allowed_root,
             exclude_paths=conversion_output_exclusions(
                 source_dir=source_dir,
                 output_mode=output_mode,
@@ -253,7 +255,14 @@ class ImportLibrary:
 
 async def write_import_report(path: Path, result: ImportResult) -> None:
     """Write an import result JSON report."""
-    payload = json.dumps(result.to_json_dict(), indent=2)
+    payload = json.dumps(
+        {
+            "generated_by": "librarian",
+            "artifact_type": "import-report",
+            **result.to_json_dict(),
+        },
+        indent=2,
+    )
     await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
     await asyncio.to_thread(path.write_text, payload, encoding="utf-8")
 

@@ -152,6 +152,7 @@ class DocumentConverter:
         recursive: bool = False,
         overwrite: bool = False,
         write_sidecar: bool = False,
+        allowed_root: Path | None = None,
     ) -> BatchConversionResult:
         """Convert supported files in a directory."""
         validate_directory_output(
@@ -163,6 +164,7 @@ class DocumentConverter:
             source_dir,
             supported_extensions=self.extractor.supported_extensions,
             recursive=recursive,
+            allowed_root=allowed_root,
             exclude_paths=conversion_output_exclusions(
                 source_dir=source_dir,
                 output_mode=output_mode,
@@ -216,11 +218,13 @@ def discover_supported_files(
     *,
     supported_extensions: frozenset[str],
     recursive: bool,
+    allowed_root: Path | None = None,
     exclude_paths: tuple[Path, ...] = (),
 ) -> list[Path]:
     """Find supported files in stable order."""
     pattern = "**/*" if recursive else "*"
     excluded = tuple(path.resolve() for path in exclude_paths)
+    resolved_allowed_root = allowed_root.resolve() if allowed_root else None
     return sorted(
         (
             path
@@ -228,6 +232,7 @@ def discover_supported_files(
             if path.is_file()
             and path.suffix.lower() in supported_extensions
             and not _is_under_any(path.resolve(), excluded)
+            and _is_under_allowed_root(path, resolved_allowed_root)
             and not _has_librarian_sidecar(path)
         ),
         key=lambda item: str(item.relative_to(source_dir)).lower(),
@@ -275,6 +280,17 @@ def _is_under_any(path: Path, roots: tuple[Path, ...]) -> bool:
             continue
         return True
     return False
+
+
+def _is_under_allowed_root(path: Path, allowed_root: Path | None) -> bool:
+    if allowed_root is None:
+        return True
+    try:
+        resolved = path.resolve()
+        resolved.relative_to(allowed_root)
+    except (OSError, ValueError):
+        return False
+    return True
 
 
 def _has_librarian_sidecar(path: Path) -> bool:
@@ -352,6 +368,7 @@ async def write_conversion_sidecar(
     payload = json.dumps(
         {
             "generated_by": "librarian",
+            "artifact_type": "conversion-sidecar",
             "source_path": str(source_path),
             "output_path": str(output_path),
             "format": format.value,

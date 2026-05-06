@@ -19,7 +19,6 @@ librarian convert-dir ./input --format md
 librarian convert-dir ./input --format txt --output-mode original --overwrite
 librarian convert-dir ./input --recursive --output-mode new-directory --output-dir ./converted
 librarian convert-dir ./input --output-mode subdirectory --subdirectory-name librarian-output
-librarian convert-dir ./input --format md --sidecar-metadata
 ```
 
 Output modes:
@@ -31,6 +30,8 @@ Output modes:
 Batch conversion continues after individual file failures and prints a per-file summary.
 When two source files would produce the same output path, Librarian appends a numeric suffix unless
 `--overwrite` is set.
+Batch conversion always writes `.json` provenance sidecars next to generated outputs so later
+recursive runs can identify and skip Librarian-generated files.
 
 ## Import Workflow
 
@@ -53,7 +54,8 @@ Processing modes:
 The command prints converted path, document ID, run ID, and any per-file error.
 
 Import manifests and reports are JSON. Manifests are updated after each file so interrupted imports
-can be resumed with `--resume`.
+can be resumed with `--resume`. Librarian marks these JSON files as generated metadata so recursive
+imports do not ingest their own manifests or reports.
 
 ## Format Coverage
 
