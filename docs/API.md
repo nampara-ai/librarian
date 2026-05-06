@@ -4,7 +4,8 @@ The FastAPI service exposes the same core workflows as the CLI.
 
 ## Documents
 
-- `POST /documents`: upload one file.
+- `POST /documents`: upload one file. Uploads are capped by
+  `LIBRARIAN_API_MAX_UPLOAD_BYTES`.
 - `GET /documents?limit=100&offset=0`: list documents.
 - `GET /documents/{id}`: document metadata.
 - `DELETE /documents/{id}`: delete a document and dependent records.

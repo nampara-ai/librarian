@@ -1,10 +1,18 @@
 import json
 import shutil
+import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from librarian.ingest.extractors import CompositeExtractor, TextFamilyExtractor
+from librarian.ingest import extractors
+from librarian.ingest.extractors import (
+    CompositeExtractor,
+    ImageOcrExtractor,
+    MarkItDownExtractor,
+    TextFamilyExtractor,
+)
 
 
 @pytest.mark.asyncio
@@ -48,6 +56,33 @@ async def test_composite_extractor_rejects_unknown_extension(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+async def test_composite_extractor_rejects_zip_archives(tmp_path: Path) -> None:
+    path = tmp_path / "archive.zip"
+    path.write_bytes(b"PK")
+
+    with pytest.raises(ValueError, match="Unsupported file extension"):
+        await CompositeExtractor().extract(path)
+
+
+@pytest.mark.asyncio
+async def test_markitdown_extractor_rejects_large_inputs_before_import(tmp_path: Path) -> None:
+    path = tmp_path / "fixture.html"
+    path.write_text("<p>too large</p>", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exceeds"):
+        await MarkItDownExtractor(max_input_bytes=4).extract(path)
+
+
+@pytest.mark.asyncio
+async def test_markitdown_extractor_times_out(tmp_path: Path) -> None:
+    path = tmp_path / "fixture.html"
+    path.write_text("<p>small but bounded</p>", encoding="utf-8")
+
+    with pytest.raises(TimeoutError, match="timed out"):
+        await MarkItDownExtractor(timeout_seconds=0).extract(path)
+
+
+@pytest.mark.asyncio
 async def test_docx_extractor_reads_fixture(tmp_path: Path) -> None:
     from docx import Document
 
@@ -75,3 +110,28 @@ async def test_image_ocr_extractor_reads_fixture(tmp_path: Path) -> None:
     text = await CompositeExtractor().extract(path)
 
     assert "OCR" in text
+
+
+@pytest.mark.asyncio
+async def test_image_ocr_extractor_passes_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "fixture.png"
+    path.write_bytes(b"not real image")
+    captured_kwargs: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        captured_kwargs.update(kwargs)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="OCR text\n")
+
+    def fake_which(name: str) -> str:
+        return "/usr/bin/tesseract"
+
+    monkeypatch.setattr(shutil, "which", fake_which)
+    monkeypatch.setattr(extractors.subprocess, "run", fake_run)
+
+    text = await ImageOcrExtractor(timeout_seconds=7).extract(path)
+
+    assert text == "OCR text"
+    assert captured_kwargs["timeout"] == 7

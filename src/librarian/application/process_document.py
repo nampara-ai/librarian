@@ -29,6 +29,10 @@ from librarian.domain.models import (
 from librarian.pipeline.chunking import ChunkingPolicy, chunk_text
 
 
+class ProcessingCanceled(RuntimeError):
+    """Raised when a run is canceled while work is in progress."""
+
+
 @dataclass(frozen=True, slots=True)
 class ProcessDocument:
     """Run the Librarian pipeline for an ingested document."""
@@ -72,20 +76,24 @@ class ProcessDocument:
         document = await self.documents.get_document(document_id)
         if document is None:
             raise ValueError(f"Document not found: {document_id}")
+        previous_document_status = document.status
 
         await self.events.emit(run_id, RunStage.INGEST, "started processing run")
         await self.documents.update_document_status(document_id, DocumentStatus.PROCESSING)
 
         try:
+            await self._raise_if_canceled(run_id)
             await self.runs.update_status(
                 run_id,
                 status=RunStatus.RUNNING,
                 stage=RunStage.CHUNK,
             )
             raw_text = await self.content.get_text(raw_text_key(document_id))
+            await self._raise_if_canceled(run_id)
             chunked = chunk_text(document_id, raw_text, self.chunking_policy)
             await self.chunks.save_many(chunked)
             await self.events.emit(run_id, RunStage.CHUNK, f"created {len(chunked)} chunk(s)")
+            await self._raise_if_canceled(run_id)
 
             run = ProcessingRun(
                 id=run_id,
@@ -95,6 +103,7 @@ class ProcessDocument:
                 total_chunks=len(chunked),
             )
             await self.runs.save_run(run)
+            await self._raise_if_canceled(run_id)
             cached_chunks = await self.outputs.get_cached_cleaned_chunks(
                 chunked,
                 prompt_version=self.cleaner.prompt_version,
@@ -104,6 +113,7 @@ class ProcessDocument:
             cached_ids = {chunk.chunk.id for chunk in cached_chunks}
             missing_chunks = [chunk for chunk in chunked if chunk.id not in cached_ids]
             cleaned_missing = await self.cleaner.execute(missing_chunks)
+            await self._raise_if_canceled(run_id)
             await self.outputs.save_cleaned_chunk_cache(
                 cleaned_missing,
                 prompt_version=self.cleaner.prompt_version,
@@ -117,6 +127,7 @@ class ProcessDocument:
             await self.outputs.save_cleaned_chunks(run_id, cleaned_chunks)
             failed_chunks = sum(1 for chunk in cleaned_chunks if not chunk.text.strip())
             completed_chunks = len(cleaned_chunks) - failed_chunks
+            await self._raise_if_canceled(run_id)
             await self.runs.update_run_progress(
                 run_id,
                 completed_chunks=completed_chunks,
@@ -129,6 +140,7 @@ class ProcessDocument:
                 f"cleaned {completed_chunks}/{len(chunked)} chunk(s) "
                 f"({len(cached_chunks)} cache hit(s))",
             )
+            await self._raise_if_canceled(run_id)
 
             await self.runs.update_status(
                 run_id,
@@ -136,6 +148,7 @@ class ProcessDocument:
                 stage=RunStage.ASSEMBLE,
             )
             assembled = assemble_cleaned_document(cleaned_chunks)
+            await self._raise_if_canceled(run_id)
             output = CleanedOutput(
                 document_id=document_id,
                 run_id=run_id,
@@ -145,22 +158,36 @@ class ProcessDocument:
                 model_name=self.cleaner.model,
             )
             await self.outputs.save_cleaned_output(output)
+            await self._raise_if_canceled(run_id)
             classification = await self.classifier.execute(document_id, assembled)
+            await self._raise_if_canceled(run_id)
             await self.outputs.save_classification(classification)
             await self.search.index(output, classification)
             await self.events.emit(run_id, RunStage.INDEX, "stored output and search index")
+            await self._raise_if_canceled(run_id)
 
             await self.runs.update_status(
                 run_id,
                 status=RunStatus.SUCCEEDED,
                 stage=RunStage.COMPLETE,
             )
+            await self._raise_if_canceled(run_id)
             await self.documents.update_document_status(document_id, DocumentStatus.READY)
             await self.events.emit(run_id, RunStage.COMPLETE, "processing complete")
             latest = await self.runs.get_run(run_id)
             if latest is None:
                 raise RuntimeError(f"Run disappeared after processing: {run_id}")
             return latest
+        except ProcessingCanceled as exc:
+            await self.runs.update_status(
+                run_id,
+                status=RunStatus.CANCELED,
+                stage=RunStage.COMPLETE,
+                error=str(exc),
+            )
+            await self.documents.update_document_status(document_id, previous_document_status)
+            await self.events.emit(run_id, RunStage.COMPLETE, f"processing canceled: {exc}")
+            raise
         except Exception as exc:
             await self.runs.update_status(
                 run_id,
@@ -171,3 +198,7 @@ class ProcessDocument:
             await self.documents.update_document_status(document_id, DocumentStatus.FAILED)
             await self.events.emit(run_id, RunStage.COMPLETE, f"processing failed: {exc}")
             raise
+
+    async def _raise_if_canceled(self, run_id: RunId) -> None:
+        if await self.runs.is_run_canceled(run_id):
+            raise ProcessingCanceled(f"Run canceled: {run_id}")

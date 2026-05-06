@@ -41,12 +41,18 @@ jobs:
       - name: Build image
         run: |
           IMAGE="ghcr.io/${{ github.repository }}"
-          docker build -t "$IMAGE:${{ github.ref_name }}" -t "$IMAGE:latest" .
+          docker build -t "$IMAGE:${{ github.ref_name }}" .
       - name: Push image
         run: |
           IMAGE="ghcr.io/${{ github.repository }}"
           docker push "$IMAGE:${{ github.ref_name }}"
-          docker push "$IMAGE:latest"
+          case "${{ github.ref_name }}" in
+            *a*|*b*|*rc*) ;;
+            *)
+              docker tag "$IMAGE:${{ github.ref_name }}" "$IMAGE:latest"
+              docker push "$IMAGE:latest"
+              ;;
+          esac
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

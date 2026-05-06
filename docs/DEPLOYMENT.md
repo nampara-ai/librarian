@@ -5,6 +5,7 @@ Librarian can run as a local CLI, a single API process, or a split API/worker se
 ## Docker Compose
 
 ```bash
+export LIBRARIAN_API_KEY=change-me
 docker compose up --build
 curl http://127.0.0.1:8080/health
 ```
@@ -17,6 +18,8 @@ Compose runs:
 
 The compose file defaults to `LIBRARIAN_JOB_BACKEND=sqlite`, so API requests enqueue work and the
 worker processes runs independently.
+Compose requires `LIBRARIAN_API_KEY`; authenticated requests must send
+`x-api-key: $LIBRARIAN_API_KEY`.
 
 ## Environment
 
@@ -24,6 +27,8 @@ Common production settings:
 
 ```bash
 LIBRARIAN_API_KEY=change-me
+LIBRARIAN_API_IMPORT_ROOT=/data/imports
+LIBRARIAN_API_MAX_UPLOAD_BYTES=104857600
 LIBRARIAN_LOG_FORMAT=json
 LIBRARIAN_LOG_LEVEL=INFO
 LIBRARIAN_DATA_DIR=/data
@@ -31,6 +36,11 @@ LIBRARIAN_DATABASE_PATH=/data/librarian.sqlite
 LIBRARIAN_JOB_BACKEND=sqlite
 LIBRARIAN_LLM_PROVIDER=openai-compatible
 LIBRARIAN_LLM_MODEL=gpt-4.1-mini
+LIBRARIAN_OCR_TIMEOUT_SECONDS=120
+LIBRARIAN_OCR_PDF_DPI=200
+LIBRARIAN_OCR_PDF_MAX_PAGES=100
+LIBRARIAN_UNIVERSAL_MAX_INPUT_BYTES=52428800
+LIBRARIAN_UNIVERSAL_TIMEOUT_SECONDS=120
 OPENAI_API_KEY=...
 ```
 

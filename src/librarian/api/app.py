@@ -14,7 +14,7 @@ from typing import Annotated, Any, cast
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from librarian.application.convert_document import (
     ConversionFormat,
@@ -114,7 +114,7 @@ class ContentResponse(BaseModel):
 
 class SearchRequest(BaseModel):
     query: str
-    limit: int = 20
+    limit: int = Field(default=20, ge=1, le=500)
 
 
 class SearchResponse(BaseModel):
@@ -197,10 +197,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         container = await build_container(settings)
         upload_dir = settings.data_dir / "uploads"
         await asyncio.to_thread(upload_dir.mkdir, parents=True, exist_ok=True)
-        destination = upload_dir / _safe_filename(file.filename or "upload.txt")
-        payload = await file.read()
-        await asyncio.to_thread(destination.write_bytes, payload)
-        ingested = await container.ingest_document.execute(destination)
+        destination = upload_dir / _unique_upload_filename(file.filename or "upload.txt")
+        await _write_limited_upload(file, destination, max_bytes=settings.api_max_upload_bytes)
+        try:
+            ingested = await container.ingest_document.execute(destination)
+        except Exception as exc:
+            await _cleanup_upload(destination)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _document_response(ingested.document)
 
     @app.get("/metrics")
@@ -320,6 +323,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             stage=RunStage.COMPLETE,
             error="canceled by user",
         )
+        if settings.job_backend == "sqlite":
+            await SQLiteRunQueue(container.database).cancel(run.id, error="canceled by user")
         latest = await container.repository.get_run(run.id)
         if latest is None:
             raise HTTPException(status_code=404, detail="Run not found")
@@ -348,14 +353,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             processing_mode = ImportProcessingMode(request.processing_mode)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _validate_subdirectory_name(request.subdirectory_name)
+        source_dir = _resolve_api_path(Path(request.source_dir), settings=settings)
+        if not source_dir.is_dir():
+            raise HTTPException(status_code=400, detail="source_dir must be an existing directory")
         importer = ImportLibrary(
-            converter=DocumentConverter(CompositeExtractor(ocr_language=settings.ocr_language)),
+            converter=DocumentConverter(_build_extractor(settings)),
             ingest=container.ingest_document,
             process=container.process_document,
             queue_factory=lambda: SQLiteRunQueue(container.database),
         )
         result = await importer.import_directory(
-            _resolve_api_path(Path(request.source_dir), settings=settings),
+            source_dir,
             format=conversion_format,
             output_mode=output_mode,
             processing_mode=processing_mode,
@@ -439,7 +448,61 @@ def _run_response(run: ProcessingRun) -> RunResponse:
 
 
 def _safe_filename(filename: str) -> str:
-    return Path(filename).name.replace("/", "_").replace("\\", "_")
+    safe = Path(filename).name.replace("/", "_").replace("\\", "_").strip()
+    if safe in {".", ".."}:
+        return "upload.txt"
+    return safe or "upload.txt"
+
+
+def _unique_upload_filename(filename: str) -> str:
+    return str(Path(uuid.uuid4().hex) / _safe_filename(filename))
+
+
+async def _write_limited_upload(file: UploadFile, destination: Path, *, max_bytes: int) -> None:
+    await asyncio.to_thread(destination.parent.mkdir, parents=True, exist_ok=True)
+    total = 0
+    try:
+        with destination.open("wb") as handle:
+            while chunk := await file.read(1024 * 1024):
+                total += len(chunk)
+                if total > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="Upload exceeds configured size limit",
+                    )
+                await asyncio.to_thread(handle.write, chunk)
+    except Exception:
+        await _cleanup_upload(destination)
+        raise
+
+
+async def _cleanup_upload(destination: Path) -> None:
+    await asyncio.to_thread(destination.unlink, missing_ok=True)
+    try:
+        await asyncio.to_thread(destination.parent.rmdir)
+    except OSError:
+        pass
+
+
+def _validate_subdirectory_name(name: str) -> None:
+    path = Path(name)
+    unsafe_part = any(part in {"", ".", ".."} for part in path.parts)
+    if path.is_absolute() or not path.parts or unsafe_part:
+        raise HTTPException(
+            status_code=400,
+            detail="subdirectory_name must be a relative safe path",
+        )
+
+
+def _build_extractor(settings: Settings) -> CompositeExtractor:
+    return CompositeExtractor(
+        ocr_language=settings.ocr_language,
+        ocr_timeout_seconds=settings.ocr_timeout_seconds,
+        ocr_pdf_dpi=settings.ocr_pdf_dpi,
+        ocr_pdf_max_pages=settings.ocr_pdf_max_pages,
+        universal_max_input_bytes=settings.universal_max_input_bytes,
+        universal_timeout_seconds=settings.universal_timeout_seconds,
+    )
 
 
 def _is_public_bind(host: str) -> bool:

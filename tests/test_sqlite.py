@@ -6,7 +6,7 @@ from librarian.application.factory import build_container
 from librarian.application.jobs import QueueStatus, QueueWorker
 from librarian.config import Settings
 from librarian.domain.ids import RunId
-from librarian.domain.models import RunStatus
+from librarian.domain.models import RunStage, RunStatus
 from librarian.storage.sqlite import SQLiteDatabase, SQLiteRunQueue
 
 
@@ -111,3 +111,53 @@ async def test_queue_worker_records_failure_without_stopping(tmp_path: Path) -> 
 
     assert rows[0].status == QueueStatus.RETRY
     assert rows[0].last_error == "boom"
+
+
+@pytest.mark.asyncio
+async def test_canceled_queued_run_is_not_claimed(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Horse transcript.", encoding="utf-8")
+    container = await build_container(settings)
+    ingested = await container.ingest_document.execute(source)
+    run = await container.process_document.start(ingested.document.id)
+    queue = SQLiteRunQueue(container.database)
+    await queue.enqueue(run.id)
+    await container.repository.update_status(
+        run.id,
+        status=RunStatus.CANCELED,
+        stage=RunStage.COMPLETE,
+        error="canceled by user",
+    )
+    await queue.cancel(run.id, error="canceled by user")
+
+    assert await queue.claim(worker_id="test-worker", lease_seconds=60) is None
+    rows = await queue.list()
+    assert rows[0].status == QueueStatus.CANCELED
+
+
+@pytest.mark.asyncio
+async def test_canceled_queue_row_is_not_completed_or_retried(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Horse transcript.", encoding="utf-8")
+    container = await build_container(settings)
+    ingested = await container.ingest_document.execute(source)
+    run = await container.process_document.start(ingested.document.id)
+    queue = SQLiteRunQueue(container.database)
+    await queue.enqueue(run.id)
+    assert await queue.claim(worker_id="test-worker", lease_seconds=60) is not None
+    await queue.cancel(run.id, error="canceled by user")
+
+    await queue.complete(run.id)
+    await queue.fail(run.id, error="late failure", max_attempts=3)
+
+    rows = await queue.list()
+    assert rows[0].status == QueueStatus.CANCELED
+    assert rows[0].last_error == "canceled by user"

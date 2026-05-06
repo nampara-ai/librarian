@@ -98,6 +98,10 @@ class SQLiteRepository:
         """Get a processing run by ID."""
         return await asyncio.to_thread(self._get_run_sync, run_id)
 
+    async def is_run_canceled(self, run_id: RunId) -> bool:
+        """Return true when a run has been canceled."""
+        return await asyncio.to_thread(self._is_run_canceled_sync, run_id)
+
     async def list_runs(self, *, limit: int = 100, offset: int = 0) -> Sequence[ProcessingRun]:
         """List processing runs."""
         return await asyncio.to_thread(self._list_runs_sync, limit, offset)
@@ -327,6 +331,7 @@ class SQLiteRepository:
                   failed_chunks = excluded.failed_chunks,
                   updated_at = excluded.updated_at,
                   error = excluded.error
+                WHERE runs.status != 'canceled'
                 """,
                 (
                     str(run.id),
@@ -346,6 +351,14 @@ class SQLiteRepository:
         with self.database.connect() as connection:
             row = connection.execute("SELECT * FROM runs WHERE id = ?", (str(run_id),)).fetchone()
         return _run_from_row(row) if row else None
+
+    def _is_run_canceled_sync(self, run_id: RunId) -> bool:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM runs WHERE id = ? AND status = ?",
+                (str(run_id), RunStatus.CANCELED.value),
+            ).fetchone()
+        return row is not None
 
     def _list_runs_sync(self, limit: int, offset: int) -> list[ProcessingRun]:
         with self.database.connect() as connection:
@@ -373,8 +386,16 @@ class SQLiteRepository:
                 UPDATE runs
                 SET status = ?, stage = ?, error = ?, updated_at = ?
                 WHERE id = ?
+                  AND (? = 'canceled' OR status != 'canceled')
                 """,
-                (status.value, stage.value, error, utc_now().isoformat(), str(run_id)),
+                (
+                    status.value,
+                    stage.value,
+                    error,
+                    utc_now().isoformat(),
+                    str(run_id),
+                    status.value,
+                ),
             )
 
     def _update_run_progress_sync(
@@ -391,6 +412,7 @@ class SQLiteRepository:
                 UPDATE runs
                 SET status = ?, stage = ?, completed_chunks = ?, failed_chunks = ?, updated_at = ?
                 WHERE id = ?
+                  AND status != 'canceled'
                 """,
                 (
                     status.value,
@@ -593,12 +615,15 @@ class SQLiteRepository:
         with self.database.connect() as connection:
             row = connection.execute(
                 """
-                SELECT * FROM cleaned_outputs
-                WHERE document_id = ?
-                ORDER BY created_at DESC
+                SELECT cleaned_outputs.*
+                FROM cleaned_outputs
+                JOIN runs ON runs.id = cleaned_outputs.run_id
+                WHERE cleaned_outputs.document_id = ?
+                  AND runs.status = ?
+                ORDER BY cleaned_outputs.created_at DESC
                 LIMIT 1
                 """,
-                (str(document_id),),
+                (str(document_id), RunStatus.SUCCEEDED.value),
             ).fetchone()
         return _cleaned_output_from_row(row) if row else None
 
@@ -706,6 +731,10 @@ class SQLiteRunQueue:
         """Mark a queued run failed or schedule a retry."""
         await asyncio.to_thread(self._fail_sync, run_id, error, max_attempts)
 
+    async def cancel(self, run_id: RunId, *, error: str | None = None) -> None:
+        """Mark a queued run canceled."""
+        await asyncio.to_thread(self._cancel_sync, run_id, error)
+
     async def list(self, *, limit: int = 100) -> tuple[QueuedRun, ...]:
         """List queued run state."""
         return await asyncio.to_thread(self._list_sync, limit)
@@ -788,8 +817,14 @@ class SQLiteRunQueue:
                 UPDATE run_queue
                 SET status = ?, locked_at = NULL, locked_by = NULL, updated_at = ?
                 WHERE run_id = ?
+                  AND status = ?
                 """,
-                (QueueStatus.SUCCEEDED.value, now, str(run_id)),
+                (
+                    QueueStatus.SUCCEEDED.value,
+                    now,
+                    str(run_id),
+                    QueueStatus.RUNNING.value,
+                ),
             )
 
     def _fail_sync(self, run_id: RunId, error: str, max_attempts: int) -> None:
@@ -811,11 +846,31 @@ class SQLiteRunQueue:
                 SET status = ?, available_at = ?, locked_at = NULL, locked_by = NULL,
                     updated_at = ?, last_error = ?
                 WHERE run_id = ?
+                  AND status = ?
                 """,
                 (
                     status.value,
                     available_at.isoformat(),
                     now.isoformat(),
+                    error,
+                    str(run_id),
+                    QueueStatus.RUNNING.value,
+                ),
+            )
+
+    def _cancel_sync(self, run_id: RunId, error: str | None) -> None:
+        now = utc_now().isoformat()
+        with self.database.connect() as connection:
+            connection.execute(
+                """
+                UPDATE run_queue
+                SET status = ?, locked_at = NULL, locked_by = NULL,
+                    updated_at = ?, last_error = ?
+                WHERE run_id = ?
+                """,
+                (
+                    QueueStatus.CANCELED.value,
+                    now,
                     error,
                     str(run_id),
                 ),

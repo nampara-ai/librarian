@@ -36,7 +36,14 @@ async def build_container(settings: Settings | None = None) -> ApplicationContai
     database = SQLiteDatabase(resolved_settings.database_path)
     await database.initialize()
     repository = SQLiteRepository(database)
-    extractor = CompositeExtractor(ocr_language=resolved_settings.ocr_language)
+    extractor = CompositeExtractor(
+        ocr_language=resolved_settings.ocr_language,
+        ocr_timeout_seconds=resolved_settings.ocr_timeout_seconds,
+        ocr_pdf_dpi=resolved_settings.ocr_pdf_dpi,
+        ocr_pdf_max_pages=resolved_settings.ocr_pdf_max_pages,
+        universal_max_input_bytes=resolved_settings.universal_max_input_bytes,
+        universal_timeout_seconds=resolved_settings.universal_timeout_seconds,
+    )
     provider = _build_provider(resolved_settings)
     cleaner = CleanChunks(
         provider=provider,

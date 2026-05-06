@@ -4,7 +4,8 @@ import pytest
 
 from librarian.application.factory import build_container
 from librarian.config import Settings
-from librarian.domain.models import RunStage, RunStatus
+from librarian.domain.ids import RunId
+from librarian.domain.models import DocumentStatus, RunStage, RunStatus
 
 
 @pytest.mark.asyncio
@@ -86,6 +87,52 @@ async def test_canceled_run_cannot_be_executed(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="terminal"):
         await container.process_document.execute_existing(run.id)
+
+
+@pytest.mark.asyncio
+async def test_running_run_observes_cancellation_without_succeeding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Horse transcript.", encoding="utf-8")
+    container = await build_container(settings)
+    ingested = await container.ingest_document.execute(source)
+    run = await container.process_document.start(ingested.document.id)
+    calls = 0
+    original_is_canceled = container.repository.is_run_canceled
+
+    async def cancel_after_start(run_id: RunId) -> bool:
+        nonlocal calls
+        calls += 1
+        if calls >= 2:
+            await container.repository.update_status(
+                run_id,
+                status=RunStatus.CANCELED,
+                stage=RunStage.COMPLETE,
+                error="canceled by user",
+            )
+        return await original_is_canceled(run_id)
+
+    monkeypatch.setattr(container.repository, "is_run_canceled", cancel_after_start)
+
+    with pytest.raises(RuntimeError, match="Run canceled"):
+        await container.process_document.execute_existing(run.id)
+
+    latest = await container.repository.get_run(run.id)
+    document = await container.repository.get_document(ingested.document.id)
+    output = await container.repository.get_cleaned_output(ingested.document.id)
+    assert latest is not None
+    assert document is not None
+    assert latest.status == RunStatus.CANCELED
+    assert document.status == DocumentStatus.INGESTED
+    assert output is None
 
 
 @pytest.mark.asyncio

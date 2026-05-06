@@ -105,6 +105,102 @@ def test_api_import_rejects_paths_outside_import_root(tmp_path: Path) -> None:
     assert "import root" in response.json()["detail"]
 
 
+def test_api_import_rejects_escaping_subdirectory(tmp_path: Path) -> None:
+    import_root = tmp_path / "imports"
+    source_dir = import_root / "input"
+    source_dir.mkdir(parents=True)
+    (source_dir / "notes.txt").write_text("Horse import transcript", encoding="utf-8")
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_import_root=import_root,
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/imports",
+            json={
+                "source_dir": str(source_dir),
+                "subdirectory_name": "../../escaped",
+                "processing_mode": "none",
+            },
+        )
+
+    assert response.status_code == 400
+    assert not (tmp_path / "escaped").exists()
+
+
+def test_api_upload_rejects_oversized_file(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_max_upload_bytes=4,
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/documents",
+            files={"file": ("notes.txt", b"too large", "text/plain")},
+        )
+
+    assert response.status_code == 413
+    assert not list((tmp_path / ".librarian" / "uploads").glob("*"))
+
+
+def test_api_uploads_with_same_filename_keep_distinct_source_files(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    with TestClient(create_app(settings)) as client:
+        first = client.post(
+            "/documents",
+            files={"file": ("same.txt", b"first", "text/plain")},
+        )
+        second = client.post(
+            "/documents",
+            files={"file": ("same.txt", b"second", "text/plain")},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    uploads = sorted((tmp_path / ".librarian" / "uploads").glob("*/same.txt"))
+    assert len(uploads) == 2
+    assert {item.read_text(encoding="utf-8") for item in uploads} == {"first", "second"}
+
+
+def test_api_upload_with_adversarial_filename_uses_safe_fallback(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/documents",
+            files={"file": ("..", b"safe text", "text/plain")},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["filename"] == "upload.txt"
+    uploads = sorted((tmp_path / ".librarian" / "uploads").glob("*/upload.txt"))
+    assert len(uploads) == 1
+    assert uploads[0].read_text(encoding="utf-8") == "safe text"
+
+
+def test_api_upload_rejects_unsupported_file_and_cleans_upload(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/documents",
+            files={"file": ("bad.bin", b"not supported", "application/octet-stream")},
+        )
+
+    assert response.status_code == 400
+    assert "Unsupported file extension" in response.json()["detail"]
+    assert not list((tmp_path / ".librarian" / "uploads").glob("*"))
+
+
 def test_api_document_pagination(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",
@@ -199,6 +295,31 @@ def test_api_import_endpoint_and_run_controls(tmp_path: Path) -> None:
         assert deleted.status_code == 200
 
 
+def test_api_import_rejects_missing_or_non_directory_source(tmp_path: Path) -> None:
+    import_root = tmp_path / "imports"
+    import_root.mkdir()
+    file_source = import_root / "notes.txt"
+    file_source.write_text("Horse import transcript", encoding="utf-8")
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_import_root=import_root,
+    )
+    with TestClient(create_app(settings)) as client:
+        missing = client.post(
+            "/imports",
+            json={"source_dir": str(import_root / "missing"), "processing_mode": "none"},
+        )
+        file_response = client.post(
+            "/imports",
+            json={"source_dir": str(file_source), "processing_mode": "none"},
+        )
+
+    assert missing.status_code == 400
+    assert file_response.status_code == 400
+    assert "existing directory" in missing.json()["detail"]
+
+
 def test_api_malformed_search_query_returns_400(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",
@@ -208,6 +329,19 @@ def test_api_malformed_search_query_returns_400(tmp_path: Path) -> None:
         response = client.post("/search", json={"query": '"'})
 
     assert response.status_code == 400
+
+
+def test_api_search_rejects_out_of_range_limits(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    with TestClient(create_app(settings)) as client:
+        negative = client.post("/search", json={"query": "horse", "limit": -1})
+        huge = client.post("/search", json={"query": "horse", "limit": 100_000})
+
+    assert negative.status_code == 422
+    assert huge.status_code == 422
 
 
 def _wait_for_run(client: TestClient, run_id: str):

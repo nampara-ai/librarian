@@ -107,10 +107,12 @@ Start with [docs/QUICKSTART.md](docs/QUICKSTART.md). See
 ## Docker
 
 ```bash
+export LIBRARIAN_API_KEY=change-me
 docker compose up --build
 ```
 
-The compose stack runs the API plus a separate SQLite-backed worker.
+The compose stack runs the API plus a separate SQLite-backed worker. API requests
+other than `/health` and `/version` require `x-api-key: $LIBRARIAN_API_KEY`.
 
 ## Privacy
 

@@ -26,6 +26,7 @@ librarian export doc_... --format md --output cleaned.md
 ## Docker
 
 ```bash
+export LIBRARIAN_API_KEY=change-me
 docker compose up --build
 curl http://127.0.0.1:8080/health
 ```
@@ -34,6 +35,7 @@ In another shell:
 
 ```bash
 curl http://127.0.0.1:8080/version
+curl -H "x-api-key: $LIBRARIAN_API_KEY" http://127.0.0.1:8080/documents
 ```
 
 ## Real Provider

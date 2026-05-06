@@ -65,8 +65,11 @@ Built-in support:
 
 Optional broad conversion through MarkItDown:
 
-- `.pptx`, `.xlsx`, `.xls`, `.msg`, `.html`, `.htm`, `.rtf`, `.epub`, `.xml`, `.zip`
+- `.pptx`, `.xlsx`, `.xls`, `.msg`, `.html`, `.htm`, `.rtf`, `.epub`, `.xml`
 - Install with `pip install -e ".[universal]"`.
+- Broad conversion rejects inputs larger than `LIBRARIAN_UNIVERSAL_MAX_INPUT_BYTES`
+  and stops work after `LIBRARIAN_UNIVERSAL_TIMEOUT_SECONDS`. Archive formats such
+  as `.zip` are intentionally not enabled by default.
 
 OCR support:
 
@@ -75,6 +78,8 @@ OCR support:
   - macOS: `brew install tesseract poppler`
   - Ubuntu/Debian: `sudo apt-get install tesseract-ocr poppler-utils`
 - Configure language with `LIBRARIAN_OCR_LANGUAGE`, for example `eng` or `eng+spa`.
+- Bound OCR work with `LIBRARIAN_OCR_TIMEOUT_SECONDS`, `LIBRARIAN_OCR_PDF_DPI`, and
+  `LIBRARIAN_OCR_PDF_MAX_PAGES`.
 
 Scanned PDFs first try normal PDF text extraction. If no embedded text is found, Librarian falls
 back to PDF-to-image conversion plus Tesseract OCR.

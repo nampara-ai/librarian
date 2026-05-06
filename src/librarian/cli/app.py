@@ -95,7 +95,7 @@ def chunk(
 
     async def run() -> None:
         settings = Settings()
-        extractor = CompositeExtractor(ocr_language=settings.ocr_language)
+        extractor = _build_extractor(settings)
         text = await extractor.extract(path)
         document_id = DocumentId(digest_text("doc", str(resolved_path)))
         chunks = chunk_text(
@@ -129,7 +129,7 @@ def convert(
 
     async def run() -> None:
         settings = Settings()
-        converter = DocumentConverter(CompositeExtractor(ocr_language=settings.ocr_language))
+        converter = DocumentConverter(_build_extractor(settings))
         result = await converter.convert_file(
             path.resolve(),
             output.resolve(),
@@ -171,7 +171,7 @@ def convert_dir(
 
     async def run() -> None:
         settings = Settings()
-        converter = DocumentConverter(CompositeExtractor(ocr_language=settings.ocr_language))
+        converter = DocumentConverter(_build_extractor(settings))
         result = await converter.convert_directory(
             path.resolve(),
             format=conversion_format,
@@ -248,7 +248,7 @@ def import_directory(
     async def run() -> None:
         container = await build_container()
         importer = ImportLibrary(
-            converter=DocumentConverter(CompositeExtractor(ocr_language=container.settings.ocr_language)),
+            converter=DocumentConverter(_build_extractor(container.settings)),
             ingest=container.ingest_document,
             process=container.process_document,
             queue_factory=lambda: SQLiteRunQueue(container.database),
@@ -332,6 +332,8 @@ def cancel_run(
             stage=RunStage.COMPLETE,
             error="canceled by user",
         )
+        if container.settings.job_backend == "sqlite":
+            await SQLiteRunQueue(container.database).cancel(existing.id, error="canceled by user")
         console.print(f"Canceled {existing.id}")
 
     asyncio.run(run())
@@ -517,7 +519,10 @@ def search(
 
     async def run() -> None:
         container = await build_container()
-        results = await container.repository.search(query, limit=limit)
+        try:
+            results = await container.repository.search(query, limit=limit)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
         for document_id in results:
             console.print(document_id)
 
@@ -649,3 +654,14 @@ def _directory_output_mode(value: str) -> DirectoryOutputMode:
         raise typer.BadParameter(
             "output-mode must be one of: new-directory, original, subdirectory"
         ) from exc
+
+
+def _build_extractor(settings: Settings) -> CompositeExtractor:
+    return CompositeExtractor(
+        ocr_language=settings.ocr_language,
+        ocr_timeout_seconds=settings.ocr_timeout_seconds,
+        ocr_pdf_dpi=settings.ocr_pdf_dpi,
+        ocr_pdf_max_pages=settings.ocr_pdf_max_pages,
+        universal_max_input_bytes=settings.universal_max_input_bytes,
+        universal_timeout_seconds=settings.universal_timeout_seconds,
+    )

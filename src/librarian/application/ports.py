@@ -42,6 +42,8 @@ class RunRepository(Protocol):
 
     async def get_run(self, run_id: RunId) -> ProcessingRun | None: ...
 
+    async def is_run_canceled(self, run_id: RunId) -> bool: ...
+
     async def update_status(
         self,
         run_id: RunId,

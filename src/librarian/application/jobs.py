@@ -9,6 +9,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
 
+from librarian.application.process_document import ProcessingCanceled
 from librarian.domain.ids import RunId
 
 JobFactory = Callable[[], Awaitable[object]]
@@ -23,6 +24,7 @@ class QueueStatus(StrEnum):
     RETRY = "retry"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    CANCELED = "canceled"
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +56,8 @@ class RunQueue(Protocol):
         error: str,
         max_attempts: int,
     ) -> None: ...
+
+    async def cancel(self, run_id: RunId, *, error: str | None = None) -> None: ...
 
     async def list(self, *, limit: int = 100) -> tuple[QueuedRun, ...]: ...
 
@@ -130,6 +134,9 @@ class QueueWorker:
 
         try:
             await self.processor(item.run_id)
+        except ProcessingCanceled as exc:
+            await self.queue.cancel(item.run_id, error=str(exc))
+            return True
         except Exception as exc:
             await self.queue.fail(
                 item.run_id,
