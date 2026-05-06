@@ -29,6 +29,25 @@ Output modes:
 
 Batch conversion continues after individual file failures and prints a per-file summary.
 
+## Import Workflow
+
+`librarian import` combines conversion, ingestion, and optional processing:
+
+```bash
+librarian import ./input --format md
+librarian import ./input --recursive --format md --process
+librarian import ./input --format txt --queue
+librarian import ./input --output-mode new-directory --output-dir ./converted --process
+```
+
+Processing modes:
+
+- default: convert and ingest only.
+- `--process`: process each document immediately in the current CLI process.
+- `--queue`: create processing runs and enqueue them for `librarian worker`.
+
+The command prints converted path, document ID, run ID, and any per-file error.
+
 ## Format Coverage
 
 Built-in support:

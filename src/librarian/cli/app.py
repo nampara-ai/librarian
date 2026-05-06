@@ -25,6 +25,7 @@ from librarian.application.convert_document import (
 from librarian.application.eval import eval_result_json, load_eval_suite, run_eval_suite
 from librarian.application.export_document import ExportedDocument, ExportFormat
 from librarian.application.factory import build_container
+from librarian.application.import_library import ImportLibrary, ImportProcessingMode
 from librarian.application.jobs import QueueWorker
 from librarian.config import Settings
 from librarian.domain.ids import DocumentId, RunId, digest_text
@@ -174,6 +175,81 @@ def convert_dir(
         console.print(table)
         console.print(
             f"Converted {result.converted}, skipped {result.skipped}, failed {result.failed}"
+        )
+        if result.failed:
+            raise typer.Exit(code=1)
+
+    asyncio.run(run())
+
+
+@app.command("import")
+def import_directory(
+    path: Annotated[Path, typer.Argument(exists=True, readable=True, file_okay=False)],
+    format: Annotated[str, typer.Option(help="Converted output format: md or txt.")] = "md",
+    output_mode: Annotated[
+        str,
+        typer.Option(help="Output mode: new-directory, original, subdirectory."),
+    ] = "subdirectory",
+    output_dir: Annotated[
+        Path | None,
+        typer.Option(help="Target directory for new-directory mode."),
+    ] = None,
+    subdirectory_name: Annotated[
+        str,
+        typer.Option(help="Subdirectory name for subdirectory mode."),
+    ] = "librarian-converted",
+    recursive: Annotated[bool, typer.Option(help="Recurse into child directories.")] = False,
+    overwrite: Annotated[bool, typer.Option(help="Overwrite existing converted outputs.")] = False,
+    process: Annotated[bool, typer.Option(help="Process each document immediately.")] = False,
+    queue: Annotated[
+        bool,
+        typer.Option(help="Enqueue each document for worker processing."),
+    ] = False,
+) -> None:
+    """Convert a directory, ingest outputs, and optionally process or enqueue."""
+    if process and queue:
+        raise typer.BadParameter("Choose only one of --process or --queue")
+    conversion_format = _conversion_format(format)
+    mode = _directory_output_mode(output_mode)
+    processing_mode = ImportProcessingMode.NONE
+    if process:
+        processing_mode = ImportProcessingMode.PROCESS
+    elif queue:
+        processing_mode = ImportProcessingMode.QUEUE
+
+    async def run() -> None:
+        container = await build_container()
+        importer = ImportLibrary(
+            converter=DocumentConverter(CompositeExtractor()),
+            ingest=container.ingest_document,
+            process=container.process_document,
+            queue_factory=lambda: SQLiteRunQueue(container.database),
+        )
+        result = await importer.import_directory(
+            path.resolve(),
+            format=conversion_format,
+            output_mode=mode,
+            processing_mode=processing_mode,
+            output_dir=output_dir.resolve() if output_dir else None,
+            subdirectory_name=subdirectory_name,
+            recursive=recursive,
+            overwrite=overwrite,
+        )
+        table = Table("Status", "Source", "Converted", "Document", "Run", "Error")
+        for item in result.items:
+            table.add_row(
+                item.status,
+                str(item.source_path),
+                str(item.converted_path) if item.converted_path else "",
+                str(item.document_id) if item.document_id else "",
+                str(item.run_id) if item.run_id else "",
+                item.error or "",
+            )
+        console.print(table)
+        console.print(
+            "Converted "
+            f"{result.converted}, ingested {result.ingested}, processed {result.processed}, "
+            f"queued {result.queued}, failed {result.failed}"
         )
         if result.failed:
             raise typer.Exit(code=1)

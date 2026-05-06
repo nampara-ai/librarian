@@ -26,6 +26,8 @@ librarian init
 librarian migrate
 librarian convert path/to/report.docx --format md --output converted/report.md
 librarian convert-dir path/to/folder --format md --output-mode subdirectory
+librarian import path/to/folder --recursive --format md --process
+librarian import path/to/folder --format txt --queue
 librarian ingest path/to/transcript.txt
 librarian process doc_...
 librarian worker --once
