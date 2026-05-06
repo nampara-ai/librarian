@@ -6,7 +6,14 @@ import asyncio
 import os
 import random
 
-from openai import AsyncOpenAI
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    AsyncOpenAI,
+    InternalServerError,
+    RateLimitError,
+)
 from openai.types.chat import ChatCompletion
 
 
@@ -77,6 +84,8 @@ class OpenAICompatibleProvider:
                     ],
                 )
             except Exception as exc:
+                if not is_retriable_openai_error(exc):
+                    raise
                 last_error = exc
                 if attempt >= self._max_retries:
                     raise
@@ -90,3 +99,12 @@ class OpenAICompatibleProvider:
         if last_error is not None:
             raise last_error
         raise RuntimeError("LLM completion failed without an exception")
+
+
+def is_retriable_openai_error(exc: Exception) -> bool:
+    """Return true for transient OpenAI-compatible transport/status failures."""
+    if isinstance(exc, (APIConnectionError, APITimeoutError, InternalServerError, RateLimitError)):
+        return True
+    if isinstance(exc, APIStatusError):
+        return int(exc.status_code) >= 500
+    return False

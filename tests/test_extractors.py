@@ -57,6 +57,15 @@ async def test_text_family_extractor_returns_invalid_json_as_text(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_text_family_extractor_rejects_binary_content(tmp_path: Path) -> None:
+    path = tmp_path / "binary.txt"
+    path.write_bytes(b"text\x00binary")
+
+    with pytest.raises(ValueError, match="appears to be binary"):
+        await TextFamilyExtractor().extract(path)
+
+
+@pytest.mark.asyncio
 async def test_composite_extractor_rejects_unknown_extension(tmp_path: Path) -> None:
     path = tmp_path / "notes.bin"
     path.write_bytes(b"binary")
@@ -104,6 +113,28 @@ async def test_docx_extractor_reads_fixture(tmp_path: Path) -> None:
     text = await CompositeExtractor().extract(path)
 
     assert "DOCX fixture text" in text
+
+
+@pytest.mark.asyncio
+async def test_docx_extractor_reads_tables_headers_and_footers(tmp_path: Path) -> None:
+    from docx import Document
+
+    path = tmp_path / "fixture.docx"
+    document = Document()
+    document.sections[0].header.paragraphs[0].text = "Header text"
+    document.add_paragraph("Body paragraph")
+    table = document.add_table(rows=1, cols=2)
+    table.cell(0, 0).text = "Table left"
+    table.cell(0, 1).text = "Table right"
+    document.sections[0].footer.paragraphs[0].text = "Footer text"
+    document.save(str(path))
+
+    text = await CompositeExtractor().extract(path)
+
+    assert "Header text" in text
+    assert "Body paragraph" in text
+    assert "Table left | Table right" in text
+    assert "Footer text" in text
 
 
 @pytest.mark.skipif(shutil.which("tesseract") is None, reason="tesseract not installed")
@@ -205,3 +236,50 @@ async def test_pdf_ocr_passes_timeout_to_rasterizer(
 
     assert text == "OCR text"
     assert captured_kwargs["timeout"] == 9
+
+
+@pytest.mark.asyncio
+async def test_pdf_extractor_ocr_handles_mixed_text_and_scanned_pages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "fixture.pdf"
+    path.write_bytes(b"%PDF")
+
+    class FakePage:
+        def __init__(self, text: str | None) -> None:
+            self._text = text
+
+        def extract_text(self) -> str | None:
+            return self._text
+
+    class FakePdf:
+        pages = [FakePage("Text page 1"), FakePage(None), FakePage("Text page 3")]
+
+        def __enter__(self) -> "FakePdf":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(path: Path) -> FakePdf:
+            del path
+            return FakePdf()
+
+    def fake_import_module(name: str) -> object:
+        if name == "pdfplumber":
+            return FakePdfPlumber
+        return __import__(name)
+
+    def fake_ocr_pdf_page(*args: object, **kwargs: object) -> str:
+        del args, kwargs
+        return "OCR page 2"
+
+    monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", fake_ocr_pdf_page)
+
+    text = await PdfExtractor().extract(path)
+
+    assert text == "Text page 1\n\nOCR page 2\n\nText page 3"

@@ -29,6 +29,7 @@ class TextFamilyExtractor:
 
     def _extract_sync(self, path: Path) -> str:
         _validate_input_size(path, self.max_input_bytes, "Text extraction input")
+        _validate_text_like(path)
         text = path.read_text(encoding="utf-8")
         if path.suffix.lower() == ".json":
             try:
@@ -55,7 +56,16 @@ class DocxExtractor:
         from docx import Document
 
         doc = Document(str(path))
-        return "\n\n".join(paragraph.text for paragraph in doc.paragraphs if paragraph.text.strip())
+        parts = [
+            *(_paragraph_text(paragraph) for paragraph in doc.paragraphs),
+            *(_table_text(table) for table in doc.tables),
+        ]
+        for section in doc.sections:
+            parts.extend(_paragraph_text(paragraph) for paragraph in section.header.paragraphs)
+            parts.extend(_table_text(table) for table in section.header.tables)
+            parts.extend(_paragraph_text(paragraph) for paragraph in section.footer.paragraphs)
+            parts.extend(_table_text(table) for table in section.footer.tables)
+        return "\n\n".join(part for part in parts if part.strip())
 
 
 class PdfExtractor:
@@ -90,15 +100,19 @@ class PdfExtractor:
         except ImportError as exc:
             raise RuntimeError("PDF support requires installing the 'pdf' extra") from exc
 
-        parts: list[str] = []
+        page_outputs: list[str | None] = []
+        empty_pages: list[int] = []
         pdf_module = cast(Any, pdfplumber)
         with pdf_module.open(path) as pdf:
-            for page in pdf.pages[: self.max_pages]:
+            for page_number, page in enumerate(pdf.pages[: self.max_pages], start=1):
                 page_text = cast(str | None, page.extract_text())
-                if page_text:
-                    parts.append(page_text)
+                if page_text and page_text.strip():
+                    page_outputs.append(page_text)
+                else:
+                    page_outputs.append(None)
+                    empty_pages.append(page_number)
 
-        if not parts:
+        if not any(part for part in page_outputs):
             return _ocr_pdf(
                 path,
                 language=self.ocr_language,
@@ -106,7 +120,20 @@ class PdfExtractor:
                 dpi=self.ocr_pdf_dpi,
                 max_pages=self.ocr_pdf_max_pages,
             )
-        return "\n\n".join(parts)
+        for page_number in empty_pages[: self.ocr_pdf_max_pages]:
+            try:
+                page_outputs[page_number - 1] = _ocr_pdf_page(
+                    path,
+                    page_number=page_number,
+                    language=self.ocr_language,
+                    timeout_seconds=self.ocr_timeout_seconds,
+                    dpi=self.ocr_pdf_dpi,
+                )
+            except RuntimeError:
+                continue
+            except ValueError:
+                continue
+        return "\n\n".join(part for part in page_outputs if part and part.strip())
 
 
 class ImageOcrExtractor:
@@ -293,6 +320,45 @@ def _ocr_pdf(
     return text
 
 
+def _ocr_pdf_page(
+    path: Path,
+    *,
+    page_number: int,
+    language: str = "eng",
+    timeout_seconds: int = 120,
+    dpi: int = 200,
+) -> str:
+    if shutil.which("tesseract") is None:
+        raise RuntimeError("Scanned PDF OCR requires the 'tesseract' executable on PATH")
+    try:
+        pdf2image = importlib.import_module("pdf2image")
+    except ImportError as exc:
+        raise RuntimeError("Scanned PDF OCR requires installing the 'ocr' extra") from exc
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        image_paths = cast(
+            list[Path],
+            pdf2image.convert_from_path(
+                path,
+                dpi=dpi,
+                first_page=page_number,
+                last_page=page_number,
+                output_folder=tmp_dir,
+                fmt="png",
+                paths_only=True,
+                timeout=timeout_seconds,
+            ),
+        )
+        parts = [
+            _ocr_image(image_path, language=language, timeout_seconds=timeout_seconds)
+            for image_path in image_paths
+        ]
+    text = "\n\n".join(part for part in parts if part.strip())
+    if not text:
+        raise ValueError(f"No OCR text found on PDF page {page_number}: {path}")
+    return text
+
+
 def _markitdown_worker(
     path: str,
     max_input_bytes: int,
@@ -331,3 +397,24 @@ def _validate_input_size(path: Path, max_input_bytes: int, label: str) -> None:
     byte_size = path.stat().st_size
     if byte_size > max_input_bytes:
         raise ValueError(f"{label} exceeds {max_input_bytes} bytes: {path}")
+
+
+def _validate_text_like(path: Path) -> None:
+    with path.open("rb") as handle:
+        sample = handle.read(4096)
+    if b"\x00" in sample:
+        raise ValueError(f"Text extraction input appears to be binary: {path}")
+
+
+def _paragraph_text(paragraph: Any) -> str:
+    return str(getattr(paragraph, "text", "")).strip()
+
+
+def _table_text(table: Any) -> str:
+    rows: list[str] = []
+    for row in table.rows:
+        cells = [_paragraph_text(cell) for cell in row.cells]
+        rendered = " | ".join(cell for cell in cells if cell)
+        if rendered:
+            rows.append(rendered)
+    return "\n".join(rows)

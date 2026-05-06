@@ -35,11 +35,16 @@ class CleanChunks:
     temperature: float = 0.0
     coherence_mode: CoherenceMode = "balanced"
     max_parallel_chunks: int = 8
+    balanced_group_size: int = 4
 
     async def execute(self, chunks: list[Chunk]) -> list[CleanedChunk]:
+        if self.coherence_mode == "fast":
+            return await self._clean_parallel(chunks)
+        if self.coherence_mode == "balanced":
+            return await self._clean_balanced(chunks)
         if self.coherence_mode == "max-coherence":
             return await self._clean_sequential(chunks)
-        return await self._clean_parallel(chunks)
+        raise ValueError(f"Unsupported coherence mode: {self.coherence_mode}")
 
     async def _clean_parallel(self, chunks: list[Chunk]) -> list[CleanedChunk]:
         if not chunks:
@@ -67,6 +72,35 @@ class CleanChunks:
 
         await asyncio.gather(*(worker() for _ in range(worker_count)))
         return [item for item in results if item is not None]
+
+    async def _clean_balanced(self, chunks: list[Chunk]) -> list[CleanedChunk]:
+        if not chunks:
+            return []
+        group_size = max(1, self.balanced_group_size)
+        groups = [chunks[index : index + group_size] for index in range(0, len(chunks), group_size)]
+        worker_count = max(1, min(self.max_parallel_chunks, len(groups)))
+        queue: asyncio.Queue[tuple[int, list[Chunk]]] = asyncio.Queue()
+        for index, group in enumerate(groups):
+            queue.put_nowait((index, group))
+        group_results: list[list[CleanedChunk] | None] = [None] * len(groups)
+
+        async def worker() -> None:
+            while True:
+                try:
+                    group_index, group = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+                try:
+                    group_results[group_index] = await self._clean_sequential(group)
+                finally:
+                    queue.task_done()
+
+        await asyncio.gather(*(worker() for _ in range(worker_count)))
+        results: list[CleanedChunk] = []
+        for group in group_results:
+            if group is not None:
+                results.extend(group)
+        return results
 
     async def _clean_sequential(self, chunks: list[Chunk]) -> list[CleanedChunk]:
         results: list[CleanedChunk] = []

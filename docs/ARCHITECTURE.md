@@ -17,7 +17,7 @@ Librarian uses hexagonal architecture so the core can run through a CLI, an API 
 Adapters
   CLI: Typer
   API: FastAPI
-  Storage: SQLite + filesystem content store
+  Storage: SQLite repository and SQLite-backed alpha content store
   LLM: OpenAI-compatible, mock
   Extraction: txt, md, csv, json, docx, pdf
 
@@ -72,11 +72,17 @@ The default execution model should favor throughput:
 
 ## Coherence Modes
 
-- `fast`: parallel chunk cleaning with overlap windows and boundary smoothing.
+- `fast`: flat parallel chunk cleaning using the configured chunk overlap for boundary context.
 - `balanced`: parallel chunk groups with local carry-forward inside each group.
 - `max-coherence`: sequential carry-forward across the full document.
 
 The prototype used a max-coherence style. Production defaults should start with `balanced` after benchmarking.
+
+## Content Storage
+
+The alpha content store persists raw text, chunks, cleaned chunks, final outputs, and the FTS mirror
+in SQLite. This keeps the first release portable and easy to back up, but it duplicates large text
+payloads. A filesystem or object-store content adapter is planned before beta-scale corpora.
 
 ## Prompt Governance
 

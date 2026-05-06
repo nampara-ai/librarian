@@ -26,6 +26,8 @@ from librarian.domain.models import (
     utc_now,
 )
 
+_SQLITE_BUSY_TIMEOUT_MS = 5_000
+
 
 class SQLiteDatabase:
     """Small async-friendly SQLite wrapper for initialization."""
@@ -39,6 +41,7 @@ class SQLiteDatabase:
     def _initialize_sync(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.path) as connection:
+            connection.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -66,6 +69,7 @@ class SQLiteDatabase:
         connection = sqlite3.connect(self.path)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
         return connection
 
 

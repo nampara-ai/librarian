@@ -6,7 +6,7 @@ This repository is the production rewrite of an earlier prototype. The architect
 
 ## Status
 
-`v0.1.0a1` is the first public alpha. It includes local CLI workflows, a FastAPI service,
+`v0.1.0a2` is the latest public alpha. It includes local CLI workflows, a FastAPI service,
 directory conversion/import, durable SQLite-backed processing runs, OCR/broad-format extraction,
 search/export, release automation, and OSS governance files.
 
@@ -122,7 +122,7 @@ For direct image runs, also set an import root because the image binds publicly 
 docker run --rm -p 8080:8080 \
   -e LIBRARIAN_API_KEY=change-me \
   -e LIBRARIAN_API_IMPORT_ROOT=/data/imports \
-  ghcr.io/nampara-ai/librarian:v0.1.0a1
+  ghcr.io/nampara-ai/librarian:v0.1.0a2
 ```
 
 ## Privacy

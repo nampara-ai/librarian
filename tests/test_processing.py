@@ -5,18 +5,21 @@ from typing import Any, cast
 import pytest
 
 from librarian.application.classify_document import ClassifyDocument
+from librarian.application.clean_chunks import CleanChunks
 from librarian.application.factory import build_container
 from librarian.application.ports import EventSink, OutputRepository
 from librarian.application.process_document import ProcessDocument
 from librarian.config import Settings
-from librarian.domain.ids import RunId
+from librarian.domain.ids import ChunkId, DocumentId, RunId
 from librarian.domain.models import (
+    Chunk,
     Classification,
     CleanedOutput,
     DocumentStatus,
     RunStage,
     RunStatus,
 )
+from librarian.prompts import PromptCatalog
 
 
 @pytest.mark.asyncio
@@ -144,6 +147,60 @@ async def test_running_run_observes_cancellation_without_succeeding(
     assert latest.status == RunStatus.CANCELED
     assert document.status == DocumentStatus.INGESTED
     assert output is None
+
+
+@pytest.mark.asyncio
+async def test_balanced_coherence_carries_context_within_parallel_groups() -> None:
+    class RecordingProvider:
+        name = "recording"
+
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        async def complete(
+            self,
+            *,
+            system_prompt: str,
+            user_prompt: str,
+            model: str,
+            max_tokens: int,
+            temperature: float,
+        ) -> str:
+            del system_prompt, model, max_tokens, temperature
+            self.prompts.append(user_prompt)
+            return user_prompt
+
+    provider = RecordingProvider()
+    cleaner = CleanChunks(
+        provider=provider,
+        prompt_catalog=PromptCatalog(),
+        prompt_version="cmos_v1",
+        model="test",
+        coherence_mode="balanced",
+        max_parallel_chunks=2,
+        balanced_group_size=2,
+    )
+    chunks = [
+        Chunk(
+            id=ChunkId(f"chk_{index}"),
+            document_id=DocumentId("doc_test"),
+            ordinal=index,
+            text=f"chunk {index}",
+            start_char=index,
+            end_char=index + 1,
+            sha256=f"sha-{index}",
+        )
+        for index in range(4)
+    ]
+
+    await cleaner.execute(chunks)
+
+    assert provider.prompts[0] == "chunk 0"
+    assert provider.prompts[1].startswith("[CONTEXT:")
+    assert "chunk 0" in provider.prompts[1]
+    assert provider.prompts[2] == "chunk 2"
+    assert provider.prompts[3].startswith("[CONTEXT:")
+    assert "chunk 2" in provider.prompts[3]
 
 
 @pytest.mark.asyncio

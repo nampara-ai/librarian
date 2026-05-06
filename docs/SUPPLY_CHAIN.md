@@ -12,9 +12,9 @@ Current release safeguards:
 
 ## Alpha Dependency Policy
 
-`v0.1.0a1` is a dependency-floating alpha. Runtime dependencies are declared with lower bounds and
-resolved at build time in CI, release, and Docker builds. This keeps the first alpha simple while the
-public API and package ownership settle.
+Current alpha releases are dependency-floating. Runtime dependencies are declared with lower bounds
+and resolved at build time in CI, release, and Docker builds. This keeps the alpha line simple while
+the public API and package ownership settle.
 
 Stable releases should not use this policy. Before a stable tag, release builds should use a locked
 dependency graph or publish constraints alongside the wheel, source distribution, SBOM, and

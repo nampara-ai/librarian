@@ -4,6 +4,20 @@
 
 No unreleased changes.
 
+## 0.1.0a2 - 2026-05-06
+
+- Implemented real `fast`, `balanced`, and `max-coherence` cleaning behavior.
+- Added constant-time API key comparison.
+- Stopped retrying non-transient OpenAI-compatible errors such as bad requests and auth failures.
+- Added per-page OCR for mixed text/scanned PDFs.
+- Expanded DOCX extraction to include tables, headers, and footers.
+- Added SQLite busy timeout configuration for API/worker contention.
+- Wired processing runs through the advertised extraction, normalization, validation,
+  classification, and indexing stages.
+- Cached bundled prompt reads.
+- Added lightweight binary sniffing for text-family inputs.
+- Corrected architecture docs to describe the SQLite-backed alpha content store.
+
 ## 0.1.0a1 - 2026-05-06
 
 - Added OSS governance files, templates, Dependabot, and CodeQL.

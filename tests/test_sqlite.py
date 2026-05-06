@@ -22,12 +22,14 @@ async def test_sqlite_initializes_schema(tmp_path: Path) -> None:
     assert database_path.exists()
     with database.connect() as connection:
         rows = connection.execute("SELECT version FROM schema_migrations").fetchall()
+        busy_timeout = connection.execute("PRAGMA busy_timeout").fetchone()[0]
 
     assert [row["version"] for row in rows] == [
         "0001_initial.sql",
         "0002_run_queue.sql",
         "0003_document_scoped_chunks.sql",
     ]
+    assert busy_timeout == 5000
 
 
 @pytest.mark.asyncio

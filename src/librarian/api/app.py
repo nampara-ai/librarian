@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import secrets
 import time
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator
@@ -150,7 +151,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def api_key_auth(request: Request, call_next: Any):
         if settings.api_key and request.url.path not in {"/health", "/version"}:
             supplied = request.headers.get("x-api-key")
-            if supplied != settings.api_key:
+            if supplied is None or not secrets.compare_digest(supplied, settings.api_key):
                 return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
         return await call_next(request)
 

@@ -96,11 +96,25 @@ class ProcessDocument:
             await self.runs.update_status(
                 run_id,
                 status=RunStatus.RUNNING,
-                stage=RunStage.CHUNK,
+                stage=RunStage.EXTRACT,
             )
             raw_text = await self.content.get_text(raw_text_key(document_id))
+            await self.events.emit(run_id, RunStage.EXTRACT, "loaded extracted source text")
             await self._raise_if_canceled(run_id)
-            chunked = chunk_text(document_id, raw_text, self.chunking_policy)
+            await self.runs.update_status(
+                run_id,
+                status=RunStatus.RUNNING,
+                stage=RunStage.NORMALIZE,
+            )
+            normalized_text = raw_text.strip()
+            await self.events.emit(run_id, RunStage.NORMALIZE, "normalized source text")
+            await self._raise_if_canceled(run_id)
+            await self.runs.update_status(
+                run_id,
+                status=RunStatus.RUNNING,
+                stage=RunStage.CHUNK,
+            )
+            chunked = chunk_text(document_id, normalized_text, self.chunking_policy)
             await self.chunks.save_many(chunked)
             await self.events.emit(run_id, RunStage.CHUNK, f"created {len(chunked)} chunk(s)")
             await self._raise_if_canceled(run_id)
@@ -134,6 +148,11 @@ class ProcessDocument:
                 [*cached_chunks, *cleaned_missing],
                 key=lambda item: item.chunk.ordinal,
             )
+            await self.runs.update_status(
+                run_id,
+                status=RunStatus.RUNNING,
+                stage=RunStage.VALIDATE,
+            )
             await self.outputs.save_cleaned_chunks(run_id, cleaned_chunks)
             failed_chunks = sum(1 for chunk in cleaned_chunks if not chunk.text.strip())
             completed_chunks = len(cleaned_chunks) - failed_chunks
@@ -142,7 +161,7 @@ class ProcessDocument:
                 run_id,
                 completed_chunks=completed_chunks,
                 failed_chunks=failed_chunks,
-                stage=RunStage.CLEAN,
+                stage=RunStage.VALIDATE,
             )
             await self.events.emit(
                 run_id,
@@ -167,8 +186,18 @@ class ProcessDocument:
                 model_provider=self.cleaner.provider.name,
                 model_name=self.cleaner.model,
             )
+            await self.runs.update_status(
+                run_id,
+                status=RunStatus.RUNNING,
+                stage=RunStage.CLASSIFY,
+            )
             classification = await self.classifier.execute(document_id, assembled)
             await self._raise_if_canceled(run_id)
+            await self.runs.update_status(
+                run_id,
+                status=RunStatus.RUNNING,
+                stage=RunStage.INDEX,
+            )
 
             await self.outputs.publish_successful_run(output, classification)
             published = True

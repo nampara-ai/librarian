@@ -521,11 +521,11 @@ Output:
 - Add example synthetic fixtures.
 - Add contributor docs.
 - Add security/privacy docs.
-- Tag `v0.1.0a1` for the first public alpha.
+- Tag the first public alpha.
 
 ## 12. Success Metrics
 
-For `v0.1.0a1`:
+For the first public alpha:
 
 - A user can install and run Librarian locally from a clean machine.
 - A user can process a directory of text/Markdown/PDF/DOCX files from the CLI.
