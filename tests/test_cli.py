@@ -1,9 +1,14 @@
 import re
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
+from librarian.application.factory import build_container
 from librarian.cli.app import app
+from librarian.config import Settings
+from librarian.domain.models import RunStage, RunStatus
+from librarian.storage.sqlite import SQLiteRunQueue
 
 
 def test_cli_read_only_commands_do_not_require_llm_credentials(tmp_path: Path) -> None:
@@ -68,6 +73,60 @@ def test_cli_import_rejects_new_directory_without_output_dir(tmp_path: Path) -> 
     assert result.exit_code != 0
     assert "--output-dir is required" in _strip_ansi(result.output)
     assert "Traceback" not in result.output
+
+
+def test_cli_retry_queue_failure_marks_retry_failed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def setup() -> str:
+        settings = Settings(
+            data_dir=tmp_path / ".librarian",
+            database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        )
+        container = await build_container(settings)
+        source = tmp_path / "notes.txt"
+        source.write_text("Horse transcript.", encoding="utf-8")
+        ingested = await container.ingest_document.execute(source)
+        run = await container.process_document.start(ingested.document.id)
+        await container.repository.update_status(
+            run.id,
+            status=RunStatus.FAILED,
+            stage=RunStage.COMPLETE,
+            error="original failure",
+        )
+        return str(run.id)
+
+    import asyncio
+
+    run_id = asyncio.run(setup())
+
+    async def fail_enqueue(self: object, retry_id: object) -> None:
+        del self, retry_id
+        raise RuntimeError("queue down")
+
+    monkeypatch.setattr(SQLiteRunQueue, "enqueue", fail_enqueue)
+    runner = CliRunner()
+    env = {
+        "LIBRARIAN_DATA_DIR": str(tmp_path / ".librarian"),
+        "LIBRARIAN_DATABASE_PATH": str(tmp_path / ".librarian" / "librarian.sqlite"),
+    }
+
+    result = runner.invoke(app, ["run-retry", run_id, "--queue"], env=env)
+
+    assert result.exit_code != 0
+    assert "Failed to enqueue retry" in _strip_ansi(result.output)
+
+    async def inspect() -> list[str | None]:
+        settings = Settings(
+            data_dir=tmp_path / ".librarian",
+            database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        )
+        container = await build_container(settings)
+        return [run.error for run in await container.repository.list_runs(limit=10)]
+
+    errors = asyncio.run(inspect())
+    assert "submission failed: queue down" in errors
 
 
 def _strip_ansi(value: str) -> str:

@@ -255,7 +255,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if document is None:
             raise HTTPException(status_code=404, detail="Document not found")
         run = await container.process_document.start(DocumentId(document_id))
-        await _submit_run(settings, http_request, run.id)
+        try:
+            await _submit_run(settings, http_request, run.id)
+        except Exception as exc:
+            await _fail_unsubmitted_run(container, run.id, exc)
+            raise HTTPException(status_code=503, detail=f"Run submission failed: {exc}") from exc
         return _run_response(run)
 
     @app.get("/documents/{document_id}/content", response_model=ContentResponse)
@@ -290,7 +294,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             run = await container.process_document.start(DocumentId(request.document_id))
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        await _submit_run(settings, http_request, run.id)
+        try:
+            await _submit_run(settings, http_request, run.id)
+        except Exception as exc:
+            await _fail_unsubmitted_run(container, run.id, exc)
+            raise HTTPException(status_code=503, detail=f"Run submission failed: {exc}") from exc
         return _run_response(run)
 
     @app.get("/runs", response_model=RunsResponse)
@@ -344,7 +352,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if run.status != RunStatus.FAILED:
             raise HTTPException(status_code=400, detail="Run is not failed")
         retry = await container.process_document.start(run.document_id)
-        await _submit_run(settings, http_request, retry.id)
+        try:
+            await _submit_run(settings, http_request, retry.id)
+        except Exception as exc:
+            await _fail_unsubmitted_run(container, retry.id, exc)
+            raise HTTPException(status_code=503, detail=f"Run submission failed: {exc}") from exc
         return _run_response(retry)
 
     @app.post("/imports", response_model=ImportResponse)
@@ -644,6 +656,15 @@ async def _submit_run(settings: Settings, request: Request, run_id: RunId) -> No
         await SQLiteRunQueue(container.database).enqueue(run_id)
         return
     raise RuntimeError(f"Unsupported job backend: {settings.job_backend}")
+
+
+async def _fail_unsubmitted_run(container: Any, run_id: RunId, exc: Exception) -> None:
+    await container.repository.update_status(
+        run_id,
+        status=RunStatus.FAILED,
+        stage=RunStage.COMPLETE,
+        error=f"submission failed: {exc}",
+    )
 
 
 def _job_runner(request: Request) -> InProcessJobRunner:

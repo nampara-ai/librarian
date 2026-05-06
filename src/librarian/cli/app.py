@@ -372,7 +372,18 @@ def retry_run(
             raise typer.BadParameter(f"Run is not failed: {run_id}")
         new_run = await container.process_document.start(existing.document_id)
         if queue:
-            await SQLiteRunQueue(container.database).enqueue(new_run.id)
+            try:
+                await SQLiteRunQueue(container.database).enqueue(new_run.id)
+            except Exception as exc:
+                await container.repository.update_status(
+                    new_run.id,
+                    status=RunStatus.FAILED,
+                    stage=RunStage.COMPLETE,
+                    error=f"submission failed: {exc}",
+                )
+                raise typer.BadParameter(
+                    f"Failed to enqueue retry {new_run.id}: {exc}"
+                ) from exc
             console.print(f"Queued retry {new_run.id}")
             return
         finished = await container.process_document.execute_existing(new_run.id)

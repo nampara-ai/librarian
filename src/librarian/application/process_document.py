@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from contextlib import suppress
 from dataclasses import dataclass
@@ -56,7 +57,16 @@ class ProcessDocument:
         run_id = RunId(f"run_{uuid.uuid4().hex[:16]}")
         run = ProcessingRun(id=run_id, document_id=document_id)
         await self.runs.save_run(run)
-        await self.events.emit(run_id, RunStage.INGEST, "queued processing run")
+        try:
+            await self.events.emit(run_id, RunStage.INGEST, "queued processing run")
+        except Exception as exc:
+            await self.runs.update_status(
+                run_id,
+                status=RunStatus.FAILED,
+                stage=RunStage.COMPLETE,
+                error=str(exc),
+            )
+            raise
         return run
 
     async def execute(self, document_id: DocumentId) -> ProcessingRun:
@@ -175,6 +185,27 @@ class ProcessDocument:
             )
             await self.documents.update_document_status(document_id, previous_document_status)
             await self.events.emit(run_id, RunStage.COMPLETE, f"processing canceled: {exc}")
+            raise
+        except asyncio.CancelledError:
+            if published:
+                raise
+            await self.runs.update_status(
+                run_id,
+                status=RunStatus.FAILED,
+                stage=RunStage.COMPLETE,
+                error="processing canceled by task cancellation",
+            )
+            previous_output = await self.outputs.get_cleaned_output(document_id)
+            canceled_status = (
+                previous_document_status if previous_output is not None else DocumentStatus.FAILED
+            )
+            await self.documents.update_document_status(document_id, canceled_status)
+            with suppress(Exception):
+                await self.events.emit(
+                    run_id,
+                    RunStage.COMPLETE,
+                    "processing canceled by task cancellation",
+                )
             raise
         except Exception as exc:
             if published:

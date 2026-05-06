@@ -672,6 +672,39 @@ def test_api_run_events_return_404_for_missing_run(tmp_path: Path) -> None:
     assert stream.status_code == 404
 
 
+def test_api_sqlite_submission_failure_marks_run_failed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        job_backend="sqlite",
+    )
+
+    async def fail_enqueue(self: object, run_id: object) -> None:
+        del self, run_id
+        raise RuntimeError("queue insert failed")
+
+    monkeypatch.setattr(SQLiteRunQueue, "enqueue", fail_enqueue)
+
+    with TestClient(create_app(settings), raise_server_exceptions=False) as client:
+        upload = client.post(
+            "/documents",
+            files={"file": ("notes.txt", b"Horse transcript.", "text/plain")},
+        )
+        assert upload.status_code == 200
+        response = client.post("/runs", json={"document_id": upload.json()["id"]})
+
+    assert response.status_code == 503
+    assert "Run submission failed" in response.json()["detail"]
+    container = asyncio.run(build_container(settings))
+    runs = asyncio.run(container.repository.list_runs(limit=10))
+    assert len(runs) == 1
+    assert runs[0].status.value == "failed"
+    assert runs[0].error == "submission failed: queue insert failed"
+
+
 def _wait_for_run(client: TestClient, run_id: str):
     response = client.get(f"/runs/{run_id}")
     for _ in range(40):

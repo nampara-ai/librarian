@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from typing import Any, cast
 
@@ -330,6 +331,122 @@ async def test_start_event_failure_marks_run_failed(tmp_path: Path) -> None:
     assert document is not None
     assert latest.status == RunStatus.FAILED
     assert latest.error == "event boom"
+    assert document.status == DocumentStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_start_event_failure_marks_created_run_failed(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Horse transcript with start event failure.", encoding="utf-8")
+    container = await build_container(settings)
+    ingested = await container.ingest_document.execute(source)
+
+    class FailingEvents:
+        def __init__(self, wrapped: object) -> None:
+            self._wrapped = wrapped
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._wrapped, name)
+
+        async def emit(self, run_id: RunId, stage: RunStage, message: str) -> None:
+            del run_id, stage, message
+            raise RuntimeError("queued event boom")
+
+    process = ProcessDocument(
+        documents=container.repository,
+        runs=container.repository,
+        chunks=container.repository,
+        content=container.repository,
+        outputs=container.repository,
+        events=cast(EventSink, FailingEvents(container.repository)),
+        cleaner=container.process_document.cleaner,
+        classifier=container.process_document.classifier,
+        chunking_policy=container.process_document.chunking_policy,
+    )
+
+    with pytest.raises(RuntimeError, match="queued event boom"):
+        await process.start(ingested.document.id)
+
+    runs = await container.repository.list_runs(limit=10)
+    assert len(runs) == 1
+    assert runs[0].status == RunStatus.FAILED
+    assert runs[0].error == "queued event boom"
+
+
+@pytest.mark.asyncio
+async def test_task_cancellation_marks_run_failed_and_restores_document_status(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Horse transcript with task cancellation.", encoding="utf-8")
+    container = await build_container(settings)
+    ingested = await container.ingest_document.execute(source)
+    run = await container.process_document.start(ingested.document.id)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingProvider:
+        name = container.process_document.cleaner.provider.name
+
+        async def complete(
+            self,
+            *,
+            system_prompt: str,
+            user_prompt: str,
+            model: str,
+            max_tokens: int,
+            temperature: float,
+        ) -> str:
+            del system_prompt, user_prompt, model, max_tokens, temperature
+            started.set()
+            await release.wait()
+            return "never reached"
+
+    cleaner = container.process_document.cleaner
+    blocking_cleaner = type(cleaner)(
+        provider=BlockingProvider(),
+        prompt_catalog=cleaner.prompt_catalog,
+        prompt_version=cleaner.prompt_version,
+        model=cleaner.model,
+        max_tokens=cleaner.max_tokens,
+        temperature=cleaner.temperature,
+        coherence_mode=cleaner.coherence_mode,
+        max_parallel_chunks=cleaner.max_parallel_chunks,
+    )
+    process = ProcessDocument(
+        documents=container.repository,
+        runs=container.repository,
+        chunks=container.repository,
+        content=container.repository,
+        outputs=container.repository,
+        events=container.repository,
+        cleaner=blocking_cleaner,
+        classifier=container.process_document.classifier,
+        chunking_policy=container.process_document.chunking_policy,
+    )
+    task = asyncio.create_task(process.execute_existing(run.id))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    latest = await container.repository.get_run(run.id)
+    document = await container.repository.get_document(ingested.document.id)
+    assert latest is not None
+    assert document is not None
+    assert latest.status == RunStatus.FAILED
+    assert latest.error == "processing canceled by task cancellation"
     assert document.status == DocumentStatus.FAILED
 
 
