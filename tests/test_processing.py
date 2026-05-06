@@ -283,6 +283,71 @@ async def test_late_publish_failure_marks_run_failed_and_hides_output(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_failed_reprocess_preserves_ready_document_status(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Horse transcript with existing good output.", encoding="utf-8")
+    container = await build_container(settings)
+    ingested = await container.ingest_document.execute(source)
+    await container.process_document.execute(ingested.document.id)
+    retry = await container.process_document.start(ingested.document.id)
+
+    class FailingProvider:
+        name = container.process_document.classifier.provider.name
+
+        async def complete(
+            self,
+            *,
+            system_prompt: str,
+            user_prompt: str,
+            model: str,
+            max_tokens: int,
+            temperature: float,
+        ) -> str:
+            del system_prompt, user_prompt, model, max_tokens, temperature
+            raise RuntimeError("classify boom")
+
+    classifier = container.process_document.classifier
+    failing_classifier = ClassifyDocument(
+        provider=FailingProvider(),
+        prompt_catalog=classifier.prompt_catalog,
+        prompt_version=classifier.prompt_version,
+        model=classifier.model,
+        taxonomy=classifier.taxonomy,
+    )
+
+    process = ProcessDocument(
+        documents=container.repository,
+        runs=container.repository,
+        chunks=container.repository,
+        content=container.repository,
+        outputs=container.repository,
+        search=container.repository,
+        events=container.repository,
+        cleaner=container.process_document.cleaner,
+        classifier=failing_classifier,
+        chunking_policy=container.process_document.chunking_policy,
+    )
+
+    with pytest.raises(RuntimeError, match="classify boom"):
+        await process.execute_existing(retry.id)
+
+    failed_run = await container.repository.get_run(retry.id)
+    document = await container.repository.get_document(ingested.document.id)
+    output = await container.repository.get_cleaned_output(ingested.document.id)
+    assert failed_run is not None
+    assert document is not None
+    assert failed_run.status == RunStatus.FAILED
+    assert document.status == DocumentStatus.READY
+    assert output is not None
+
+
+@pytest.mark.asyncio
 async def test_failed_extraction_does_not_persist_document(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",

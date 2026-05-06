@@ -77,7 +77,7 @@ class ImportRequest(BaseModel):
     subdirectory_name: str = "librarian-converted"
     recursive: bool = False
     overwrite: bool = False
-    processing_mode: str = "queue"
+    processing_mode: str = "process"
 
 
 class ImportResponse(BaseModel):
@@ -360,6 +360,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         source_dir = _resolve_api_path(Path(request.source_dir), settings=settings)
         if not source_dir.is_dir():
             raise HTTPException(status_code=400, detail="source_dir must be an existing directory")
+        output_dir = (
+            _resolve_api_path(Path(request.output_dir), settings=settings)
+            if request.output_dir
+            else None
+        )
+        if output_mode == DirectoryOutputMode.NEW_DIRECTORY and output_dir is None:
+            raise HTTPException(
+                status_code=400,
+                detail="output_dir is required when output_mode is new-directory",
+            )
+        if processing_mode == ImportProcessingMode.QUEUE and settings.job_backend != "sqlite":
+            raise HTTPException(
+                status_code=400,
+                detail="queue processing requires LIBRARIAN_JOB_BACKEND=sqlite",
+            )
         importer = ImportLibrary(
             converter=DocumentConverter(_build_extractor(settings)),
             ingest=container.ingest_document,
@@ -371,11 +386,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             format=conversion_format,
             output_mode=output_mode,
             processing_mode=processing_mode,
-            output_dir=(
-                _resolve_api_path(Path(request.output_dir), settings=settings)
-                if request.output_dir
-                else None
-            ),
+            output_dir=output_dir,
             subdirectory_name=request.subdirectory_name,
             recursive=request.recursive,
             overwrite=request.overwrite,

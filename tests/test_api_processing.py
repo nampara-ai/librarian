@@ -344,6 +344,77 @@ def test_api_import_endpoint_and_run_controls(tmp_path: Path) -> None:
         assert deleted.status_code == 200
 
 
+def test_api_import_default_processes_without_external_worker(tmp_path: Path) -> None:
+    source_dir = tmp_path / "input"
+    source_dir.mkdir()
+    (source_dir / "notes.txt").write_text("Horse import transcript", encoding="utf-8")
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_import_root=tmp_path,
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    with TestClient(create_app(settings)) as client:
+        imported = client.post(
+            "/imports",
+            json={
+                "source_dir": str(source_dir),
+                "format": "md",
+            },
+        )
+
+    assert imported.status_code == 200
+    assert imported.json()["processed"] == 1
+    assert imported.json()["queued"] == 0
+
+
+def test_api_import_rejects_unrunnable_queue_mode(tmp_path: Path) -> None:
+    source_dir = tmp_path / "input"
+    source_dir.mkdir()
+    (source_dir / "notes.txt").write_text("Horse import transcript", encoding="utf-8")
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_import_root=tmp_path,
+        job_backend="in-process",
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/imports",
+            json={
+                "source_dir": str(source_dir),
+                "processing_mode": "queue",
+            },
+        )
+
+    assert response.status_code == 400
+    assert "JOB_BACKEND=sqlite" in response.json()["detail"]
+
+
+def test_api_import_new_directory_requires_output_dir(tmp_path: Path) -> None:
+    source_dir = tmp_path / "input"
+    source_dir.mkdir()
+    (source_dir / "notes.txt").write_text("Horse import transcript", encoding="utf-8")
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_import_root=tmp_path,
+    )
+    with TestClient(create_app(settings), raise_server_exceptions=False) as client:
+        response = client.post(
+            "/imports",
+            json={
+                "source_dir": str(source_dir),
+                "output_mode": "new-directory",
+                "processing_mode": "none",
+            },
+        )
+
+    assert response.status_code == 400
+    assert "output_dir" in response.json()["detail"]
+
+
 def test_api_import_rejects_missing_or_non_directory_source(tmp_path: Path) -> None:
     import_root = tmp_path / "imports"
     import_root.mkdir()

@@ -195,7 +195,11 @@ class ProcessDocument:
                 stage=RunStage.COMPLETE,
                 error=str(exc),
             )
-            await self.documents.update_document_status(document_id, DocumentStatus.FAILED)
+            previous_output = await self.outputs.get_cleaned_output(document_id)
+            failed_status = (
+                previous_document_status if previous_output is not None else DocumentStatus.FAILED
+            )
+            await self.documents.update_document_status(document_id, failed_status)
             await self.events.emit(run_id, RunStage.COMPLETE, f"processing failed: {exc}")
             raise
 
