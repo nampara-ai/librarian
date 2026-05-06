@@ -304,6 +304,9 @@ def test_api_queued_run_processed_by_worker(tmp_path: Path) -> None:
     with TestClient(create_app(settings)) as client:
         status = client.get(f"/runs/{run_id}")
         assert status.json()["status"] == "succeeded"
+        cancel = client.post(f"/runs/{run_id}/cancel")
+        assert cancel.status_code == 400
+        assert "terminal" in cancel.json()["detail"]
 
 
 def test_api_import_endpoint_and_run_controls(tmp_path: Path) -> None:

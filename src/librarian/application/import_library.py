@@ -16,6 +16,7 @@ from librarian.application.convert_document import (
     DirectoryOutputMode,
     DocumentConverter,
     classify_conversion_error,
+    conversion_output_exclusions,
     conversion_output_path,
     discover_supported_files,
     unique_output_path,
@@ -131,6 +132,12 @@ class ImportLibrary:
             source_dir,
             recursive=recursive,
             supported_extensions=self.converter.extractor.supported_extensions,
+            exclude_paths=conversion_output_exclusions(
+                source_dir=source_dir,
+                output_mode=output_mode,
+                output_dir=output_dir,
+                subdirectory_name=subdirectory_name,
+            ),
         )
         items: list[ImportItem] = []
         for source_path in files:

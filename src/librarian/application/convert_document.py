@@ -158,6 +158,12 @@ class DocumentConverter:
             source_dir,
             supported_extensions=self.extractor.supported_extensions,
             recursive=recursive,
+            exclude_paths=conversion_output_exclusions(
+                source_dir=source_dir,
+                output_mode=output_mode,
+                output_dir=output_dir,
+                subdirectory_name=subdirectory_name,
+            ),
         )
         items: list[BatchConversionItem] = []
         for source_path in files:
@@ -205,17 +211,46 @@ def discover_supported_files(
     *,
     supported_extensions: frozenset[str],
     recursive: bool,
+    exclude_paths: tuple[Path, ...] = (),
 ) -> list[Path]:
     """Find supported files in stable order."""
     pattern = "**/*" if recursive else "*"
+    excluded = tuple(path.resolve() for path in exclude_paths)
     return sorted(
         (
             path
             for path in source_dir.glob(pattern)
-            if path.is_file() and path.suffix.lower() in supported_extensions
+            if path.is_file()
+            and path.suffix.lower() in supported_extensions
+            and not _is_under_any(path.resolve(), excluded)
         ),
         key=lambda item: str(item.relative_to(source_dir)).lower(),
     )
+
+
+def conversion_output_exclusions(
+    *,
+    source_dir: Path,
+    output_mode: DirectoryOutputMode,
+    output_dir: Path | None,
+    subdirectory_name: str,
+) -> tuple[Path, ...]:
+    """Return output roots that should be skipped during recursive discovery."""
+    if output_mode == DirectoryOutputMode.SUBDIRECTORY:
+        return (source_dir / subdirectory_name,)
+    if output_mode == DirectoryOutputMode.NEW_DIRECTORY and output_dir is not None:
+        return (output_dir,)
+    return ()
+
+
+def _is_under_any(path: Path, roots: tuple[Path, ...]) -> bool:
+    for root in roots:
+        try:
+            path.relative_to(root)
+        except ValueError:
+            continue
+        return True
+    return False
 
 
 def conversion_output_path(

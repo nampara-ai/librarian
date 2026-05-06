@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -6,8 +7,14 @@ from librarian.application.classify_document import ClassifyDocument
 from librarian.application.factory import build_container
 from librarian.application.process_document import ProcessDocument
 from librarian.config import Settings
-from librarian.domain.ids import RunId
-from librarian.domain.models import DocumentStatus, RunStage, RunStatus
+from librarian.domain.ids import DocumentId, RunId
+from librarian.domain.models import (
+    Classification,
+    CleanedOutput,
+    DocumentStatus,
+    RunStage,
+    RunStatus,
+)
 
 
 @pytest.mark.asyncio
@@ -217,6 +224,62 @@ async def test_canceled_run_does_not_publish_classification_or_search(
     assert output is None
     assert classification is None
     assert ingested.document.id not in results
+
+
+@pytest.mark.asyncio
+async def test_late_publish_failure_marks_run_failed_and_hides_output(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Horse transcript with index failure.", encoding="utf-8")
+    container = await build_container(settings)
+    ingested = await container.ingest_document.execute(source)
+    run = await container.process_document.start(ingested.document.id)
+
+    class FailingSearch:
+        async def index(
+            self,
+            output: CleanedOutput,
+            classification: Classification | None,
+        ) -> None:
+            del output, classification
+            raise RuntimeError("index boom")
+
+        async def search(self, query: str, *, limit: int = 20) -> Sequence[DocumentId]:
+            del query, limit
+            return ()
+
+    process = ProcessDocument(
+        documents=container.repository,
+        runs=container.repository,
+        chunks=container.repository,
+        content=container.repository,
+        outputs=container.repository,
+        search=FailingSearch(),
+        events=container.repository,
+        cleaner=container.process_document.cleaner,
+        classifier=container.process_document.classifier,
+        chunking_policy=container.process_document.chunking_policy,
+    )
+
+    with pytest.raises(RuntimeError, match="index boom"):
+        await process.execute_existing(run.id)
+
+    latest = await container.repository.get_run(run.id)
+    document = await container.repository.get_document(ingested.document.id)
+    output = await container.repository.get_cleaned_output(ingested.document.id)
+    classification = await container.repository.get_classification(ingested.document.id)
+    assert latest is not None
+    assert document is not None
+    assert latest.status == RunStatus.FAILED
+    assert latest.error == "index boom"
+    assert document.status == DocumentStatus.FAILED
+    assert output is None
+    assert classification is None
 
 
 @pytest.mark.asyncio

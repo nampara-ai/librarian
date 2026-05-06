@@ -162,16 +162,17 @@ class ProcessDocument:
             classification = await self.classifier.execute(document_id, assembled)
             await self._raise_if_canceled(run_id)
 
+            await self.search.index(output, classification)
+            await self.documents.update_document_status(document_id, DocumentStatus.READY)
+            await self.outputs.save_classification(classification)
+            await self.events.emit(run_id, RunStage.INDEX, "stored output and search index")
+            await self._raise_if_canceled(run_id)
+
             await self.runs.update_status(
                 run_id,
                 status=RunStatus.SUCCEEDED,
                 stage=RunStage.COMPLETE,
             )
-            await self._raise_if_canceled(run_id)
-            await self.outputs.save_classification(classification)
-            await self.search.index(output, classification)
-            await self.documents.update_document_status(document_id, DocumentStatus.READY)
-            await self.events.emit(run_id, RunStage.INDEX, "stored output and search index")
             await self.events.emit(run_id, RunStage.COMPLETE, "processing complete")
             latest = await self.runs.get_run(run_id)
             if latest is None:

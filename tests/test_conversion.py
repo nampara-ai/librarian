@@ -52,6 +52,34 @@ async def test_convert_directory_to_subdirectory(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_recursive_convert_directory_skips_own_output_subdirectory(tmp_path: Path) -> None:
+    source_dir = tmp_path / "input"
+    source_dir.mkdir()
+    (source_dir / "a.txt").write_text("Alpha", encoding="utf-8")
+    converter = DocumentConverter(CompositeExtractor())
+
+    first = await converter.convert_directory(
+        source_dir,
+        format=ConversionFormat.MARKDOWN,
+        output_mode=DirectoryOutputMode.SUBDIRECTORY,
+        subdirectory_name="converted",
+        recursive=True,
+    )
+    second = await converter.convert_directory(
+        source_dir,
+        format=ConversionFormat.MARKDOWN,
+        output_mode=DirectoryOutputMode.SUBDIRECTORY,
+        subdirectory_name="converted",
+        recursive=True,
+    )
+
+    assert first.converted == 1
+    assert second.converted == 1
+    assert [item.source_path.relative_to(source_dir) for item in second.items] == [Path("a.txt")]
+    assert not (source_dir / "converted" / "converted").exists()
+
+
+@pytest.mark.asyncio
 async def test_convert_directory_avoids_output_collisions_and_writes_sidecars(
     tmp_path: Path,
 ) -> None:

@@ -318,6 +318,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         run = await container.repository.get_run(RunId(run_id))
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
+        if run.status in {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELED}:
+            raise HTTPException(status_code=400, detail="Run is terminal and cannot be canceled")
         await container.repository.update_status(
             run.id,
             status=RunStatus.CANCELED,

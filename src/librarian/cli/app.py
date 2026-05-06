@@ -326,6 +326,8 @@ def cancel_run(
         existing = await container.repository.get_run(RunId(run_id))
         if existing is None:
             raise typer.BadParameter(f"Run not found: {run_id}")
+        if existing.status in {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELED}:
+            raise typer.BadParameter(f"Run is terminal and cannot be canceled: {run_id}")
         await container.repository.update_status(
             existing.id,
             status=RunStatus.CANCELED,
