@@ -6,7 +6,10 @@ Releases are built from git tags named `v*`.
 
 1. Update `CHANGELOG.md`.
 2. Confirm `pyproject.toml` has the intended version.
-3. Run local verification:
+3. Confirm package naming in `docs/NAMING.md`.
+4. Review `SECURITY.md` and public docs for private references.
+5. Generate provider eval and performance baselines where credentials are available.
+6. Run local verification:
 
 ```bash
 ruff check .
@@ -15,13 +18,13 @@ pytest
 python -m build
 ```
 
-4. Tag and push:
+7. Tag and push:
 
 ```bash
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The release workflow builds source and wheel distributions and uploads them as a GitHub Actions
-artifact. Publishing to a package index should be added only after package ownership and signing
-policy are finalized.
+The release workflow builds source and wheel distributions, generates an SBOM, publishes a Docker
+image to GitHub Container Registry, and creates a GitHub release. Publishing to a package index
+should be added only after package ownership and signing policy are finalized.

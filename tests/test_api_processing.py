@@ -4,7 +4,10 @@ from time import sleep
 from fastapi.testclient import TestClient
 
 from librarian.api.app import create_app
+from librarian.application.factory import build_container
+from librarian.application.jobs import QueueWorker
 from librarian.config import Settings
+from librarian.storage.sqlite import SQLiteDatabase, SQLiteRunQueue
 
 
 def test_api_upload_run_and_get_content(tmp_path: Path) -> None:
@@ -84,6 +87,78 @@ def test_api_document_pagination(tmp_path: Path) -> None:
         assert page.json()["limit"] == 2
         assert page.json()["offset"] == 1
         assert len(page.json()["documents"]) == 2
+
+
+def test_api_queued_run_processed_by_worker(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        job_backend="sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    with TestClient(create_app(settings)) as client:
+        upload = client.post(
+            "/documents",
+            files={"file": ("notes.txt", b"Horse transcript.", "text/plain")},
+        )
+        document_id = upload.json()["id"]
+        run = client.post("/runs", json={"document_id": document_id})
+        assert run.status_code == 200
+        run_id = run.json()["id"]
+
+    async def execute_worker() -> None:
+        database = SQLiteDatabase(settings.database_path)
+        await database.initialize()
+        container = await build_container(settings)
+        worker = QueueWorker(
+            queue=SQLiteRunQueue(database),
+            processor=container.process_document.execute_existing,
+            worker_id="test-worker",
+        )
+        assert await worker.run_once()
+
+    import asyncio
+
+    asyncio.run(execute_worker())
+
+    with TestClient(create_app(settings)) as client:
+        status = client.get(f"/runs/{run_id}")
+        assert status.json()["status"] == "succeeded"
+
+
+def test_api_import_endpoint_and_run_controls(tmp_path: Path) -> None:
+    source_dir = tmp_path / "input"
+    source_dir.mkdir()
+    (source_dir / "notes.txt").write_text("Horse import transcript", encoding="utf-8")
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    with TestClient(create_app(settings)) as client:
+        imported = client.post(
+            "/imports",
+            json={
+                "source_dir": str(source_dir),
+                "format": "md",
+                "processing_mode": "none",
+            },
+        )
+        assert imported.status_code == 200
+        assert imported.json()["ingested"] == 1
+        document_id = imported.json()["items"][0]["document_id"]
+
+        reprocess = client.post(f"/documents/{document_id}/reprocess")
+        assert reprocess.status_code == 200
+        cancel = client.post(f"/runs/{reprocess.json()['id']}/cancel")
+        assert cancel.status_code == 200
+        assert cancel.json()["status"] == "canceled"
+        runs = client.get("/runs?limit=10")
+        assert runs.status_code == 200
+        assert runs.json()["runs"]
+
+        deleted = client.delete(f"/documents/{document_id}")
+        assert deleted.status_code == 200
 
 
 def _wait_for_run(client: TestClient, run_id: str):

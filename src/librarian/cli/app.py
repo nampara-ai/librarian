@@ -25,10 +25,15 @@ from librarian.application.convert_document import (
 from librarian.application.eval import eval_result_json, load_eval_suite, run_eval_suite
 from librarian.application.export_document import ExportedDocument, ExportFormat
 from librarian.application.factory import build_container
-from librarian.application.import_library import ImportLibrary, ImportProcessingMode
+from librarian.application.import_library import (
+    ImportLibrary,
+    ImportProcessingMode,
+    write_import_report,
+)
 from librarian.application.jobs import QueueWorker
 from librarian.config import Settings
 from librarian.domain.ids import DocumentId, RunId, digest_text
+from librarian.domain.models import RunStage, RunStatus
 from librarian.ingest.extractors import CompositeExtractor
 from librarian.pipeline.chunking import ChunkingPolicy, chunk_text
 from librarian.storage.sqlite import SQLiteDatabase, SQLiteRunQueue
@@ -89,7 +94,8 @@ def chunk(
     resolved_path = path.resolve()
 
     async def run() -> None:
-        extractor = CompositeExtractor()
+        settings = Settings()
+        extractor = CompositeExtractor(ocr_language=settings.ocr_language)
         text = await extractor.extract(path)
         document_id = DocumentId(digest_text("doc", str(resolved_path)))
         chunks = chunk_text(
@@ -113,17 +119,23 @@ def convert(
     output: Annotated[Path, typer.Option(help="Output .md or .txt path.")],
     format: Annotated[str, typer.Option(help="Output format: md or txt.")] = "md",
     overwrite: Annotated[bool, typer.Option(help="Overwrite existing output.")] = False,
+    sidecar_metadata: Annotated[
+        bool,
+        typer.Option(help="Write .json sidecar metadata next to converted output."),
+    ] = False,
 ) -> None:
     """Convert one source file to Markdown or plain text."""
     conversion_format = _conversion_format(format)
 
     async def run() -> None:
-        converter = DocumentConverter(CompositeExtractor())
+        settings = Settings()
+        converter = DocumentConverter(CompositeExtractor(ocr_language=settings.ocr_language))
         result = await converter.convert_file(
             path.resolve(),
             output.resolve(),
             format=conversion_format,
             overwrite=overwrite,
+            write_sidecar=sidecar_metadata,
         )
         console.print(f"Converted {result.source_path} -> {result.output_path}")
 
@@ -148,13 +160,18 @@ def convert_dir(
     ] = "librarian-converted",
     recursive: Annotated[bool, typer.Option(help="Recurse into child directories.")] = False,
     overwrite: Annotated[bool, typer.Option(help="Overwrite existing outputs.")] = False,
+    sidecar_metadata: Annotated[
+        bool,
+        typer.Option(help="Write .json sidecar metadata next to converted outputs."),
+    ] = False,
 ) -> None:
     """Batch convert supported files in a directory."""
     conversion_format = _conversion_format(format)
     mode = _directory_output_mode(output_mode)
 
     async def run() -> None:
-        converter = DocumentConverter(CompositeExtractor())
+        settings = Settings()
+        converter = DocumentConverter(CompositeExtractor(ocr_language=settings.ocr_language))
         result = await converter.convert_directory(
             path.resolve(),
             format=conversion_format,
@@ -163,6 +180,7 @@ def convert_dir(
             subdirectory_name=subdirectory_name,
             recursive=recursive,
             overwrite=overwrite,
+            write_sidecar=sidecar_metadata,
         )
         table = Table("Status", "Source", "Output", "Error")
         for item in result.items:
@@ -205,6 +223,16 @@ def import_directory(
         bool,
         typer.Option(help="Enqueue each document for worker processing."),
     ] = False,
+    manifest: Annotated[
+        Path | None,
+        typer.Option(help="JSON manifest path for import progress/resume."),
+    ] = None,
+    resume: Annotated[bool, typer.Option(help="Resume from an existing manifest.")] = False,
+    report: Annotated[Path | None, typer.Option(help="Write final JSON report.")] = None,
+    sidecar_metadata: Annotated[
+        bool,
+        typer.Option(help="Write .json sidecar metadata next to converted outputs."),
+    ] = False,
 ) -> None:
     """Convert a directory, ingest outputs, and optionally process or enqueue."""
     if process and queue:
@@ -220,7 +248,7 @@ def import_directory(
     async def run() -> None:
         container = await build_container()
         importer = ImportLibrary(
-            converter=DocumentConverter(CompositeExtractor()),
+            converter=DocumentConverter(CompositeExtractor(ocr_language=container.settings.ocr_language)),
             ingest=container.ingest_document,
             process=container.process_document,
             queue_factory=lambda: SQLiteRunQueue(container.database),
@@ -234,7 +262,12 @@ def import_directory(
             subdirectory_name=subdirectory_name,
             recursive=recursive,
             overwrite=overwrite,
+            manifest_path=manifest.resolve() if manifest else None,
+            resume=resume,
+            write_sidecar=sidecar_metadata,
         )
+        if report:
+            await write_import_report(report.resolve(), result)
         table = Table("Status", "Source", "Converted", "Document", "Run", "Error")
         for item in result.items:
             table.add_row(
@@ -249,10 +282,106 @@ def import_directory(
         console.print(
             "Converted "
             f"{result.converted}, ingested {result.ingested}, processed {result.processed}, "
-            f"queued {result.queued}, failed {result.failed}"
+            f"queued {result.queued}, skipped {result.skipped}, failed {result.failed}"
         )
         if result.failed:
             raise typer.Exit(code=1)
+
+    asyncio.run(run())
+
+
+@app.command("runs")
+def list_runs(
+    limit: Annotated[int, typer.Option(help="Maximum runs.")] = 100,
+    offset: Annotated[int, typer.Option(help="Runs to skip.")] = 0,
+) -> None:
+    """List processing runs."""
+
+    async def run() -> None:
+        container = await build_container()
+        runs = await container.repository.list_runs(limit=limit, offset=offset)
+        table = Table("ID", "Document", "Status", "Stage", "Chunks", "Error")
+        for item in runs:
+            table.add_row(
+                str(item.id),
+                str(item.document_id),
+                item.status.value,
+                item.stage.value,
+                f"{item.completed_chunks}/{item.total_chunks}",
+                item.error or "",
+            )
+        console.print(table)
+
+    asyncio.run(run())
+
+
+@app.command("run-cancel")
+def cancel_run(
+    run_id: Annotated[str, typer.Argument(help="Run ID to cancel.")],
+) -> None:
+    """Mark a queued or running run as canceled."""
+
+    async def run() -> None:
+        container = await build_container()
+        existing = await container.repository.get_run(RunId(run_id))
+        if existing is None:
+            raise typer.BadParameter(f"Run not found: {run_id}")
+        await container.repository.update_status(
+            existing.id,
+            status=RunStatus.CANCELED,
+            stage=RunStage.COMPLETE,
+            error="canceled by user",
+        )
+        console.print(f"Canceled {existing.id}")
+
+    asyncio.run(run())
+
+
+@app.command("run-retry")
+def retry_run(
+    run_id: Annotated[str, typer.Argument(help="Failed run ID to retry.")],
+    queue: Annotated[bool, typer.Option(help="Enqueue retry instead of processing now.")] = False,
+) -> None:
+    """Replay a failed run as a new processing run."""
+
+    async def run() -> None:
+        container = await build_container()
+        existing = await container.repository.get_run(RunId(run_id))
+        if existing is None:
+            raise typer.BadParameter(f"Run not found: {run_id}")
+        if existing.status != RunStatus.FAILED:
+            raise typer.BadParameter(f"Run is not failed: {run_id}")
+        new_run = await container.process_document.start(existing.document_id)
+        if queue:
+            await SQLiteRunQueue(container.database).enqueue(new_run.id)
+            console.print(f"Queued retry {new_run.id}")
+            return
+        finished = await container.process_document.execute_existing(new_run.id)
+        console.print(f"Retry {finished.id}: {finished.status.value}")
+
+    asyncio.run(run())
+
+
+@app.command("queue")
+def inspect_queue(
+    limit: Annotated[int, typer.Option(help="Maximum queue rows.")] = 100,
+) -> None:
+    """List durable queue items."""
+
+    async def run() -> None:
+        container = await build_container()
+        rows = await SQLiteRunQueue(container.database).list(limit=limit)
+        table = Table("Run", "Status", "Attempts", "Available", "Locked By", "Error")
+        for item in rows:
+            table.add_row(
+                str(item.run_id),
+                item.status.value,
+                str(item.attempts),
+                item.available_at.isoformat(),
+                item.locked_by or "",
+                item.last_error or "",
+            )
+        console.print(table)
 
     asyncio.run(run())
 

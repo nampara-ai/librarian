@@ -55,6 +55,8 @@ class RunQueue(Protocol):
         max_attempts: int,
     ) -> None: ...
 
+    async def list(self, *, limit: int = 100) -> tuple[QueuedRun, ...]: ...
+
 
 @dataclass(slots=True)
 class InProcessJobRunner:

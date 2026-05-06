@@ -1,4 +1,5 @@
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -44,3 +45,33 @@ async def test_composite_extractor_rejects_unknown_extension(tmp_path: Path) -> 
 
     with pytest.raises(ValueError, match="Unsupported file extension"):
         await CompositeExtractor().extract(path)
+
+
+@pytest.mark.asyncio
+async def test_docx_extractor_reads_fixture(tmp_path: Path) -> None:
+    from docx import Document
+
+    path = tmp_path / "fixture.docx"
+    document = Document()
+    document.add_paragraph("DOCX fixture text")
+    document.save(str(path))
+
+    text = await CompositeExtractor().extract(path)
+
+    assert "DOCX fixture text" in text
+
+
+@pytest.mark.skipif(shutil.which("tesseract") is None, reason="tesseract not installed")
+@pytest.mark.asyncio
+async def test_image_ocr_extractor_reads_fixture(tmp_path: Path) -> None:
+    from PIL import Image, ImageDraw
+
+    path = tmp_path / "fixture.png"
+    image = Image.new("RGB", (400, 120), "white")
+    draw = ImageDraw.Draw(image)
+    draw.text((20, 40), "OCR fixture text", fill="black")
+    image.save(path)
+
+    text = await CompositeExtractor().extract(path)
+
+    assert "OCR" in text

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from dataclasses import dataclass
 from enum import StrEnum
@@ -23,6 +24,16 @@ class DirectoryOutputMode(StrEnum):
     NEW_DIRECTORY = "new-directory"
     ORIGINAL = "original"
     SUBDIRECTORY = "subdirectory"
+
+
+class ConversionFailureType(StrEnum):
+    """Classified conversion failures."""
+
+    DEPENDENCY_MISSING = "dependency_missing"
+    EMPTY_OUTPUT = "empty_output"
+    OUTPUT_EXISTS = "output_exists"
+    UNSUPPORTED = "unsupported"
+    EXTRACTION_FAILED = "extraction_failed"
 
 
 class TextConverter(Protocol):
@@ -51,6 +62,7 @@ class BatchConversionItem:
     output_path: Path | None
     status: str
     error: str | None = None
+    error_type: ConversionFailureType | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +83,26 @@ class BatchConversionResult:
     def failed(self) -> int:
         return sum(1 for item in self.items if item.status == "failed")
 
+    def to_json_dict(self) -> dict[str, object]:
+        """Return a JSON-serializable result payload."""
+        return {
+            "summary": {
+                "converted": self.converted,
+                "skipped": self.skipped,
+                "failed": self.failed,
+            },
+            "items": [
+                {
+                    "source_path": str(item.source_path),
+                    "output_path": str(item.output_path) if item.output_path else None,
+                    "status": item.status,
+                    "error": item.error,
+                    "error_type": item.error_type.value if item.error_type else None,
+                }
+                for item in self.items
+            ],
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class DocumentConverter:
@@ -85,6 +117,7 @@ class DocumentConverter:
         *,
         format: ConversionFormat,
         overwrite: bool = False,
+        write_sidecar: bool = False,
     ) -> ConvertedDocument:
         """Convert one file and write the rendered output."""
         output_exists = await asyncio.to_thread(output_path.exists)
@@ -94,6 +127,13 @@ class DocumentConverter:
         rendered = render_conversion(text, source_path=source_path, format=format)
         await asyncio.to_thread(output_path.parent.mkdir, parents=True, exist_ok=True)
         await asyncio.to_thread(output_path.write_text, rendered, encoding="utf-8")
+        if write_sidecar:
+            await write_conversion_sidecar(
+                source_path=source_path,
+                output_path=output_path,
+                format=format,
+                text=rendered,
+            )
         return ConvertedDocument(
             source_path=source_path,
             output_path=output_path,
@@ -111,6 +151,7 @@ class DocumentConverter:
         subdirectory_name: str = "librarian-converted",
         recursive: bool = False,
         overwrite: bool = False,
+        write_sidecar: bool = False,
     ) -> BatchConversionResult:
         """Convert supported files in a directory."""
         files = discover_supported_files(
@@ -128,12 +169,15 @@ class DocumentConverter:
                 output_dir=output_dir,
                 subdirectory_name=subdirectory_name,
             )
+            if not overwrite:
+                destination = await unique_output_path(destination)
             try:
                 await self.convert_file(
                     source_path,
                     destination,
                     format=format,
                     overwrite=overwrite,
+                    write_sidecar=write_sidecar,
                 )
             except Exception as exc:
                 items.append(
@@ -142,6 +186,7 @@ class DocumentConverter:
                         output_path=destination,
                         status="failed",
                         error=str(exc),
+                        error_type=classify_conversion_error(exc),
                     )
                 )
                 continue
@@ -203,6 +248,53 @@ def render_conversion(text: str, *, source_path: Path, format: ConversionFormat)
         return normalized + "\n"
     title = source_path.stem.replace("_", " ").replace("-", " ").strip() or source_path.name
     return f"# {title}\n\n{normalized}\n"
+
+
+async def unique_output_path(path: Path) -> Path:
+    """Return a non-colliding output path by appending a numeric suffix."""
+    exists = await asyncio.to_thread(path.exists)
+    if not exists:
+        return path
+    for index in range(2, 10_000):
+        candidate = path.with_name(f"{path.stem}-{index}{path.suffix}")
+        if not await asyncio.to_thread(candidate.exists):
+            return candidate
+    raise FileExistsError(f"Could not find available output path for {path}")
+
+
+async def write_conversion_sidecar(
+    *,
+    source_path: Path,
+    output_path: Path,
+    format: ConversionFormat,
+    text: str,
+) -> None:
+    """Write sidecar conversion metadata."""
+    payload = json.dumps(
+        {
+            "source_path": str(source_path),
+            "output_path": str(output_path),
+            "format": format.value,
+            "output_chars": len(text),
+        },
+        indent=2,
+    )
+    sidecar_path = output_path.with_suffix(f"{output_path.suffix}.json")
+    await asyncio.to_thread(sidecar_path.write_text, payload, encoding="utf-8")
+
+
+def classify_conversion_error(exc: Exception) -> ConversionFailureType:
+    """Classify conversion failures for reports and manifests."""
+    message = str(exc).lower()
+    if isinstance(exc, FileExistsError):
+        return ConversionFailureType.OUTPUT_EXISTS
+    if isinstance(exc, ValueError) and "unsupported file extension" in message:
+        return ConversionFailureType.UNSUPPORTED
+    if "requires installing" in message or "executable on path" in message:
+        return ConversionFailureType.DEPENDENCY_MISSING
+    if "no extractable" in message or "no ocr text" in message:
+        return ConversionFailureType.EMPTY_OUTPUT
+    return ConversionFailureType.EXTRACTION_FAILED
 
 
 def markdown_to_text(markdown: str) -> str:

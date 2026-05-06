@@ -98,6 +98,10 @@ class SQLiteRepository:
         """Get a processing run by ID."""
         return await asyncio.to_thread(self._get_run_sync, run_id)
 
+    async def list_runs(self, *, limit: int = 100, offset: int = 0) -> Sequence[ProcessingRun]:
+        """List processing runs."""
+        return await asyncio.to_thread(self._list_runs_sync, limit, offset)
+
     async def list(self) -> Sequence[Document]:
         """List documents."""
         return await asyncio.to_thread(self._list_documents_sync)
@@ -107,6 +111,10 @@ class SQLiteRepository:
     ) -> None:
         """Update document status."""
         await asyncio.to_thread(self._update_document_status_sync, document_id, status)
+
+    async def delete_document(self, document_id: DocumentId) -> None:
+        """Delete a document and dependent records."""
+        await asyncio.to_thread(self._delete_document_sync, document_id)
 
     async def update_status(
         self,
@@ -294,6 +302,14 @@ class SQLiteRepository:
                 (status.value, utc_now().isoformat(), str(document_id)),
             )
 
+    def _delete_document_sync(self, document_id: DocumentId) -> None:
+        with self.database.connect() as connection:
+            connection.execute(
+                "DELETE FROM cleaned_outputs_fts WHERE document_id = ?",
+                (str(document_id),),
+            )
+            connection.execute("DELETE FROM documents WHERE id = ?", (str(document_id),))
+
     def _save_run_sync(self, run: ProcessingRun) -> None:
         with self.database.connect() as connection:
             connection.execute(
@@ -330,6 +346,19 @@ class SQLiteRepository:
         with self.database.connect() as connection:
             row = connection.execute("SELECT * FROM runs WHERE id = ?", (str(run_id),)).fetchone()
         return _run_from_row(row) if row else None
+
+    def _list_runs_sync(self, limit: int, offset: int) -> list[ProcessingRun]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM runs
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            ).fetchall()
+        return [_run_from_row(row) for row in rows]
 
     def _update_run_status_sync(
         self,
@@ -674,6 +703,10 @@ class SQLiteRunQueue:
         """Mark a queued run failed or schedule a retry."""
         await asyncio.to_thread(self._fail_sync, run_id, error, max_attempts)
 
+    async def list(self, *, limit: int = 100) -> tuple[QueuedRun, ...]:
+        """List queued run state."""
+        return await asyncio.to_thread(self._list_sync, limit)
+
     def _enqueue_sync(self, run_id: RunId) -> None:
         now = utc_now().isoformat()
         with self.database.connect() as connection:
@@ -784,6 +817,19 @@ class SQLiteRunQueue:
                     str(run_id),
                 ),
             )
+
+    def _list_sync(self, limit: int) -> tuple[QueuedRun, ...]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM run_queue
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return tuple(_queued_run_from_row(row) for row in rows)
 
 
 def _document_from_row(row: sqlite3.Row) -> Document:

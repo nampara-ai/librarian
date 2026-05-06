@@ -19,6 +19,7 @@ librarian convert-dir ./input --format md
 librarian convert-dir ./input --format txt --output-mode original --overwrite
 librarian convert-dir ./input --recursive --output-mode new-directory --output-dir ./converted
 librarian convert-dir ./input --output-mode subdirectory --subdirectory-name librarian-output
+librarian convert-dir ./input --format md --sidecar-metadata
 ```
 
 Output modes:
@@ -28,6 +29,8 @@ Output modes:
 - `new-directory`: preserve relative paths under a separate output directory.
 
 Batch conversion continues after individual file failures and prints a per-file summary.
+When two source files would produce the same output path, Librarian appends a numeric suffix unless
+`--overwrite` is set.
 
 ## Import Workflow
 
@@ -38,6 +41,7 @@ librarian import ./input --format md
 librarian import ./input --recursive --format md --process
 librarian import ./input --format txt --queue
 librarian import ./input --output-mode new-directory --output-dir ./converted --process
+librarian import ./input --process --manifest import-manifest.json --resume --report report.json
 ```
 
 Processing modes:
@@ -47,6 +51,9 @@ Processing modes:
 - `--queue`: create processing runs and enqueue them for `librarian worker`.
 
 The command prints converted path, document ID, run ID, and any per-file error.
+
+Import manifests and reports are JSON. Manifests are updated after each file so interrupted imports
+can be resumed with `--resume`.
 
 ## Format Coverage
 
@@ -67,6 +74,7 @@ OCR support:
 - Install system tools:
   - macOS: `brew install tesseract poppler`
   - Ubuntu/Debian: `sudo apt-get install tesseract-ocr poppler-utils`
+- Configure language with `LIBRARIAN_OCR_LANGUAGE`, for example `eng` or `eng+spa`.
 
 Scanned PDFs first try normal PDF text extraction. If no embedded text is found, Librarian falls
 back to PDF-to-image conversion plus Tesseract OCR.

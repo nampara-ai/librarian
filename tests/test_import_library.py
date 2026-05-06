@@ -8,7 +8,11 @@ from librarian.application.convert_document import (
     DocumentConverter,
 )
 from librarian.application.factory import build_container
-from librarian.application.import_library import ImportLibrary, ImportProcessingMode
+from librarian.application.import_library import (
+    ImportLibrary,
+    ImportProcessingMode,
+    write_import_report,
+)
 from librarian.config import Settings
 from librarian.domain.models import RunStatus
 from librarian.ingest.extractors import CompositeExtractor
@@ -105,3 +109,43 @@ async def test_import_directory_queues_documents(tmp_path: Path) -> None:
     claimed = await SQLiteRunQueue(container.database).claim(worker_id="test", lease_seconds=60)
     assert claimed is not None
     assert claimed.run_id == result.items[0].run_id
+
+
+@pytest.mark.asyncio
+async def test_import_directory_writes_manifest_and_resumes(tmp_path: Path) -> None:
+    source_dir = tmp_path / "input"
+    source_dir.mkdir()
+    (source_dir / "a.txt").write_text("Horse training transcript", encoding="utf-8")
+    manifest = tmp_path / "manifest.json"
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    container = await build_container(settings)
+    importer = ImportLibrary(
+        converter=DocumentConverter(CompositeExtractor()),
+        ingest=container.ingest_document,
+        process=container.process_document,
+    )
+
+    first = await importer.import_directory(
+        source_dir,
+        format=ConversionFormat.TEXT,
+        output_mode=DirectoryOutputMode.SUBDIRECTORY,
+        processing_mode=ImportProcessingMode.NONE,
+        manifest_path=manifest,
+    )
+    second = await importer.import_directory(
+        source_dir,
+        format=ConversionFormat.TEXT,
+        output_mode=DirectoryOutputMode.SUBDIRECTORY,
+        processing_mode=ImportProcessingMode.NONE,
+        manifest_path=manifest,
+        resume=True,
+    )
+    report = tmp_path / "report.json"
+    await write_import_report(report, second)
+
+    assert first.ingested == 1
+    assert second.skipped == 1
+    assert '"skipped": 1' in report.read_text(encoding="utf-8")

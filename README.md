@@ -95,10 +95,14 @@ Use the resulting JSON to compare `LIBRARIAN_CHUNK_TARGET_CHARS`,
 
 ## Architecture
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/PRD.md](docs/PRD.md),
+Start with [docs/QUICKSTART.md](docs/QUICKSTART.md). See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/PRD.md](docs/PRD.md),
 [docs/MIGRATIONS.md](docs/MIGRATIONS.md), [docs/CONVERSION.md](docs/CONVERSION.md),
-[docs/EVALUATION.md](docs/EVALUATION.md), [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), and
-[docs/RELEASE.md](docs/RELEASE.md).
+[docs/EVALUATION.md](docs/EVALUATION.md), [docs/PERFORMANCE.md](docs/PERFORMANCE.md),
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), [docs/ROADMAP.md](docs/ROADMAP.md), and
+[docs/API.md](docs/API.md), [docs/RELEASE.md](docs/RELEASE.md), and
+[docs/SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md). Package naming stability is tracked in
+[docs/NAMING.md](docs/NAMING.md).
 
 ## Docker
 

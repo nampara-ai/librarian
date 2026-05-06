@@ -36,7 +36,7 @@ async def build_container(settings: Settings | None = None) -> ApplicationContai
     database = SQLiteDatabase(resolved_settings.database_path)
     await database.initialize()
     repository = SQLiteRepository(database)
-    extractor = CompositeExtractor()
+    extractor = CompositeExtractor(ocr_language=resolved_settings.ocr_language)
     provider = _build_provider(resolved_settings)
     cleaner = CleanChunks(
         provider=provider,

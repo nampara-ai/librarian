@@ -53,6 +53,9 @@ class PdfExtractor:
 
     supported_extensions = frozenset({".pdf"})
 
+    def __init__(self, *, ocr_language: str = "eng") -> None:
+        self.ocr_language = ocr_language
+
     async def extract(self, path: Path) -> str:
         return await asyncio.to_thread(self._extract_sync, path)
 
@@ -71,7 +74,7 @@ class PdfExtractor:
                     parts.append(page_text)
 
         if not parts:
-            return _ocr_pdf(path)
+            return _ocr_pdf(path, language=self.ocr_language)
         return "\n\n".join(parts)
 
 
@@ -80,8 +83,11 @@ class ImageOcrExtractor:
 
     supported_extensions = IMAGE_EXTENSIONS
 
+    def __init__(self, *, language: str = "eng") -> None:
+        self.language = language
+
     async def extract(self, path: Path) -> str:
-        return await asyncio.to_thread(_ocr_image, path)
+        return await asyncio.to_thread(_ocr_image, path, language=self.language)
 
 
 class MarkItDownExtractor:
@@ -127,12 +133,12 @@ class MarkItDownExtractor:
 class CompositeExtractor:
     """Route extraction by file extension."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, ocr_language: str = "eng") -> None:
         extractors = [
             TextFamilyExtractor(),
             DocxExtractor(),
-            PdfExtractor(),
-            ImageOcrExtractor(),
+            PdfExtractor(ocr_language=ocr_language),
+            ImageOcrExtractor(language=ocr_language),
             MarkItDownExtractor(),
         ]
         self._extractors = {
@@ -150,12 +156,12 @@ class CompositeExtractor:
         return await extractor.extract(path)
 
 
-def _ocr_image(path: Path) -> str:
+def _ocr_image(path: Path, *, language: str = "eng") -> str:
     tesseract_path = shutil.which("tesseract")
     if tesseract_path is None:
         raise RuntimeError("OCR requires the 'tesseract' executable on PATH")
     completed = subprocess.run(  # noqa: S603
-        [tesseract_path, str(path), "stdout", "-l", "eng"],
+        [tesseract_path, str(path), "stdout", "-l", language],
         check=True,
         capture_output=True,
         text=True,
@@ -166,7 +172,7 @@ def _ocr_image(path: Path) -> str:
     return text
 
 
-def _ocr_pdf(path: Path) -> str:
+def _ocr_pdf(path: Path, *, language: str = "eng") -> str:
     if shutil.which("tesseract") is None:
         raise RuntimeError("Scanned PDF OCR requires the 'tesseract' executable on PATH")
     try:
@@ -185,7 +191,7 @@ def _ocr_pdf(path: Path) -> str:
                 paths_only=True,
             ),
         )
-        parts = [_ocr_image(image_path) for image_path in image_paths]
+        parts = [_ocr_image(image_path, language=language) for image_path in image_paths]
 
     text = "\n\n".join(part for part in parts if part.strip())
     if not text:

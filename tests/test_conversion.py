@@ -6,6 +6,7 @@ from librarian.application.convert_document import (
     ConversionFormat,
     DirectoryOutputMode,
     DocumentConverter,
+    classify_conversion_error,
     conversion_output_path,
     markdown_to_text,
 )
@@ -50,6 +51,29 @@ async def test_convert_directory_to_subdirectory(tmp_path: Path) -> None:
     assert (source_dir / "converted" / "b.txt").read_text(encoding="utf-8") == "Bravo\n"
 
 
+@pytest.mark.asyncio
+async def test_convert_directory_avoids_output_collisions_and_writes_sidecars(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "input"
+    source_dir.mkdir()
+    (source_dir / "same.txt").write_text("Alpha", encoding="utf-8")
+    (source_dir / "same.md").write_text("Bravo", encoding="utf-8")
+
+    result = await DocumentConverter(CompositeExtractor()).convert_directory(
+        source_dir,
+        format=ConversionFormat.MARKDOWN,
+        output_mode=DirectoryOutputMode.SUBDIRECTORY,
+        subdirectory_name="converted",
+        write_sidecar=True,
+    )
+
+    outputs = sorted(item.output_path for item in result.items if item.output_path is not None)
+    assert result.converted == 2
+    assert outputs[0] != outputs[1]
+    assert outputs[0].with_suffix(".md.json").exists()
+
+
 def test_conversion_output_path_new_directory(tmp_path: Path) -> None:
     source_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
@@ -71,3 +95,7 @@ def test_markdown_to_text_removes_common_markup() -> None:
     assert markdown_to_text("# Title\n\n- **Important** [link](https://example.com)") == (
         "Title\nImportant link"
     )
+
+
+def test_classify_conversion_error() -> None:
+    assert classify_conversion_error(FileExistsError("exists")).value == "output_exists"

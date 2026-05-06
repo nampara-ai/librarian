@@ -37,6 +37,7 @@ class Settings(BaseSettings):
 
     chunk_target_chars: int = Field(default=12_000)
     chunk_overlap_chars: int = Field(default=800)
+    ocr_language: str = Field(default="eng")
 
     api_host: str = Field(default="127.0.0.1")
     api_port: int = Field(default=8080)

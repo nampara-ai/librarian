@@ -10,18 +10,25 @@ import uuid
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
+from librarian.application.convert_document import (
+    ConversionFormat,
+    DirectoryOutputMode,
+    DocumentConverter,
+)
 from librarian.application.export_document import ExportedDocument
 from librarian.application.factory import build_container
+from librarian.application.import_library import ImportLibrary, ImportProcessingMode
 from librarian.application.jobs import InProcessJobRunner
 from librarian.config import Settings
 from librarian.domain.ids import DocumentId, RunId
-from librarian.domain.models import Document, ProcessingRun, RunStatus
+from librarian.domain.models import Document, ProcessingRun, RunStage, RunStatus
+from librarian.ingest.extractors import CompositeExtractor
 from librarian.observability import MetricsRecorder, configure_logging
 from librarian.storage.sqlite import SQLiteRunQueue
 from librarian.taxonomy.dewey import DeweyTaxonomy
@@ -54,8 +61,33 @@ class DocumentsResponse(BaseModel):
     offset: int
 
 
+class ErrorResponse(BaseModel):
+    detail: str
+
+
 class RunRequest(BaseModel):
     document_id: str
+
+
+class ImportRequest(BaseModel):
+    source_dir: str
+    format: str = "md"
+    output_mode: str = "subdirectory"
+    output_dir: str | None = None
+    subdirectory_name: str = "librarian-converted"
+    recursive: bool = False
+    overwrite: bool = False
+    processing_mode: str = "queue"
+
+
+class ImportResponse(BaseModel):
+    converted: int
+    ingested: int
+    processed: int
+    queued: int
+    skipped: int
+    failed: int
+    items: list[dict[str, object]]
 
 
 class RunResponse(BaseModel):
@@ -67,6 +99,12 @@ class RunResponse(BaseModel):
     completed_chunks: int
     failed_chunks: int
     error: str | None = None
+
+
+class RunsResponse(BaseModel):
+    runs: list[RunResponse]
+    limit: int
+    offset: int
 
 
 class ContentResponse(BaseModel):
@@ -194,6 +232,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Document not found")
         return _document_response(document)
 
+    @app.delete("/documents/{document_id}")
+    async def delete_document(document_id: str) -> dict[str, str]:
+        container = await build_container(settings)
+        document = await container.repository.get_document(DocumentId(document_id))
+        if document is None:
+            raise HTTPException(status_code=404, detail="Document not found")
+        await container.repository.delete_document(DocumentId(document_id))
+        return {"status": "deleted", "document_id": document_id}
+
+    @app.post("/documents/{document_id}/reprocess", response_model=RunResponse)
+    async def reprocess_document(document_id: str, http_request: Request) -> RunResponse:
+        container = await build_container(settings)
+        document = await container.repository.get_document(DocumentId(document_id))
+        if document is None:
+            raise HTTPException(status_code=404, detail="Document not found")
+        run = await container.process_document.start(DocumentId(document_id))
+        await _submit_run(settings, http_request, run.id)
+        return _run_response(run)
+
     @app.get("/documents/{document_id}/content", response_model=ContentResponse)
     async def get_document_content(document_id: str) -> ContentResponse:
         container = await build_container(settings)
@@ -229,6 +286,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await _submit_run(settings, http_request, run.id)
         return _run_response(run)
 
+    @app.get("/runs", response_model=RunsResponse)
+    async def list_runs(
+        limit: Annotated[int, Query(ge=1, le=500)] = 100,
+        offset: Annotated[int, Query(ge=0)] = 0,
+    ) -> RunsResponse:
+        container = await build_container(settings)
+        runs = await container.repository.list_runs(limit=limit, offset=offset)
+        return RunsResponse(
+            runs=[_run_response(run) for run in runs],
+            limit=limit,
+            offset=offset,
+        )
+
     @app.get("/runs/{run_id}", response_model=RunResponse)
     async def get_run(run_id: str) -> RunResponse:
         container = await build_container(settings)
@@ -236,6 +306,71 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
         return _run_response(run)
+
+    @app.post("/runs/{run_id}/cancel", response_model=RunResponse)
+    async def cancel_run(run_id: str) -> RunResponse:
+        container = await build_container(settings)
+        run = await container.repository.get_run(RunId(run_id))
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        await container.repository.update_status(
+            run.id,
+            status=RunStatus.CANCELED,
+            stage=RunStage.COMPLETE,
+            error="canceled by user",
+        )
+        latest = await container.repository.get_run(run.id)
+        if latest is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        return _run_response(latest)
+
+    @app.post("/runs/{run_id}/retry", response_model=RunResponse)
+    async def retry_run(run_id: str, http_request: Request) -> RunResponse:
+        container = await build_container(settings)
+        run = await container.repository.get_run(RunId(run_id))
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        if run.status != RunStatus.FAILED:
+            raise HTTPException(status_code=400, detail="Run is not failed")
+        retry = await container.process_document.start(run.document_id)
+        await _submit_run(settings, http_request, retry.id)
+        return _run_response(retry)
+
+    @app.post("/imports", response_model=ImportResponse)
+    async def import_documents(request: ImportRequest) -> ImportResponse:
+        container = await build_container(settings)
+        try:
+            conversion_format = ConversionFormat(request.format)
+            output_mode = DirectoryOutputMode(request.output_mode)
+            processing_mode = ImportProcessingMode(request.processing_mode)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        importer = ImportLibrary(
+            converter=DocumentConverter(CompositeExtractor(ocr_language=settings.ocr_language)),
+            ingest=container.ingest_document,
+            process=container.process_document,
+            queue_factory=lambda: SQLiteRunQueue(container.database),
+        )
+        result = await importer.import_directory(
+            Path(request.source_dir),
+            format=conversion_format,
+            output_mode=output_mode,
+            processing_mode=processing_mode,
+            output_dir=Path(request.output_dir) if request.output_dir else None,
+            subdirectory_name=request.subdirectory_name,
+            recursive=request.recursive,
+            overwrite=request.overwrite,
+        )
+        items = cast(list[dict[str, object]], result.to_json_dict()["items"])
+        return ImportResponse(
+            converted=result.converted,
+            ingested=result.ingested,
+            processed=result.processed,
+            queued=result.queued,
+            skipped=result.skipped,
+            failed=result.failed,
+            items=items,
+        )
 
     @app.get("/runs/{run_id}/events")
     async def get_run_events(run_id: str) -> dict[str, list[str]]:
