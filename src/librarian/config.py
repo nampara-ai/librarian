@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal, Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,36 +25,48 @@ class Settings(BaseSettings):
     llm_model: str = Field(default="mock-cleaner")
     llm_base_url: str | None = Field(default=None)
     llm_api_key_env: str = Field(default="OPENAI_API_KEY")
-    llm_timeout_seconds: float = Field(default=120.0)
-    llm_max_concurrency: int = Field(default=8)
-    llm_max_retries: int = Field(default=5)
-    llm_retry_base_delay_seconds: float = Field(default=0.5)
-    llm_retry_max_delay_seconds: float = Field(default=10.0)
+    llm_timeout_seconds: float = Field(default=120.0, gt=0)
+    llm_max_concurrency: int = Field(default=8, gt=0)
+    llm_max_retries: int = Field(default=5, ge=0)
+    llm_retry_base_delay_seconds: float = Field(default=0.5, ge=0)
+    llm_retry_max_delay_seconds: float = Field(default=10.0, ge=0)
 
     cleaning_prompt_version: str = Field(default="cmos_v1")
     classification_prompt_version: str = Field(default="dewey_v1")
     cleaning_mode: str = Field(default="standard")
     coherence_mode: str = Field(default="balanced")
 
-    chunk_target_chars: int = Field(default=12_000)
-    chunk_overlap_chars: int = Field(default=800)
+    chunk_target_chars: int = Field(default=12_000, gt=0)
+    chunk_overlap_chars: int = Field(default=800, ge=0)
     ocr_language: str = Field(default="eng")
-    ocr_timeout_seconds: int = Field(default=120)
-    ocr_pdf_dpi: int = Field(default=200)
-    ocr_pdf_max_pages: int = Field(default=100)
-    universal_max_input_bytes: int = Field(default=50 * 1024 * 1024)
-    universal_timeout_seconds: int = Field(default=120)
+    ocr_timeout_seconds: int = Field(default=120, gt=0)
+    ocr_pdf_dpi: int = Field(default=200, gt=0)
+    ocr_pdf_max_pages: int = Field(default=100, gt=0)
+    universal_max_input_bytes: int = Field(default=50 * 1024 * 1024, gt=0)
+    universal_timeout_seconds: int = Field(default=120, gt=0)
 
     api_host: str = Field(default="127.0.0.1")
-    api_port: int = Field(default=8080)
+    api_port: int = Field(default=8080, ge=1, le=65535)
     api_key: str | None = Field(default=None)
     api_import_root: Path | None = Field(default=None)
-    api_max_upload_bytes: int = Field(default=100 * 1024 * 1024)
+    api_max_upload_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
     log_level: str = Field(default="INFO")
     log_format: str = Field(default="json")
     metrics_enabled: bool = Field(default=True)
-    job_backend: str = Field(default="in-process")
-    job_max_concurrency: int = Field(default=2)
+    job_backend: Literal["in-process", "sqlite"] = Field(default="in-process")
+    job_max_concurrency: int = Field(default=2, gt=0)
     job_worker_id: str = Field(default="worker-local")
-    job_lease_seconds: int = Field(default=300)
-    job_max_attempts: int = Field(default=3)
+    job_lease_seconds: int = Field(default=300, gt=0)
+    job_max_attempts: int = Field(default=3, gt=0)
+
+    @model_validator(mode="after")
+    def validate_cross_field_settings(self) -> Self:
+        """Validate settings that depend on each other."""
+        if self.chunk_overlap_chars >= self.chunk_target_chars:
+            raise ValueError("chunk_overlap_chars must be smaller than chunk_target_chars")
+        if self.llm_retry_max_delay_seconds < self.llm_retry_base_delay_seconds:
+            raise ValueError(
+                "llm_retry_max_delay_seconds must be greater than or equal to "
+                "llm_retry_base_delay_seconds"
+            )
+        return self

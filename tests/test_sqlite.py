@@ -55,6 +55,44 @@ async def test_sqlite_run_queue_claims_and_completes_run(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
+async def test_sqlite_run_queue_reclaims_expired_running_lease(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Horse transcript with notes about queue leases.", encoding="utf-8")
+    container = await build_container(settings)
+    ingested = await container.ingest_document.execute(source)
+    run = await container.process_document.start(ingested.document.id)
+    queue = SQLiteRunQueue(container.database)
+
+    await queue.enqueue(run.id)
+    first = await queue.claim(worker_id="first-worker", lease_seconds=60)
+    assert first is not None
+    assert await queue.claim(worker_id="second-worker", lease_seconds=60) is None
+    with container.database.connect() as connection:
+        connection.execute(
+            """
+            UPDATE run_queue
+            SET locked_at = datetime('now', '-120 seconds')
+            WHERE run_id = ?
+            """,
+            (str(run.id),),
+        )
+
+    second = await queue.claim(worker_id="second-worker", lease_seconds=60)
+
+    assert second is not None
+    assert second.run_id == run.id
+    assert second.status == QueueStatus.RUNNING
+    assert second.attempts == 2
+    assert second.locked_by == "second-worker"
+
+
+@pytest.mark.asyncio
 async def test_queue_worker_processes_one_run(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",

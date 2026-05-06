@@ -793,7 +793,7 @@ class SQLiteRunQueue:
                 """
                 SELECT *
                 FROM run_queue
-                WHERE status IN (?, ?)
+                WHERE status IN (?, ?, ?)
                   AND available_at <= ?
                   AND (locked_at IS NULL OR locked_at <= ?)
                 ORDER BY updated_at ASC
@@ -802,6 +802,7 @@ class SQLiteRunQueue:
                 (
                     QueueStatus.QUEUED.value,
                     QueueStatus.RETRY.value,
+                    QueueStatus.RUNNING.value,
                     now.isoformat(),
                     lease_cutoff.isoformat(),
                 ),
