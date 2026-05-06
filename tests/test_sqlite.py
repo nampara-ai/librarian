@@ -5,6 +5,7 @@ import pytest
 from librarian.application.factory import build_container
 from librarian.application.jobs import QueueStatus, QueueWorker
 from librarian.config import Settings
+from librarian.domain.ids import RunId
 from librarian.domain.models import RunStatus
 from librarian.storage.sqlite import SQLiteDatabase, SQLiteRunQueue
 
@@ -20,7 +21,11 @@ async def test_sqlite_initializes_schema(tmp_path: Path) -> None:
     with database.connect() as connection:
         rows = connection.execute("SELECT version FROM schema_migrations").fetchall()
 
-    assert [row["version"] for row in rows] == ["0001_initial.sql", "0002_run_queue.sql"]
+    assert [row["version"] for row in rows] == [
+        "0001_initial.sql",
+        "0002_run_queue.sql",
+        "0003_document_scoped_chunks.sql",
+    ]
 
 
 @pytest.mark.asyncio
@@ -76,3 +81,33 @@ async def test_queue_worker_processes_one_run(tmp_path: Path) -> None:
     assert finished is not None
     assert finished.status == RunStatus.SUCCEEDED
     assert output is not None
+
+
+@pytest.mark.asyncio
+async def test_queue_worker_records_failure_without_stopping(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Horse transcript.", encoding="utf-8")
+    container = await build_container(settings)
+    ingested = await container.ingest_document.execute(source)
+    run = await container.process_document.start(ingested.document.id)
+    queue = SQLiteRunQueue(container.database)
+    await queue.enqueue(run.id)
+
+    async def fail_run(_: RunId) -> object:
+        raise RuntimeError("boom")
+
+    worker = QueueWorker(
+        queue=queue,
+        processor=fail_run,
+        worker_id="test-worker",
+    )
+
+    assert await worker.run_once()
+    rows = await queue.list()
+
+    assert rows[0].status == QueueStatus.RETRY
+    assert rows[0].last_error == "boom"

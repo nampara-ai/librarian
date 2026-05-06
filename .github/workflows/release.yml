@@ -50,8 +50,14 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
+          PRERELEASE_FLAG=""
+          case "$REF_NAME" in
+            *a*|*b*|*rc*) PRERELEASE_FLAG="--prerelease" ;;
+          esac
           gh release create "${{ github.ref_name }}" dist/* sbom.json \
             --repo "${{ github.repository }}" \
             --title "${{ github.ref_name }}" \
-            --notes-file CHANGELOG.md
+            --notes-file CHANGELOG.md \
+            $PRERELEASE_FLAG

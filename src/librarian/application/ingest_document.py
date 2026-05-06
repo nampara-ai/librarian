@@ -43,8 +43,8 @@ class IngestDocument:
                 sha256=digest,
             ),
         )
-        await self.documents.save_document(document)
         raw_text = await self.extractor.extract(source_path)
+        await self.documents.save_document(document)
         await self.content.put_text(raw_text_key(document_id), raw_text)
         return IngestedDocument(document=document, raw_text=raw_text)
 

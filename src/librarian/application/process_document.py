@@ -66,6 +66,8 @@ class ProcessDocument:
         existing = await self.runs.get_run(run_id)
         if existing is None:
             raise ValueError(f"Run not found: {run_id}")
+        if existing.status in {RunStatus.CANCELED, RunStatus.SUCCEEDED}:
+            raise ValueError(f"Run is terminal and cannot be executed: {run_id}")
         document_id = existing.document_id
         document = await self.documents.get_document(document_id)
         if document is None:

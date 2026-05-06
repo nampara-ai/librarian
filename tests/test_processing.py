@@ -4,6 +4,7 @@ import pytest
 
 from librarian.application.factory import build_container
 from librarian.config import Settings
+from librarian.domain.models import RunStage, RunStatus
 
 
 @pytest.mark.asyncio
@@ -40,3 +41,76 @@ async def test_ingest_process_and_search_round_trip(tmp_path: Path) -> None:
     events = await container.repository.list_events(second_run.id)
 
     assert any("1 cache hit(s)" in event for event in events)
+
+
+@pytest.mark.asyncio
+async def test_identical_chunks_from_different_documents_do_not_collide(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    container = await build_container(settings)
+    first = tmp_path / "a.txt"
+    second = tmp_path / "b.txt"
+    first.write_text("Shared horse transcript.", encoding="utf-8")
+    second.write_text("Shared horse transcript.\n", encoding="utf-8")
+
+    first_doc = await container.ingest_document.execute(first)
+    second_doc = await container.ingest_document.execute(second)
+    await container.process_document.execute(first_doc.document.id)
+    await container.process_document.execute(second_doc.document.id)
+
+    assert len(await container.repository.list_for_document(first_doc.document.id)) == 1
+    assert len(await container.repository.list_for_document(second_doc.document.id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_canceled_run_cannot_be_executed(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Horse transcript.", encoding="utf-8")
+    container = await build_container(settings)
+    ingested = await container.ingest_document.execute(source)
+    run = await container.process_document.start(ingested.document.id)
+    await container.repository.update_status(
+        run.id,
+        status=RunStatus.CANCELED,
+        stage=RunStage.COMPLETE,
+        error="canceled by user",
+    )
+
+    with pytest.raises(ValueError, match="terminal"):
+        await container.process_document.execute_existing(run.id)
+
+
+@pytest.mark.asyncio
+async def test_failed_extraction_does_not_persist_document(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    source = tmp_path / "notes.bin"
+    source.write_bytes(b"not supported")
+    container = await build_container(settings)
+
+    with pytest.raises(ValueError, match="Unsupported file extension"):
+        await container.ingest_document.execute(source)
+
+    assert list(await container.repository.list()) == []
+
+
+@pytest.mark.asyncio
+async def test_malformed_search_query_is_controlled_error(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    container = await build_container(settings)
+
+    with pytest.raises(ValueError, match="Invalid search query"):
+        await container.repository.search('"')

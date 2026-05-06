@@ -15,6 +15,10 @@ from librarian.application.convert_document import (
     ConversionFormat,
     DirectoryOutputMode,
     DocumentConverter,
+    classify_conversion_error,
+    conversion_output_path,
+    discover_supported_files,
+    unique_output_path,
 )
 from librarian.application.ingest_document import IngestDocument
 from librarian.application.jobs import RunQueue
@@ -50,7 +54,7 @@ class ImportResult:
 
     @property
     def converted(self) -> int:
-        return sum(1 for item in self.items if item.converted_path is not None)
+        return sum(1 for item in self.items if item.status in {"ingested", "processed", "queued"})
 
     @property
     def ingested(self) -> int:
@@ -123,22 +127,48 @@ class ImportLibrary:
     ) -> ImportResult:
         """Run the full import workflow for a directory."""
         manifest = await _load_manifest(manifest_path) if resume else {}
-        converted = await self.converter.convert_directory(
+        files = discover_supported_files(
             source_dir,
-            format=format,
-            output_mode=output_mode,
-            output_dir=output_dir,
-            subdirectory_name=subdirectory_name,
             recursive=recursive,
-            overwrite=overwrite,
-            write_sidecar=write_sidecar,
+            supported_extensions=self.converter.extractor.supported_extensions,
         )
         items: list[ImportItem] = []
-        for conversion in converted.items:
-            previous = manifest.get(str(conversion.source_path))
+        for source_path in files:
+            previous = manifest.get(str(source_path))
             if previous and _can_resume(previous, processing_mode):
                 item = _item_from_manifest(previous)
             else:
+                destination = conversion_output_path(
+                    source_path,
+                    source_dir=source_dir,
+                    format=format,
+                    output_mode=output_mode,
+                    output_dir=output_dir,
+                    subdirectory_name=subdirectory_name,
+                )
+                if not overwrite:
+                    destination = await unique_output_path(destination)
+                try:
+                    await self.converter.convert_file(
+                        source_path,
+                        destination,
+                        format=format,
+                        overwrite=overwrite,
+                        write_sidecar=write_sidecar,
+                    )
+                    conversion = BatchConversionItem(
+                        source_path=source_path,
+                        output_path=destination,
+                        status="converted",
+                    )
+                except Exception as exc:
+                    conversion = BatchConversionItem(
+                        source_path=source_path,
+                        output_path=destination,
+                        status="failed",
+                        error=str(exc),
+                        error_type=classify_conversion_error(exc),
+                    )
                 item = await self._ingest_converted(conversion, processing_mode)
             items.append(item)
             if manifest_path is not None:

@@ -136,7 +136,7 @@ class QueueWorker:
                 error=str(exc),
                 max_attempts=self.max_attempts,
             )
-            raise
+            return True
         await self.queue.complete(item.run_id)
         return True
 

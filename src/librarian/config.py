@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     api_host: str = Field(default="127.0.0.1")
     api_port: int = Field(default=8080)
     api_key: str | None = Field(default=None)
+    api_import_root: Path | None = Field(default=None)
     log_level: str = Field(default="INFO")
     log_format: str = Field(default="json")
     metrics_enabled: bool = Field(default=True)

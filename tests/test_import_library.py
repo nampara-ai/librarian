@@ -149,3 +149,7 @@ async def test_import_directory_writes_manifest_and_resumes(tmp_path: Path) -> N
     assert first.ingested == 1
     assert second.skipped == 1
     assert '"skipped": 1' in report.read_text(encoding="utf-8")
+    converted_files = sorted(
+        path.name for path in (source_dir / "librarian-converted").glob("*.txt")
+    )
+    assert converted_files == ["a.txt"]

@@ -619,10 +619,16 @@ def api(
 ) -> None:
     """Run the Librarian API service."""
     settings = Settings()
+    bind_host = host or settings.api_host
+    if bind_host in {"0.0.0.0", "::", "[::]"}:  # noqa: S104
+        if not settings.api_key:
+            raise typer.BadParameter("LIBRARIAN_API_KEY is required when binding publicly")
+        if settings.api_import_root is None:
+            raise typer.BadParameter("LIBRARIAN_API_IMPORT_ROOT is required when binding publicly")
     uvicorn.run(
         "librarian.api.app:create_app",
         factory=True,
-        host=host or settings.api_host,
+        host=bind_host,
         port=port or settings.api_port,
     )
 

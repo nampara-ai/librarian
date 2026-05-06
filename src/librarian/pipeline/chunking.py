@@ -91,7 +91,8 @@ def _make_chunk(
     end_char: int,
 ) -> Chunk:
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    chunk_id = ChunkId(f"chk_{digest[:16]}")
+    identity = hashlib.sha256(f"{document_id}:{ordinal}:{digest}".encode()).hexdigest()
+    chunk_id = ChunkId(f"chk_{identity[:16]}")
     return Chunk(
         id=chunk_id,
         document_id=document_id,

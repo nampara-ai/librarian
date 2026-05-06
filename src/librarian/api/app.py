@@ -124,6 +124,7 @@ class SearchResponse(BaseModel):
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Create the Librarian API app."""
     settings = settings or Settings()
+    _validate_api_security(settings)
     configure_logging(level=settings.log_level, log_format=settings.log_format)
     logger = logging.getLogger("librarian.api")
     taxonomy = DeweyTaxonomy()
@@ -352,11 +353,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             queue_factory=lambda: SQLiteRunQueue(container.database),
         )
         result = await importer.import_directory(
-            Path(request.source_dir),
+            _resolve_api_path(Path(request.source_dir), settings=settings),
             format=conversion_format,
             output_mode=output_mode,
             processing_mode=processing_mode,
-            output_dir=Path(request.output_dir) if request.output_dir else None,
+            output_dir=(
+                _resolve_api_path(Path(request.output_dir), settings=settings)
+                if request.output_dir
+                else None
+            ),
             subdirectory_name=request.subdirectory_name,
             recursive=request.recursive,
             overwrite=request.overwrite,
@@ -387,7 +392,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/search", response_model=SearchResponse)
     async def search(request: SearchRequest) -> SearchResponse:
         container = await build_container(settings)
-        results = await container.repository.search(request.query, limit=request.limit)
+        try:
+            results = await container.repository.search(request.query, limit=request.limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return SearchResponse(document_ids=[str(document_id) for document_id in results])
 
     @app.get("/config")
@@ -397,6 +405,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "llm_provider": settings.llm_provider,
             "llm_model": settings.llm_model,
             "job_backend": settings.job_backend,
+            "api_import_root": str(settings.api_import_root) if settings.api_import_root else None,
             "coherence_mode": settings.coherence_mode,
             "chunk_target_chars": settings.chunk_target_chars,
             "chunk_overlap_chars": settings.chunk_overlap_chars,
@@ -429,6 +438,32 @@ def _run_response(run: ProcessingRun) -> RunResponse:
 
 def _safe_filename(filename: str) -> str:
     return Path(filename).name.replace("/", "_").replace("\\", "_")
+
+
+def _is_public_bind(host: str) -> bool:
+    return host in {"0.0.0.0", "::", "[::]"}  # noqa: S104
+
+
+def _validate_api_security(settings: Settings) -> None:
+    if not _is_public_bind(settings.api_host):
+        return
+    if not settings.api_key:
+        raise RuntimeError("LIBRARIAN_API_KEY is required when binding the API publicly")
+    if settings.api_import_root is None:
+        raise RuntimeError("LIBRARIAN_API_IMPORT_ROOT is required when binding the API publicly")
+
+
+def _resolve_api_path(path: Path, *, settings: Settings) -> Path:
+    resolved = path.expanduser().resolve()
+    if settings.api_import_root is None:
+        return resolved
+    root = settings.api_import_root.expanduser().resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        detail = f"Path must be under import root: {root}"
+        raise HTTPException(status_code=400, detail=detail) from exc
+    return resolved
 
 
 async def _execute_run(settings: Settings, run_id: RunId) -> None:

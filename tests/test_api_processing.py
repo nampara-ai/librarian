@@ -1,6 +1,7 @@
 from pathlib import Path
 from time import sleep
 
+import pytest
 from fastapi.testclient import TestClient
 
 from librarian.api.app import create_app
@@ -65,6 +66,43 @@ def test_api_key_auth(tmp_path: Path) -> None:
         assert client.get("/health").status_code == 200
         assert client.get("/documents").status_code == 401
         assert client.get("/documents", headers={"x-api-key": "secret"}).status_code == 200
+
+
+def test_public_api_requires_key_and_import_root(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="API_KEY"):
+        create_app(
+            Settings(
+                api_host="0.0.0.0",  # noqa: S104
+                data_dir=tmp_path / ".librarian",
+                database_path=tmp_path / ".librarian" / "librarian.sqlite",
+            )
+        )
+    with pytest.raises(RuntimeError, match="API_IMPORT_ROOT"):
+        create_app(
+            Settings(
+                api_host="0.0.0.0",  # noqa: S104
+                api_key="secret",
+                data_dir=tmp_path / ".librarian",
+                database_path=tmp_path / ".librarian" / "librarian.sqlite",
+            )
+        )
+
+
+def test_api_import_rejects_paths_outside_import_root(tmp_path: Path) -> None:
+    import_root = tmp_path / "imports"
+    import_root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_import_root=import_root,
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.post("/imports", json={"source_dir": str(outside)})
+
+    assert response.status_code == 400
+    assert "import root" in response.json()["detail"]
 
 
 def test_api_document_pagination(tmp_path: Path) -> None:
@@ -159,6 +197,17 @@ def test_api_import_endpoint_and_run_controls(tmp_path: Path) -> None:
 
         deleted = client.delete(f"/documents/{document_id}")
         assert deleted.status_code == 200
+
+
+def test_api_malformed_search_query_returns_400(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.post("/search", json={"query": '"'})
+
+    assert response.status_code == 400
 
 
 def _wait_for_run(client: TestClient, run_id: str):

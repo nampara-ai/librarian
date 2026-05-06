@@ -12,7 +12,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends poppler-utils tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
-RUN adduser --disabled-password --gecos "" librarian
+RUN adduser --disabled-password --gecos "" librarian \
+    && mkdir -p /data/uploads /data/imports \
+    && chown -R librarian:librarian /data
 
 COPY pyproject.toml README.md ./
 COPY src ./src

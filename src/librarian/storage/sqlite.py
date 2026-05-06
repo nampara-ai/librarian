@@ -651,15 +651,18 @@ class SQLiteRepository:
 
     def _search_sync(self, query: str, limit: int) -> list[DocumentId]:
         with self.database.connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT document_id
-                FROM cleaned_outputs_fts
-                WHERE cleaned_outputs_fts MATCH ?
-                LIMIT ?
-                """,
-                (query, limit),
-            ).fetchall()
+            try:
+                rows = connection.execute(
+                    """
+                    SELECT document_id
+                    FROM cleaned_outputs_fts
+                    WHERE cleaned_outputs_fts MATCH ?
+                    LIMIT ?
+                    """,
+                    (query, limit),
+                ).fetchall()
+            except sqlite3.OperationalError as exc:
+                raise ValueError("Invalid search query") from exc
         return [DocumentId(str(row["document_id"])) for row in rows]
 
     def _emit_sync(self, run_id: RunId, stage: RunStage, message: str) -> None:
