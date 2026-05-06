@@ -15,6 +15,11 @@ from librarian.config import Settings
         {"chunk_overlap_chars": -1},
         {"chunk_target_chars": 100, "chunk_overlap_chars": 100},
         {"api_max_upload_bytes": 0},
+        {"max_source_bytes": 0},
+        {"text_max_input_bytes": 0},
+        {"docx_max_input_bytes": 0},
+        {"pdf_max_input_bytes": 0},
+        {"pdf_max_pages": 0},
     ],
 )
 def test_settings_reject_invalid_runtime_controls(kwargs: dict[str, Any]) -> None:

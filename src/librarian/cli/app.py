@@ -466,12 +466,15 @@ def worker(
 
 
 @app.command("list")
-def list_documents() -> None:
+def list_documents(
+    limit: Annotated[int, typer.Option(help="Maximum documents.", min=1, max=500)] = 100,
+    offset: Annotated[int, typer.Option(help="Documents to skip.", min=0)] = 0,
+) -> None:
     """List ingested documents."""
 
     async def run() -> None:
         container = await build_ingest_container()
-        documents = await container.repository.list(limit=500)
+        documents = await container.repository.list(limit=limit, offset=offset)
         table = Table("ID", "Status", "Filename", "Bytes")
         for document in documents:
             table.add_row(
@@ -694,6 +697,10 @@ def _build_extractor(settings: Settings) -> CompositeExtractor:
         ocr_timeout_seconds=settings.ocr_timeout_seconds,
         ocr_pdf_dpi=settings.ocr_pdf_dpi,
         ocr_pdf_max_pages=settings.ocr_pdf_max_pages,
+        text_max_input_bytes=settings.text_max_input_bytes,
+        docx_max_input_bytes=settings.docx_max_input_bytes,
+        pdf_max_input_bytes=settings.pdf_max_input_bytes,
+        pdf_max_pages=settings.pdf_max_pages,
         universal_max_input_bytes=settings.universal_max_input_bytes,
         universal_timeout_seconds=settings.universal_timeout_seconds,
     )

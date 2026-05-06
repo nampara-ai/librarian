@@ -26,6 +26,7 @@ from librarian.application.ingest_document import IngestDocument
 from librarian.application.jobs import RunQueue
 from librarian.application.process_document import ProcessDocument
 from librarian.domain.ids import DocumentId, RunId
+from librarian.domain.models import RunStage, RunStatus
 
 
 class ImportProcessingMode(StrEnum):
@@ -234,7 +235,23 @@ class ImportLibrary:
             run = await self.process.start(ingested.document.id)
             if self.queue_factory is None:
                 raise RuntimeError("Queue processing requires a queue adapter")
-            await self.queue_factory().enqueue(run.id)
+            try:
+                await self.queue_factory().enqueue(run.id)
+            except Exception as exc:
+                await self.process.runs.update_status(
+                    run.id,
+                    status=RunStatus.FAILED,
+                    stage=RunStage.COMPLETE,
+                    error=f"queue enqueue failed: {exc}",
+                )
+                return ImportItem(
+                    source_path=conversion.source_path,
+                    converted_path=conversion.output_path,
+                    document_id=ingested.document.id,
+                    run_id=run.id,
+                    status="failed",
+                    error=f"queue enqueue failed: {exc}",
+                )
             return ImportItem(
                 source_path=conversion.source_path,
                 converted_path=conversion.output_path,

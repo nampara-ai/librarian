@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -13,6 +14,7 @@ from librarian.application.import_library import (
     ImportProcessingMode,
     write_import_report,
 )
+from librarian.application.jobs import RunQueue
 from librarian.config import Settings
 from librarian.domain.models import RunStatus
 from librarian.ingest.extractors import CompositeExtractor
@@ -109,6 +111,45 @@ async def test_import_directory_queues_documents(tmp_path: Path) -> None:
     claimed = await SQLiteRunQueue(container.database).claim(worker_id="test", lease_seconds=60)
     assert claimed is not None
     assert claimed.run_id == result.items[0].run_id
+
+
+@pytest.mark.asyncio
+async def test_import_directory_marks_run_failed_when_enqueue_fails(tmp_path: Path) -> None:
+    source_dir = tmp_path / "input"
+    source_dir.mkdir()
+    (source_dir / "a.txt").write_text("Horse training transcript", encoding="utf-8")
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    container = await build_container(settings)
+
+    class FailingQueue:
+        async def enqueue(self, run_id: object) -> None:
+            del run_id
+            raise RuntimeError("queue down")
+
+    importer = ImportLibrary(
+        converter=DocumentConverter(CompositeExtractor()),
+        ingest=container.ingest_document,
+        process=container.process_document,
+        queue_factory=lambda: cast(RunQueue, FailingQueue()),
+    )
+
+    result = await importer.import_directory(
+        source_dir,
+        format=ConversionFormat.TEXT,
+        output_mode=DirectoryOutputMode.SUBDIRECTORY,
+        processing_mode=ImportProcessingMode.QUEUE,
+    )
+
+    assert result.failed == 1
+    assert result.items[0].document_id is not None
+    assert result.items[0].run_id is not None
+    assert "queue enqueue failed" in (result.items[0].error or "")
+    run = await container.repository.get_run(result.items[0].run_id)
+    assert run is not None
+    assert run.status == RunStatus.FAILED
 
 
 @pytest.mark.asyncio

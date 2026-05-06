@@ -28,9 +28,10 @@ class IngestDocument:
     documents: DocumentRepository
     content: ContentStore
     extractor: TextExtractor
+    max_source_bytes: int | None = None
 
     async def execute(self, path: Path) -> IngestedDocument:
-        source_path, payload = await _read_source(path)
+        source_path, payload = await _read_source(path, max_source_bytes=self.max_source_bytes)
         digest = hashlib.sha256(payload).hexdigest()
         document_id = DocumentId(f"doc_{digest[:16]}")
         existing = await self.documents.get_document(document_id)
@@ -64,11 +65,13 @@ def raw_text_key(document_id: DocumentId) -> str:
     return f"raw:{document_id}"
 
 
-async def _read_source(path: Path) -> tuple[Path, bytes]:
+async def _read_source(path: Path, *, max_source_bytes: int | None = None) -> tuple[Path, bytes]:
     import asyncio
 
     def read() -> tuple[Path, bytes]:
         source_path = path.expanduser().resolve()
+        if max_source_bytes is not None and source_path.stat().st_size > max_source_bytes:
+            raise ValueError(f"Source file exceeds {max_source_bytes} bytes: {source_path}")
         return source_path, source_path.read_bytes()
 
     return await asyncio.to_thread(read)

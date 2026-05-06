@@ -5,7 +5,7 @@ import pytest
 
 from librarian.application.classify_document import ClassifyDocument
 from librarian.application.factory import build_container
-from librarian.application.ports import OutputRepository
+from librarian.application.ports import EventSink, OutputRepository
 from librarian.application.process_document import ProcessDocument
 from librarian.config import Settings
 from librarian.domain.ids import RunId
@@ -284,6 +284,56 @@ async def test_late_publish_failure_marks_run_failed_and_hides_output(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_start_event_failure_marks_run_failed(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Horse transcript with event failure.", encoding="utf-8")
+    container = await build_container(settings)
+    ingested = await container.ingest_document.execute(source)
+    run = await container.process_document.start(ingested.document.id)
+
+    class FailingEvents:
+        def __init__(self, wrapped: object) -> None:
+            self._wrapped = wrapped
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._wrapped, name)
+
+        async def emit(self, run_id: RunId, stage: RunStage, message: str) -> None:
+            del run_id, stage
+            if message == "started processing run":
+                raise RuntimeError("event boom")
+
+    process = ProcessDocument(
+        documents=container.repository,
+        runs=container.repository,
+        chunks=container.repository,
+        content=container.repository,
+        outputs=container.repository,
+        events=cast(EventSink, FailingEvents(container.repository)),
+        cleaner=container.process_document.cleaner,
+        classifier=container.process_document.classifier,
+        chunking_policy=container.process_document.chunking_policy,
+    )
+
+    with pytest.raises(RuntimeError, match="event boom"):
+        await process.execute_existing(run.id)
+
+    latest = await container.repository.get_run(run.id)
+    document = await container.repository.get_document(ingested.document.id)
+    assert latest is not None
+    assert document is not None
+    assert latest.status == RunStatus.FAILED
+    assert latest.error == "event boom"
+    assert document.status == DocumentStatus.FAILED
+
+
+@pytest.mark.asyncio
 async def test_failed_reprocess_preserves_ready_document_status(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",
@@ -358,6 +408,23 @@ async def test_failed_extraction_does_not_persist_document(tmp_path: Path) -> No
     container = await build_container(settings)
 
     with pytest.raises(ValueError, match="Unsupported file extension"):
+        await container.ingest_document.execute(source)
+
+    assert list(await container.repository.list()) == []
+
+
+@pytest.mark.asyncio
+async def test_ingest_rejects_source_above_size_limit(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        max_source_bytes=4,
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("too large", encoding="utf-8")
+    container = await build_container(settings)
+
+    with pytest.raises(ValueError, match="Source file exceeds"):
         await container.ingest_document.execute(source)
 
     assert list(await container.repository.list()) == []

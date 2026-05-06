@@ -33,6 +33,12 @@ When two source files would produce the same output path, Librarian appends a nu
 Batch conversion always writes `.json` provenance sidecars next to generated outputs so later
 recursive runs can identify and skip Librarian-generated files.
 
+Local conversion and import paths enforce configurable input limits before expensive parsing:
+`LIBRARIAN_MAX_SOURCE_BYTES`, `LIBRARIAN_TEXT_MAX_INPUT_BYTES`,
+`LIBRARIAN_DOCX_MAX_INPUT_BYTES`, `LIBRARIAN_PDF_MAX_INPUT_BYTES`, and
+`LIBRARIAN_PDF_MAX_PAGES`. API uploads are additionally bounded by
+`LIBRARIAN_API_MAX_UPLOAD_BYTES`.
+
 ## Import Workflow
 
 `librarian import` combines conversion, ingestion, and optional processing:

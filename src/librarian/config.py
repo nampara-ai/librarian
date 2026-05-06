@@ -38,6 +38,11 @@ class Settings(BaseSettings):
 
     chunk_target_chars: int = Field(default=12_000, gt=0)
     chunk_overlap_chars: int = Field(default=800, ge=0)
+    max_source_bytes: int = Field(default=200 * 1024 * 1024, gt=0)
+    text_max_input_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
+    docx_max_input_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
+    pdf_max_input_bytes: int = Field(default=200 * 1024 * 1024, gt=0)
+    pdf_max_pages: int = Field(default=1_000, gt=0)
     ocr_language: str = Field(default="eng")
     ocr_timeout_seconds: int = Field(default=120, gt=0)
     ocr_pdf_dpi: int = Field(default=200, gt=0)

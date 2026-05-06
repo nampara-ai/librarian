@@ -27,6 +27,15 @@ async def test_text_family_extractor_reads_markdown(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_text_family_extractor_rejects_large_inputs(tmp_path: Path) -> None:
+    path = tmp_path / "notes.txt"
+    path.write_text("too large", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Text extraction input exceeds"):
+        await TextFamilyExtractor(max_input_bytes=4).extract(path)
+
+
+@pytest.mark.asyncio
 async def test_text_family_extractor_pretty_prints_json(tmp_path: Path) -> None:
     path = tmp_path / "notes.json"
     path.write_text(json.dumps({"speaker": "A", "text": "hello"}), encoding="utf-8")

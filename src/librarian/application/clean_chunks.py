@@ -34,6 +34,7 @@ class CleanChunks:
     max_tokens: int = 8192
     temperature: float = 0.0
     coherence_mode: CoherenceMode = "balanced"
+    max_parallel_chunks: int = 8
 
     async def execute(self, chunks: list[Chunk]) -> list[CleanedChunk]:
         if self.coherence_mode == "max-coherence":
@@ -41,8 +42,31 @@ class CleanChunks:
         return await self._clean_parallel(chunks)
 
     async def _clean_parallel(self, chunks: list[Chunk]) -> list[CleanedChunk]:
-        tasks = [self._clean_one(chunk, previous_context="") for chunk in chunks]
-        return list(await asyncio.gather(*tasks))
+        if not chunks:
+            return []
+        worker_count = max(1, min(self.max_parallel_chunks, len(chunks)))
+        queue: asyncio.Queue[Chunk] = asyncio.Queue()
+        for chunk in chunks:
+            queue.put_nowait(chunk)
+        results: list[CleanedChunk | None] = [None] * len(chunks)
+        positions = {chunk.id: index for index, chunk in enumerate(chunks)}
+
+        async def worker() -> None:
+            while True:
+                try:
+                    chunk = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+                try:
+                    results[positions[chunk.id]] = await self._clean_one(
+                        chunk,
+                        previous_context="",
+                    )
+                finally:
+                    queue.task_done()
+
+        await asyncio.gather(*(worker() for _ in range(worker_count)))
+        return [item for item in results if item is not None]
 
     async def _clean_sequential(self, chunks: list[Chunk]) -> list[CleanedChunk]:
         results: list[CleanedChunk] = []

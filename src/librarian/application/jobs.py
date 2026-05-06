@@ -187,6 +187,21 @@ class QueueWorker:
         lost_lease = asyncio.Event()
         heartbeat = asyncio.create_task(self._heartbeat_until_done(run_id, task, lost_lease))
         try:
+            done, _ = await asyncio.wait(
+                {task, heartbeat},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if heartbeat in done:
+                try:
+                    heartbeat.result()
+                except Exception:
+                    if not task.done():
+                        task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                    raise
+                if not task.done():
+                    task.cancel()
+                await task
             return await task
         except asyncio.CancelledError as exc:
             if lost_lease.is_set():
@@ -217,4 +232,4 @@ class QueueWorker:
             if not renewed:
                 lost_lease.set()
                 processor_task.cancel()
-                return
+                raise RuntimeError(f"Lost queue lease for run {run_id}")

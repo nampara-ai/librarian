@@ -47,10 +47,19 @@ async def build_ingest_container(settings: Settings | None = None) -> IngestCont
         ocr_timeout_seconds=resolved_settings.ocr_timeout_seconds,
         ocr_pdf_dpi=resolved_settings.ocr_pdf_dpi,
         ocr_pdf_max_pages=resolved_settings.ocr_pdf_max_pages,
+        text_max_input_bytes=resolved_settings.text_max_input_bytes,
+        docx_max_input_bytes=resolved_settings.docx_max_input_bytes,
+        pdf_max_input_bytes=resolved_settings.pdf_max_input_bytes,
+        pdf_max_pages=resolved_settings.pdf_max_pages,
         universal_max_input_bytes=resolved_settings.universal_max_input_bytes,
         universal_timeout_seconds=resolved_settings.universal_timeout_seconds,
     )
-    ingest = IngestDocument(documents=repository, content=repository, extractor=extractor)
+    ingest = IngestDocument(
+        documents=repository,
+        content=repository,
+        extractor=extractor,
+        max_source_bytes=resolved_settings.max_source_bytes,
+    )
     return IngestContainer(
         settings=resolved_settings,
         database=database,
@@ -71,6 +80,7 @@ async def build_container(settings: Settings | None = None) -> ApplicationContai
         prompt_version=resolved_settings.cleaning_prompt_version,
         model=resolved_settings.llm_model,
         coherence_mode=cast(CoherenceMode, resolved_settings.coherence_mode),
+        max_parallel_chunks=resolved_settings.llm_max_concurrency,
     )
     taxonomy = DeweyTaxonomy()
     classifier = ClassifyDocument(

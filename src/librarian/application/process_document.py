@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass
 
 from librarian.application.assemble_document import assemble_cleaned_document
@@ -76,11 +77,11 @@ class ProcessDocument:
             raise ValueError(f"Document not found: {document_id}")
         previous_document_status = document.status
 
-        await self.events.emit(run_id, RunStage.INGEST, "started processing run")
-        await self.documents.update_document_status(document_id, DocumentStatus.PROCESSING)
         published = False
 
         try:
+            await self.events.emit(run_id, RunStage.INGEST, "started processing run")
+            await self.documents.update_document_status(document_id, DocumentStatus.PROCESSING)
             await self._raise_if_canceled(run_id)
             await self.runs.update_status(
                 run_id,
@@ -189,7 +190,8 @@ class ProcessDocument:
                 previous_document_status if previous_output is not None else DocumentStatus.FAILED
             )
             await self.documents.update_document_status(document_id, failed_status)
-            await self.events.emit(run_id, RunStage.COMPLETE, f"processing failed: {exc}")
+            with suppress(Exception):
+                await self.events.emit(run_id, RunStage.COMPLETE, f"processing failed: {exc}")
             raise
 
     async def _raise_if_canceled(self, run_id: RunId) -> None:

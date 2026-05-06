@@ -9,7 +9,8 @@ from librarian.application.benchmark import (
     synthetic_text,
 )
 from librarian.application.clean_chunks import CleanChunks
-from librarian.domain.ids import DocumentId
+from librarian.domain.ids import ChunkId, DocumentId
+from librarian.domain.models import Chunk
 from librarian.llm.mock import MockLLMProvider
 from librarian.pipeline.chunking import ChunkingPolicy
 from librarian.prompts import PromptCatalog
@@ -44,3 +45,56 @@ def test_load_benchmark_text_from_file(tmp_path: Path) -> None:
     path.write_text("benchmark text", encoding="utf-8")
 
     assert load_benchmark_text(path, paragraphs=1, paragraph_chars=10) == "benchmark text"
+
+
+@pytest.mark.asyncio
+async def test_clean_chunks_bounds_parallel_task_fanout() -> None:
+    active = 0
+    max_active = 0
+
+    class TrackingProvider:
+        name = "tracking"
+
+        async def complete(
+            self,
+            *,
+            system_prompt: str,
+            user_prompt: str,
+            model: str,
+            max_tokens: int,
+            temperature: float,
+        ) -> str:
+            import asyncio
+
+            del system_prompt, model, max_tokens, temperature
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0)
+            active -= 1
+            return user_prompt
+
+    chunks = [
+        Chunk(
+            id=ChunkId(f"chk_{index}"),
+            document_id=DocumentId("doc_test"),
+            ordinal=index,
+            text=f"chunk {index}",
+            start_char=index,
+            end_char=index + 1,
+            sha256=f"sha-{index}",
+        )
+        for index in range(10)
+    ]
+    cleaner = CleanChunks(
+        provider=TrackingProvider(),
+        prompt_catalog=PromptCatalog(),
+        prompt_version="cmos_v1",
+        model="mock-cleaner",
+        max_parallel_chunks=2,
+    )
+
+    result = await cleaner.execute(chunks)
+
+    assert [item.chunk.ordinal for item in result] == list(range(10))
+    assert max_active <= 2

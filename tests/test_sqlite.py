@@ -135,6 +135,80 @@ async def test_queue_worker_heartbeat_prevents_active_lease_reclaim(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_queue_worker_fails_run_when_heartbeat_adapter_errors(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Horse transcript with heartbeat failure.", encoding="utf-8")
+    container = await build_container(settings)
+    ingested = await container.ingest_document.execute(source)
+    run = await container.process_document.start(ingested.document.id)
+    queue = SQLiteRunQueue(container.database)
+    await queue.enqueue(run.id)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class FailingHeartbeatQueue:
+        def __init__(self, wrapped: SQLiteRunQueue) -> None:
+            self._wrapped = wrapped
+
+        async def enqueue(self, run_id: RunId) -> None:
+            await self._wrapped.enqueue(run_id)
+
+        async def claim(self, *, worker_id: str, lease_seconds: int):
+            return await self._wrapped.claim(worker_id=worker_id, lease_seconds=lease_seconds)
+
+        async def heartbeat(self, run_id: RunId, *, worker_id: str, lease_seconds: int) -> bool:
+            del run_id, worker_id, lease_seconds
+            raise RuntimeError("heartbeat down")
+
+        async def complete(self, run_id: RunId, *, worker_id: str | None = None) -> None:
+            await self._wrapped.complete(run_id, worker_id=worker_id)
+
+        async def fail(
+            self,
+            run_id: RunId,
+            *,
+            error: str,
+            max_attempts: int,
+            worker_id: str | None = None,
+        ) -> None:
+            await self._wrapped.fail(
+                run_id,
+                error=error,
+                max_attempts=max_attempts,
+                worker_id=worker_id,
+            )
+
+        async def cancel(self, run_id: RunId, *, error: str | None = None) -> None:
+            await self._wrapped.cancel(run_id, error=error)
+
+        async def list(self, *, limit: int = 100):
+            return await self._wrapped.list(limit=limit)
+
+    async def slow_processor(_: RunId) -> object:
+        started.set()
+        await release.wait()
+        return None
+
+    worker = QueueWorker(
+        queue=FailingHeartbeatQueue(queue),
+        processor=slow_processor,
+        worker_id="heartbeat-worker",
+        lease_seconds=1,
+        heartbeat_interval_seconds=0.01,
+    )
+
+    assert await worker.run_once()
+    assert started.is_set()
+    rows = await queue.list()
+    assert rows[0].status == QueueStatus.RETRY
+    assert "heartbeat down" in (rows[0].last_error or "")
+
+
+@pytest.mark.asyncio
 async def test_queue_completion_requires_current_worker_owner(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",

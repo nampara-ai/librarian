@@ -21,10 +21,14 @@ class TextFamilyExtractor:
 
     supported_extensions = frozenset({".txt", ".md", ".csv", ".json"})
 
+    def __init__(self, *, max_input_bytes: int = 100 * 1024 * 1024) -> None:
+        self.max_input_bytes = max_input_bytes
+
     async def extract(self, path: Path) -> str:
         return await asyncio.to_thread(self._extract_sync, path)
 
     def _extract_sync(self, path: Path) -> str:
+        _validate_input_size(path, self.max_input_bytes, "Text extraction input")
         text = path.read_text(encoding="utf-8")
         if path.suffix.lower() == ".json":
             try:
@@ -40,10 +44,14 @@ class DocxExtractor:
 
     supported_extensions = frozenset({".docx"})
 
+    def __init__(self, *, max_input_bytes: int = 100 * 1024 * 1024) -> None:
+        self.max_input_bytes = max_input_bytes
+
     async def extract(self, path: Path) -> str:
         return await asyncio.to_thread(self._extract_sync, path)
 
     def _extract_sync(self, path: Path) -> str:
+        _validate_input_size(path, self.max_input_bytes, "DOCX extraction input")
         from docx import Document
 
         doc = Document(str(path))
@@ -62,16 +70,21 @@ class PdfExtractor:
         ocr_timeout_seconds: int = 120,
         ocr_pdf_dpi: int = 200,
         ocr_pdf_max_pages: int = 100,
+        max_input_bytes: int = 200 * 1024 * 1024,
+        max_pages: int = 1_000,
     ) -> None:
         self.ocr_language = ocr_language
         self.ocr_timeout_seconds = ocr_timeout_seconds
         self.ocr_pdf_dpi = ocr_pdf_dpi
         self.ocr_pdf_max_pages = ocr_pdf_max_pages
+        self.max_input_bytes = max_input_bytes
+        self.max_pages = max_pages
 
     async def extract(self, path: Path) -> str:
         return await asyncio.to_thread(self._extract_sync, path)
 
     def _extract_sync(self, path: Path) -> str:
+        _validate_input_size(path, self.max_input_bytes, "PDF extraction input")
         try:
             pdfplumber = importlib.import_module("pdfplumber")
         except ImportError as exc:
@@ -80,7 +93,7 @@ class PdfExtractor:
         parts: list[str] = []
         pdf_module = cast(Any, pdfplumber)
         with pdf_module.open(path) as pdf:
-            for page in pdf.pages:
+            for page in pdf.pages[: self.max_pages]:
                 page_text = cast(str | None, page.extract_text())
                 if page_text:
                     parts.append(page_text)
@@ -185,17 +198,23 @@ class CompositeExtractor:
         ocr_timeout_seconds: int = 120,
         ocr_pdf_dpi: int = 200,
         ocr_pdf_max_pages: int = 100,
+        text_max_input_bytes: int = 100 * 1024 * 1024,
+        docx_max_input_bytes: int = 100 * 1024 * 1024,
+        pdf_max_input_bytes: int = 200 * 1024 * 1024,
+        pdf_max_pages: int = 1_000,
         universal_max_input_bytes: int = 50 * 1024 * 1024,
         universal_timeout_seconds: int = 120,
     ) -> None:
         extractors = [
-            TextFamilyExtractor(),
-            DocxExtractor(),
+            TextFamilyExtractor(max_input_bytes=text_max_input_bytes),
+            DocxExtractor(max_input_bytes=docx_max_input_bytes),
             PdfExtractor(
                 ocr_language=ocr_language,
                 ocr_timeout_seconds=ocr_timeout_seconds,
                 ocr_pdf_dpi=ocr_pdf_dpi,
                 ocr_pdf_max_pages=ocr_pdf_max_pages,
+                max_input_bytes=pdf_max_input_bytes,
+                max_pages=pdf_max_pages,
             ),
             ImageOcrExtractor(language=ocr_language, timeout_seconds=ocr_timeout_seconds),
             MarkItDownExtractor(
@@ -305,6 +324,10 @@ def _extract_markitdown_sync(path: Path) -> str:
 
 
 def _validate_markitdown_input_size(path: Path, max_input_bytes: int) -> None:
+    _validate_input_size(path, max_input_bytes, "Broad format conversion input")
+
+
+def _validate_input_size(path: Path, max_input_bytes: int, label: str) -> None:
     byte_size = path.stat().st_size
     if byte_size > max_input_bytes:
-        raise ValueError(f"Broad format conversion input exceeds {max_input_bytes} bytes: {path}")
+        raise ValueError(f"{label} exceeds {max_input_bytes} bytes: {path}")
