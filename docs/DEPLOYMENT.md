@@ -21,6 +21,18 @@ worker processes runs independently.
 Compose requires `LIBRARIAN_API_KEY`; authenticated requests must send
 `x-api-key: $LIBRARIAN_API_KEY`.
 
+## Direct Docker Run
+
+The published image starts the API on `0.0.0.0:8080`. Public binds require both an API key and an
+import root:
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e LIBRARIAN_API_KEY=change-me \
+  -e LIBRARIAN_API_IMPORT_ROOT=/data/imports \
+  ghcr.io/nampara-ai/librarian:v0.1.0a1
+```
+
 ## Environment
 
 Common production settings:

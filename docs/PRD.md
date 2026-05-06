@@ -521,11 +521,11 @@ Output:
 - Add example synthetic fixtures.
 - Add contributor docs.
 - Add security/privacy docs.
-- Tag `v0.1.0`.
+- Tag `v0.1.0a1` for the first public alpha.
 
 ## 12. Success Metrics
 
-For `v0.1.0`:
+For `v0.1.0a1`:
 
 - A user can install and run Librarian locally from a clean machine.
 - A user can process a directory of text/Markdown/PDF/DOCX files from the CLI.
@@ -540,7 +540,8 @@ For `v0.1.0`:
 - Should the default taxonomy be true Dewey, Dewey-inspired, or explicitly "library classification" to avoid overclaiming precision?
 - Should cleaned document content live in SQLite, content-addressed files, or both?
 - Is multi-user auth needed for the first hosted deployment, or is single-tenant API key auth enough?
-- Should the first web UI ship with `v0.1.0`, or should it follow once CLI/API contracts stabilize?
+- Should the first web UI ship with a later alpha, or should it follow once CLI/API contracts
+  stabilize?
 - Which model providers should be documented as first-class at launch?
 
 ## 14. Runtime Recommendation

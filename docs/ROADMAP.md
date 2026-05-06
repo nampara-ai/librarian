@@ -1,6 +1,6 @@
 # Roadmap
 
-## v0.1.0-alpha
+## v0.1.0a1
 
 - Local CLI and FastAPI service.
 - Universal conversion to Markdown/plain text.

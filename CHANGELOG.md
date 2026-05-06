@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+No unreleased changes.
+
+## 0.1.0a1 - 2026-05-06
+
 - Added OSS governance files, templates, Dependabot, and CodeQL.
 - Added combined import manifests, resume mode, JSON reports, and run/queue controls.
 - Added collision-safe conversion outputs, sidecar metadata, OCR language configuration, and
@@ -22,3 +26,4 @@
 - Prevented failed extraction attempts from persisting valid-looking documents.
 - Returned controlled errors for malformed SQLite FTS search queries.
 - Marked prerelease tags as prereleases in release automation.
+- Documented the alpha release dependency policy.

@@ -39,6 +39,6 @@ to releases.
 
 ## Current Status
 
-No real-provider baseline is committed because this repository does not include provider
-credentials. The harness and release checklist are in place so maintainers can generate and attach
-baselines before `v0.1.0-alpha`.
+No real-provider baseline is committed for `v0.1.0a1` because this repository does not include
+provider credentials. The harness and release checklist are in place so maintainers can generate and
+attach sanitized baselines to later release candidates.

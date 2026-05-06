@@ -6,7 +6,9 @@ This repository is the production rewrite of an earlier prototype. The architect
 
 ## Status
 
-Early foundation. The current implementation includes the project skeleton, domain model, ports, deterministic chunking, validation, prompt assets, CLI/API entry points, and test scaffolding.
+`v0.1.0a1` is the first public alpha. It includes local CLI workflows, a FastAPI service,
+directory conversion/import, durable SQLite-backed processing runs, OCR/broad-format extraction,
+search/export, release automation, and OSS governance files.
 
 ## Install
 
@@ -113,6 +115,15 @@ docker compose up --build
 
 The compose stack runs the API plus a separate SQLite-backed worker. API requests
 other than `/health` and `/version` require `x-api-key: $LIBRARIAN_API_KEY`.
+
+For direct image runs, also set an import root because the image binds publicly by default:
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e LIBRARIAN_API_KEY=change-me \
+  -e LIBRARIAN_API_IMPORT_ROOT=/data/imports \
+  ghcr.io/nampara-ai/librarian:v0.1.0a1
+```
 
 ## Privacy
 
