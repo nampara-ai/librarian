@@ -20,18 +20,24 @@ from librarian.taxonomy.dewey import DeweyTaxonomy
 
 
 @dataclass(frozen=True, slots=True)
-class ApplicationContainer:
-    """Composed application services."""
+class IngestContainer:
+    """Application services needed before LLM-backed processing."""
 
     settings: Settings
     database: SQLiteDatabase
     repository: SQLiteRepository
     ingest_document: IngestDocument
+
+
+@dataclass(frozen=True, slots=True)
+class ApplicationContainer(IngestContainer):
+    """Composed application services."""
+
     process_document: ProcessDocument
 
 
-async def build_container(settings: Settings | None = None) -> ApplicationContainer:
-    """Build concrete application services."""
+async def build_ingest_container(settings: Settings | None = None) -> IngestContainer:
+    """Build concrete application services that do not require an LLM provider."""
     resolved_settings = settings or Settings()
     database = SQLiteDatabase(resolved_settings.database_path)
     await database.initialize()
@@ -44,6 +50,20 @@ async def build_container(settings: Settings | None = None) -> ApplicationContai
         universal_max_input_bytes=resolved_settings.universal_max_input_bytes,
         universal_timeout_seconds=resolved_settings.universal_timeout_seconds,
     )
+    ingest = IngestDocument(documents=repository, content=repository, extractor=extractor)
+    return IngestContainer(
+        settings=resolved_settings,
+        database=database,
+        repository=repository,
+        ingest_document=ingest,
+    )
+
+
+async def build_container(settings: Settings | None = None) -> ApplicationContainer:
+    """Build concrete application services."""
+    ingest_container = await build_ingest_container(settings)
+    resolved_settings = ingest_container.settings
+    repository = ingest_container.repository
     provider = _build_provider(resolved_settings)
     cleaner = CleanChunks(
         provider=provider,
@@ -64,7 +84,6 @@ async def build_container(settings: Settings | None = None) -> ApplicationContai
         target_chars=resolved_settings.chunk_target_chars,
         overlap_chars=resolved_settings.chunk_overlap_chars,
     )
-    ingest = IngestDocument(documents=repository, content=repository, extractor=extractor)
     process = ProcessDocument(
         documents=repository,
         runs=repository,
@@ -79,9 +98,9 @@ async def build_container(settings: Settings | None = None) -> ApplicationContai
     )
     return ApplicationContainer(
         settings=resolved_settings,
-        database=database,
+        database=ingest_container.database,
         repository=repository,
-        ingest_document=ingest,
+        ingest_document=ingest_container.ingest_document,
         process_document=process,
     )
 

@@ -80,6 +80,35 @@ async def test_recursive_convert_directory_skips_own_output_subdirectory(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_recursive_convert_directory_skips_previous_generated_original_outputs(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "input"
+    source_dir.mkdir()
+    (source_dir / "a.md").write_text("Alpha", encoding="utf-8")
+    converter = DocumentConverter(CompositeExtractor())
+
+    original = await converter.convert_directory(
+        source_dir,
+        format=ConversionFormat.MARKDOWN,
+        output_mode=DirectoryOutputMode.ORIGINAL,
+        recursive=True,
+    )
+    recursive = await converter.convert_directory(
+        source_dir,
+        format=ConversionFormat.MARKDOWN,
+        output_mode=DirectoryOutputMode.SUBDIRECTORY,
+        subdirectory_name="converted",
+        recursive=True,
+    )
+
+    assert original.converted == 1
+    assert (source_dir / "a-2.md").exists()
+    assert (source_dir / "a-2.md.json").exists()
+    assert [item.source_path.relative_to(source_dir) for item in recursive.items] == [Path("a.md")]
+
+
+@pytest.mark.asyncio
 async def test_new_directory_rejects_source_or_ancestor_output_dir(tmp_path: Path) -> None:
     source_dir = tmp_path / "input"
     source_dir.mkdir()

@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 
 class ConversionFormat(StrEnum):
@@ -188,7 +188,7 @@ class DocumentConverter:
                     destination,
                     format=format,
                     overwrite=overwrite,
-                    write_sidecar=write_sidecar,
+                    write_sidecar=True,
                 )
             except Exception as exc:
                 items.append(
@@ -228,6 +228,7 @@ def discover_supported_files(
             if path.is_file()
             and path.suffix.lower() in supported_extensions
             and not _is_under_any(path.resolve(), excluded)
+            and not _has_librarian_sidecar(path)
         ),
         key=lambda item: str(item.relative_to(source_dir)).lower(),
     )
@@ -274,6 +275,26 @@ def _is_under_any(path: Path, roots: tuple[Path, ...]) -> bool:
             continue
         return True
     return False
+
+
+def _has_librarian_sidecar(path: Path) -> bool:
+    if path.suffix.lower() == ".json" and _is_librarian_metadata_file(path):
+        return True
+    sidecar = path.with_suffix(f"{path.suffix}.json")
+    return _is_librarian_metadata_file(sidecar)
+
+
+def _is_librarian_metadata_file(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        payload_obj = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload_obj, dict):
+        return False
+    payload = cast(dict[str, object], payload_obj)
+    return payload.get("generated_by") == "librarian"
 
 
 def conversion_output_path(
@@ -330,6 +351,7 @@ async def write_conversion_sidecar(
     """Write sidecar conversion metadata."""
     payload = json.dumps(
         {
+            "generated_by": "librarian",
             "source_path": str(source_path),
             "output_path": str(output_path),
             "format": format.value,

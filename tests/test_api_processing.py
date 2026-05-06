@@ -171,6 +171,29 @@ def test_api_uploads_with_same_filename_keep_distinct_source_files(tmp_path: Pat
     assert {item.read_text(encoding="utf-8") for item in uploads} == {"first", "second"}
 
 
+def test_api_document_list_uses_paginated_response_metadata(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    with TestClient(create_app(settings)) as client:
+        for index in range(3):
+            response = client.post(
+                "/documents",
+                files={"file": (f"note-{index}.txt", f"text {index}".encode(), "text/plain")},
+            )
+            assert response.status_code == 200
+
+        page = client.get("/documents?limit=1&offset=1")
+
+    assert page.status_code == 200
+    payload = page.json()
+    assert payload["total"] == 3
+    assert payload["limit"] == 1
+    assert payload["offset"] == 1
+    assert len(payload["documents"]) == 1
+
+
 def test_api_upload_with_adversarial_filename_uses_safe_fallback(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",
@@ -203,6 +226,54 @@ def test_api_upload_rejects_unsupported_file_and_cleans_upload(tmp_path: Path) -
     assert response.status_code == 400
     assert "Unsupported file extension" in response.json()["detail"]
     assert not list((tmp_path / ".librarian" / "uploads").glob("*"))
+
+
+def test_api_upload_ingest_does_not_require_llm_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LIBRARIAN_TEST_MISSING_API_KEY", raising=False)
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        llm_provider="openai-compatible",
+        llm_api_key_env="LIBRARIAN_TEST_MISSING_API_KEY",
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/documents",
+            files={"file": ("notes.txt", b"Ingest only text.", "text/plain")},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["filename"] == "notes.txt"
+
+
+def test_api_import_none_does_not_require_llm_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LIBRARIAN_TEST_MISSING_API_KEY", raising=False)
+    import_root = tmp_path / "imports"
+    source_dir = import_root / "input"
+    source_dir.mkdir(parents=True)
+    (source_dir / "notes.txt").write_text("Import without processing.", encoding="utf-8")
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_import_root=import_root,
+        llm_provider="openai-compatible",
+        llm_api_key_env="LIBRARIAN_TEST_MISSING_API_KEY",
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/imports",
+            json={"source_dir": str(source_dir), "processing_mode": "none"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["ingested"] == 1
+    assert response.json()["processed"] == 0
 
 
 def test_api_config_exposes_operational_controls(tmp_path: Path) -> None:

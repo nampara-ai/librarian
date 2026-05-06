@@ -106,9 +106,13 @@ class SQLiteRepository:
         """List processing runs."""
         return await asyncio.to_thread(self._list_runs_sync, limit, offset)
 
-    async def list(self) -> Sequence[Document]:
+    async def list(self, *, limit: int = 100, offset: int = 0) -> Sequence[Document]:
         """List documents."""
-        return await asyncio.to_thread(self._list_documents_sync)
+        return await asyncio.to_thread(self._list_documents_sync, limit, offset)
+
+    async def count_documents(self) -> int:
+        """Count documents."""
+        return await asyncio.to_thread(self._count_documents_sync)
 
     async def update_document_status(
         self, document_id: DocumentId, status: DocumentStatus
@@ -290,10 +294,27 @@ class SQLiteRepository:
             ).fetchone()
         return _document_from_row(row) if row else None
 
-    def _list_documents_sync(self) -> list[Document]:
+    def _list_documents_sync(self, limit: int, offset: int) -> list[Document]:
+        if limit < 1 or limit > 500:
+            raise ValueError("limit must be between 1 and 500")
+        if offset < 0:
+            raise ValueError("offset must be greater than or equal to 0")
         with self.database.connect() as connection:
-            rows = connection.execute("SELECT * FROM documents ORDER BY created_at DESC").fetchall()
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM documents
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            ).fetchall()
         return [_document_from_row(row) for row in rows]
+
+    def _count_documents_sync(self) -> int:
+        with self.database.connect() as connection:
+            row = connection.execute("SELECT COUNT(*) AS count FROM documents").fetchone()
+        return int(row["count"]) if row else 0
 
     def _update_document_status_sync(
         self,
@@ -747,13 +768,24 @@ class SQLiteRunQueue:
         """Claim one available run for a worker."""
         return await asyncio.to_thread(self._claim_sync, worker_id, lease_seconds)
 
-    async def complete(self, run_id: RunId) -> None:
-        """Mark a queued run complete."""
-        await asyncio.to_thread(self._complete_sync, run_id)
+    async def heartbeat(self, run_id: RunId, *, worker_id: str, lease_seconds: int) -> bool:
+        """Renew a worker lease for a running queue row."""
+        return await asyncio.to_thread(self._heartbeat_sync, run_id, worker_id, lease_seconds)
 
-    async def fail(self, run_id: RunId, *, error: str, max_attempts: int) -> None:
+    async def complete(self, run_id: RunId, *, worker_id: str | None = None) -> None:
+        """Mark a queued run complete."""
+        await asyncio.to_thread(self._complete_sync, run_id, worker_id)
+
+    async def fail(
+        self,
+        run_id: RunId,
+        *,
+        error: str,
+        max_attempts: int,
+        worker_id: str | None = None,
+    ) -> None:
         """Mark a queued run failed or schedule a retry."""
-        await asyncio.to_thread(self._fail_sync, run_id, error, max_attempts)
+        await asyncio.to_thread(self._fail_sync, run_id, error, max_attempts, worker_id)
 
     async def cancel(self, run_id: RunId, *, error: str | None = None) -> None:
         """Mark a queued run canceled."""
@@ -791,12 +823,14 @@ class SQLiteRunQueue:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
-                SELECT *
+                SELECT run_queue.*
                 FROM run_queue
-                WHERE status IN (?, ?, ?)
-                  AND available_at <= ?
-                  AND (locked_at IS NULL OR locked_at <= ?)
-                ORDER BY updated_at ASC
+                JOIN runs ON runs.id = run_queue.run_id
+                WHERE run_queue.status IN (?, ?, ?)
+                  AND run_queue.available_at <= ?
+                  AND (run_queue.locked_at IS NULL OR run_queue.locked_at <= ?)
+                  AND runs.status NOT IN (?, ?)
+                ORDER BY run_queue.updated_at ASC
                 LIMIT 1
                 """,
                 (
@@ -805,6 +839,8 @@ class SQLiteRunQueue:
                     QueueStatus.RUNNING.value,
                     now.isoformat(),
                     lease_cutoff.isoformat(),
+                    RunStatus.SUCCEEDED.value,
+                    RunStatus.CANCELED.value,
                 ),
             ).fetchone()
             if row is None:
@@ -834,7 +870,30 @@ class SQLiteRunQueue:
 
         return _queued_run_from_row(updated) if updated else None
 
-    def _complete_sync(self, run_id: RunId) -> None:
+    def _heartbeat_sync(self, run_id: RunId, worker_id: str, lease_seconds: int) -> bool:
+        if lease_seconds < 1:
+            raise ValueError("lease_seconds must be at least 1")
+        now = utc_now().isoformat()
+        with self.database.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE run_queue
+                SET locked_at = ?, updated_at = ?
+                WHERE run_id = ?
+                  AND status = ?
+                  AND locked_by = ?
+                """,
+                (
+                    now,
+                    now,
+                    str(run_id),
+                    QueueStatus.RUNNING.value,
+                    worker_id,
+                ),
+            )
+        return cursor.rowcount > 0
+
+    def _complete_sync(self, run_id: RunId, worker_id: str | None) -> None:
         now = utc_now().isoformat()
         with self.database.connect() as connection:
             connection.execute(
@@ -843,16 +902,25 @@ class SQLiteRunQueue:
                 SET status = ?, locked_at = NULL, locked_by = NULL, updated_at = ?
                 WHERE run_id = ?
                   AND status = ?
+                  AND (? IS NULL OR locked_by = ?)
                 """,
                 (
                     QueueStatus.SUCCEEDED.value,
                     now,
                     str(run_id),
                     QueueStatus.RUNNING.value,
+                    worker_id,
+                    worker_id,
                 ),
             )
 
-    def _fail_sync(self, run_id: RunId, error: str, max_attempts: int) -> None:
+    def _fail_sync(
+        self,
+        run_id: RunId,
+        error: str,
+        max_attempts: int,
+        worker_id: str | None,
+    ) -> None:
         now = utc_now()
         with self.database.connect() as connection:
             row = connection.execute(
@@ -872,6 +940,7 @@ class SQLiteRunQueue:
                     updated_at = ?, last_error = ?
                 WHERE run_id = ?
                   AND status = ?
+                  AND (? IS NULL OR locked_by = ?)
                 """,
                 (
                     status.value,
@@ -880,6 +949,8 @@ class SQLiteRunQueue:
                     error,
                     str(run_id),
                     QueueStatus.RUNNING.value,
+                    worker_id,
+                    worker_id,
                 ),
             )
 

@@ -25,7 +25,7 @@ from librarian.application.convert_document import (
 )
 from librarian.application.eval import eval_result_json, load_eval_suite, run_eval_suite
 from librarian.application.export_document import ExportedDocument, ExportFormat
-from librarian.application.factory import build_container
+from librarian.application.factory import build_container, build_ingest_container
 from librarian.application.import_library import (
     ImportLibrary,
     ImportProcessingMode,
@@ -257,11 +257,15 @@ def import_directory(
         processing_mode = ImportProcessingMode.QUEUE
 
     async def run() -> None:
-        container = await build_container()
+        container = (
+            await build_ingest_container()
+            if processing_mode == ImportProcessingMode.NONE
+            else await build_container()
+        )
         importer = ImportLibrary(
             converter=DocumentConverter(_build_extractor(container.settings)),
             ingest=container.ingest_document,
-            process=container.process_document,
+            process=getattr(container, "process_document", None),
             queue_factory=lambda: SQLiteRunQueue(container.database),
         )
         result = await importer.import_directory(
@@ -409,7 +413,7 @@ def ingest(
     resolved_path = path.resolve()
 
     async def run() -> None:
-        container = await build_container()
+        container = await build_ingest_container()
         result = await container.ingest_document.execute(resolved_path)
         console.print(f"Ingested {result.document.id}")
         console.print(f"Source: {result.document.source.filename}")
@@ -466,8 +470,8 @@ def list_documents() -> None:
     """List ingested documents."""
 
     async def run() -> None:
-        container = await build_container()
-        documents = await container.repository.list()
+        container = await build_ingest_container()
+        documents = await container.repository.list(limit=500)
         table = Table("ID", "Status", "Filename", "Bytes")
         for document in documents:
             table.add_row(

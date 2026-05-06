@@ -22,7 +22,7 @@ from librarian.application.convert_document import (
     DocumentConverter,
 )
 from librarian.application.export_document import ExportedDocument
-from librarian.application.factory import build_container
+from librarian.application.factory import build_container, build_ingest_container
 from librarian.application.import_library import ImportLibrary, ImportProcessingMode
 from librarian.application.jobs import InProcessJobRunner
 from librarian.config import Settings
@@ -194,7 +194,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/documents", response_model=DocumentResponse)
     async def create_document(file: Annotated[UploadFile, File()]) -> DocumentResponse:
-        container = await build_container(settings)
+        container = await build_ingest_container(settings)
         upload_dir = settings.data_dir / "uploads"
         await asyncio.to_thread(upload_dir.mkdir, parents=True, exist_ok=True)
         destination = upload_dir / _unique_upload_filename(file.filename or "upload.txt")
@@ -220,19 +220,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         limit: Annotated[int, Query(ge=1, le=500)] = 100,
         offset: Annotated[int, Query(ge=0)] = 0,
     ) -> DocumentsResponse:
-        container = await build_container(settings)
-        documents = list(await container.repository.list())
-        page = documents[offset : offset + limit]
+        container = await build_ingest_container(settings)
+        page = await container.repository.list(limit=limit, offset=offset)
+        total = await container.repository.count_documents()
         return DocumentsResponse(
             documents=[_document_response(document) for document in page],
-            total=len(documents),
+            total=total,
             limit=limit,
             offset=offset,
         )
 
     @app.get("/documents/{document_id}", response_model=DocumentResponse)
     async def get_document(document_id: str) -> DocumentResponse:
-        container = await build_container(settings)
+        container = await build_ingest_container(settings)
         document = await container.repository.get_document(DocumentId(document_id))
         if document is None:
             raise HTTPException(status_code=404, detail="Document not found")
@@ -240,7 +240,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.delete("/documents/{document_id}")
     async def delete_document(document_id: str) -> dict[str, str]:
-        container = await build_container(settings)
+        container = await build_ingest_container(settings)
         document = await container.repository.get_document(DocumentId(document_id))
         if document is None:
             raise HTTPException(status_code=404, detail="Document not found")
@@ -260,7 +260,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/documents/{document_id}/content", response_model=ContentResponse)
     async def get_document_content(document_id: str) -> ContentResponse:
-        container = await build_container(settings)
+        container = await build_ingest_container(settings)
         output = await container.repository.get_cleaned_output(DocumentId(document_id))
         if output is None:
             raise HTTPException(status_code=404, detail="Cleaned output not found")
@@ -268,7 +268,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/documents/{document_id}/export")
     async def export_document(document_id: str, format: str = "json"):
-        container = await build_container(settings)
+        container = await build_ingest_container(settings)
         document = await container.repository.get_document(DocumentId(document_id))
         if document is None:
             raise HTTPException(status_code=404, detail="Document not found")
@@ -298,7 +298,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         limit: Annotated[int, Query(ge=1, le=500)] = 100,
         offset: Annotated[int, Query(ge=0)] = 0,
     ) -> RunsResponse:
-        container = await build_container(settings)
+        container = await build_ingest_container(settings)
         runs = await container.repository.list_runs(limit=limit, offset=offset)
         return RunsResponse(
             runs=[_run_response(run) for run in runs],
@@ -308,7 +308,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/runs/{run_id}", response_model=RunResponse)
     async def get_run(run_id: str) -> RunResponse:
-        container = await build_container(settings)
+        container = await build_ingest_container(settings)
         run = await container.repository.get_run(RunId(run_id))
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
@@ -316,7 +316,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/runs/{run_id}/cancel", response_model=RunResponse)
     async def cancel_run(run_id: str) -> RunResponse:
-        container = await build_container(settings)
+        container = await build_ingest_container(settings)
         run = await container.repository.get_run(RunId(run_id))
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
@@ -351,7 +351,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def import_documents(request: ImportRequest) -> ImportResponse:
         if settings.api_import_root is None:
             raise HTTPException(status_code=400, detail="API import root is not configured")
-        container = await build_container(settings)
         try:
             conversion_format = ConversionFormat(request.format)
             output_mode = DirectoryOutputMode(request.output_mode)
@@ -382,10 +381,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=400,
                 detail="queue processing requires LIBRARIAN_JOB_BACKEND=sqlite",
             )
+        container = (
+            await build_ingest_container(settings)
+            if processing_mode == ImportProcessingMode.NONE
+            else await build_container(settings)
+        )
         importer = ImportLibrary(
             converter=DocumentConverter(_build_extractor(settings)),
             ingest=container.ingest_document,
-            process=container.process_document,
+            process=getattr(container, "process_document", None),
             queue_factory=lambda: SQLiteRunQueue(container.database),
         )
         result = await importer.import_directory(
@@ -411,7 +415,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/runs/{run_id}/events")
     async def get_run_events(run_id: str) -> dict[str, list[str]]:
-        container = await build_container(settings)
+        container = await build_ingest_container(settings)
         run = await container.repository.get_run(RunId(run_id))
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
@@ -419,7 +423,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/runs/{run_id}/events/stream")
     async def stream_run_events(run_id: str) -> StreamingResponse:
-        container = await build_container(settings)
+        container = await build_ingest_container(settings)
         run = await container.repository.get_run(RunId(run_id))
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
@@ -430,7 +434,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/search", response_model=SearchResponse)
     async def search(request: SearchRequest) -> SearchResponse:
-        container = await build_container(settings)
+        container = await build_ingest_container(settings)
         try:
             results = await container.repository.search(request.query, limit=request.limit)
         except ValueError as exc:
@@ -642,7 +646,7 @@ def _job_runner(request: Request) -> InProcessJobRunner:
 async def _event_stream(settings: Settings, run_id: RunId) -> AsyncIterator[str]:
     seen = 0
     while True:
-        container = await build_container(settings)
+        container = await build_ingest_container(settings)
         events = list(await container.repository.list_events(run_id))
         for event in events[seen:]:
             yield f"data: {event}\n\n"

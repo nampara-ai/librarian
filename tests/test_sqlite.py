@@ -1,9 +1,11 @@
+import asyncio
+import logging
 from pathlib import Path
 
 import pytest
 
 from librarian.application.factory import build_container
-from librarian.application.jobs import QueueStatus, QueueWorker
+from librarian.application.jobs import InProcessJobRunner, QueueStatus, QueueWorker
 from librarian.config import Settings
 from librarian.domain.ids import RunId
 from librarian.domain.models import RunStage, RunStatus
@@ -90,6 +92,99 @@ async def test_sqlite_run_queue_reclaims_expired_running_lease(tmp_path: Path) -
     assert second.status == QueueStatus.RUNNING
     assert second.attempts == 2
     assert second.locked_by == "second-worker"
+
+
+@pytest.mark.asyncio
+async def test_queue_worker_heartbeat_prevents_active_lease_reclaim(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Horse transcript with notes about active leases.", encoding="utf-8")
+    container = await build_container(settings)
+    ingested = await container.ingest_document.execute(source)
+    run = await container.process_document.start(ingested.document.id)
+    queue = SQLiteRunQueue(container.database)
+    await queue.enqueue(run.id)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_processor(_: RunId) -> object:
+        started.set()
+        await release.wait()
+        return None
+
+    worker = QueueWorker(
+        queue=queue,
+        processor=slow_processor,
+        worker_id="active-worker",
+        lease_seconds=1,
+        heartbeat_interval_seconds=0.05,
+    )
+    task = asyncio.create_task(worker.run_once())
+    await asyncio.wait_for(started.wait(), timeout=1)
+    await asyncio.sleep(1.25)
+
+    assert await queue.claim(worker_id="second-worker", lease_seconds=1) is None
+
+    release.set()
+    assert await asyncio.wait_for(task, timeout=1)
+    rows = await queue.list()
+    assert rows[0].status == QueueStatus.SUCCEEDED
+
+
+@pytest.mark.asyncio
+async def test_queue_completion_requires_current_worker_owner(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Horse transcript with stale worker ownership.", encoding="utf-8")
+    container = await build_container(settings)
+    ingested = await container.ingest_document.execute(source)
+    run = await container.process_document.start(ingested.document.id)
+    queue = SQLiteRunQueue(container.database)
+    await queue.enqueue(run.id)
+    assert await queue.claim(worker_id="first-worker", lease_seconds=60) is not None
+    with container.database.connect() as connection:
+        connection.execute(
+            """
+            UPDATE run_queue
+            SET locked_at = datetime('now', '-120 seconds')
+            WHERE run_id = ?
+            """,
+            (str(run.id),),
+        )
+    assert await queue.claim(worker_id="second-worker", lease_seconds=60) is not None
+
+    await queue.complete(run.id, worker_id="first-worker")
+    rows = await queue.list()
+    assert rows[0].status == QueueStatus.RUNNING
+    assert rows[0].locked_by == "second-worker"
+
+    await queue.complete(run.id, worker_id="second-worker")
+    rows = await queue.list()
+    assert rows[0].status == QueueStatus.SUCCEEDED
+
+
+@pytest.mark.asyncio
+async def test_in_process_runner_logs_background_failures(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def fail_job() -> object:
+        raise RuntimeError("background boom")
+
+    runner = InProcessJobRunner(logger=logging.getLogger("test.librarian.jobs"))
+    run_id = RunId("run_background_failure")
+
+    with caplog.at_level(logging.ERROR, logger="test.librarian.jobs"):
+        await runner.submit(run_id, fail_job)
+        with pytest.raises(RuntimeError, match="background boom"):
+            await runner.wait(run_id)
+
+    assert "in_process_job_failed" in caplog.text
 
 
 @pytest.mark.asyncio

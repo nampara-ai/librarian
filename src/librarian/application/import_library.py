@@ -109,7 +109,7 @@ class ImportLibrary:
 
     converter: DocumentConverter
     ingest: IngestDocument
-    process: ProcessDocument
+    process: ProcessDocument | None
     queue_factory: Callable[[], RunQueue] | None = None
 
     async def import_directory(
@@ -167,7 +167,7 @@ class ImportLibrary:
                         destination,
                         format=format,
                         overwrite=overwrite,
-                        write_sidecar=write_sidecar,
+                        write_sidecar=True,
                     )
                     conversion = BatchConversionItem(
                         source_path=source_path,
@@ -217,6 +217,8 @@ class ImportLibrary:
                     status="ingested",
                 )
             if processing_mode == ImportProcessingMode.PROCESS:
+                if self.process is None:
+                    raise RuntimeError("Processing requires a processing service")
                 run = await self.process.execute(ingested.document.id)
                 return ImportItem(
                     source_path=conversion.source_path,
@@ -225,6 +227,8 @@ class ImportLibrary:
                     run_id=run.id,
                     status="processed",
                 )
+            if self.process is None:
+                raise RuntimeError("Queue processing requires a processing service")
             run = await self.process.start(ingested.document.id)
             if self.queue_factory is None:
                 raise RuntimeError("Queue processing requires a queue adapter")

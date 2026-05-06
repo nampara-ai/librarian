@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+import logging
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Protocol
 
 from librarian.application.process_document import ProcessingCanceled
 from librarian.domain.ids import RunId
 
 JobFactory = Callable[[], Awaitable[object]]
-RunProcessor = Callable[[RunId], Awaitable[object]]
+RunProcessor = Callable[[RunId], Coroutine[Any, Any, object]]
 
 
 class QueueStatus(StrEnum):
@@ -47,7 +48,9 @@ class RunQueue(Protocol):
 
     async def claim(self, *, worker_id: str, lease_seconds: int) -> QueuedRun | None: ...
 
-    async def complete(self, run_id: RunId) -> None: ...
+    async def heartbeat(self, run_id: RunId, *, worker_id: str, lease_seconds: int) -> bool: ...
+
+    async def complete(self, run_id: RunId, *, worker_id: str | None = None) -> None: ...
 
     async def fail(
         self,
@@ -55,6 +58,7 @@ class RunQueue(Protocol):
         *,
         error: str,
         max_attempts: int,
+        worker_id: str | None = None,
     ) -> None: ...
 
     async def cancel(self, run_id: RunId, *, error: str | None = None) -> None: ...
@@ -74,6 +78,9 @@ class InProcessJobRunner:
     _tasks: dict[RunId, asyncio.Task[object]] = field(
         default_factory=lambda: dict[RunId, asyncio.Task[object]]()
     )
+    logger: logging.Logger = field(
+        default_factory=lambda: logging.getLogger("librarian.jobs")
+    )
     _semaphore: asyncio.Semaphore = field(init=False)
 
     def __post_init__(self) -> None:
@@ -81,7 +88,9 @@ class InProcessJobRunner:
 
     async def submit(self, run_id: RunId, factory: JobFactory) -> None:
         """Submit a job for asynchronous execution."""
-        self._tasks[run_id] = asyncio.create_task(self._run(run_id, factory))
+        task = asyncio.create_task(self._run(run_id, factory))
+        task.add_done_callback(lambda finished: self._observe_task(run_id, finished))
+        self._tasks[run_id] = task
 
     async def wait(self, run_id: RunId) -> object | None:
         """Wait for a submitted job to finish."""
@@ -103,8 +112,25 @@ class InProcessJobRunner:
         async with self._semaphore:
             try:
                 return await factory()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.logger.exception(
+                    "in_process_job_failed",
+                    extra={"run_id": str(run_id)},
+                )
+                raise
             finally:
                 self._tasks.pop(run_id, None)
+
+    def _observe_task(self, run_id: RunId, task: asyncio.Task[object]) -> None:
+        if task.cancelled():
+            self.logger.info(
+                "in_process_job_cancelled",
+                extra={"run_id": str(run_id)},
+            )
+            return
+        _ = task.exception()
 
 
 @dataclass(slots=True)
@@ -117,6 +143,7 @@ class QueueWorker:
     lease_seconds: int = 300
     max_attempts: int = 3
     poll_interval_seconds: float = 1.0
+    heartbeat_interval_seconds: float | None = None
     _stopping: bool = False
 
     def stop(self) -> None:
@@ -133,7 +160,7 @@ class QueueWorker:
             return False
 
         try:
-            await self.processor(item.run_id)
+            await self._process_with_heartbeat(item.run_id)
         except ProcessingCanceled as exc:
             await self.queue.cancel(item.run_id, error=str(exc))
             return True
@@ -142,9 +169,10 @@ class QueueWorker:
                 item.run_id,
                 error=str(exc),
                 max_attempts=self.max_attempts,
+                worker_id=self.worker_id,
             )
             return True
-        await self.queue.complete(item.run_id)
+        await self.queue.complete(item.run_id, worker_id=self.worker_id)
         return True
 
     async def run_forever(self) -> None:
@@ -153,3 +181,40 @@ class QueueWorker:
             did_work = await self.run_once()
             if not did_work:
                 await asyncio.sleep(self.poll_interval_seconds)
+
+    async def _process_with_heartbeat(self, run_id: RunId) -> object:
+        task: asyncio.Task[object] = asyncio.create_task(self.processor(run_id))
+        lost_lease = asyncio.Event()
+        heartbeat = asyncio.create_task(self._heartbeat_until_done(run_id, task, lost_lease))
+        try:
+            return await task
+        except asyncio.CancelledError as exc:
+            if lost_lease.is_set():
+                raise RuntimeError(f"Lost queue lease for run {run_id}") from exc
+            raise
+        finally:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
+
+    async def _heartbeat_until_done(
+        self,
+        run_id: RunId,
+        processor_task: asyncio.Task[object],
+        lost_lease: asyncio.Event,
+    ) -> None:
+        interval = self.heartbeat_interval_seconds
+        if interval is None:
+            interval = max(1.0, min(30.0, self.lease_seconds / 3))
+        while not processor_task.done():
+            await asyncio.sleep(interval)
+            if processor_task.done():
+                return
+            renewed = await self.queue.heartbeat(
+                run_id,
+                worker_id=self.worker_id,
+                lease_seconds=self.lease_seconds,
+            )
+            if not renewed:
+                lost_lease.set()
+                processor_task.cancel()
+                return
