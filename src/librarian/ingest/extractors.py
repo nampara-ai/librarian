@@ -120,6 +120,7 @@ class PdfExtractor:
                 dpi=self.ocr_pdf_dpi,
                 max_pages=self.ocr_pdf_max_pages,
             )
+        unrecovered_pages = empty_pages[self.ocr_pdf_max_pages :]
         for page_number in empty_pages[: self.ocr_pdf_max_pages]:
             try:
                 page_outputs[page_number - 1] = _ocr_pdf_page(
@@ -129,10 +130,16 @@ class PdfExtractor:
                     timeout_seconds=self.ocr_timeout_seconds,
                     dpi=self.ocr_pdf_dpi,
                 )
-            except RuntimeError:
-                continue
-            except ValueError:
-                continue
+            except (RuntimeError, ValueError) as exc:
+                raise RuntimeError(
+                    f"Unable to OCR scanned PDF page {page_number}: {exc}"
+                ) from exc
+        if unrecovered_pages:
+            page_list = ", ".join(str(page_number) for page_number in unrecovered_pages)
+            raise ValueError(
+                f"PDF contains scanned pages beyond OCR page limit "
+                f"{self.ocr_pdf_max_pages}: {page_list}"
+            )
         return "\n\n".join(part for part in page_outputs if part and part.strip())
 
 
@@ -407,7 +414,15 @@ def _validate_text_like(path: Path) -> None:
 
 
 def _paragraph_text(paragraph: Any) -> str:
-    return str(getattr(paragraph, "text", "")).strip()
+    text = str(getattr(paragraph, "text", "")).strip()
+    if not text:
+        return ""
+    style_name = str(getattr(getattr(paragraph, "style", None), "name", "")).lower()
+    if "list bullet" in style_name:
+        return f"- {text}"
+    if "list number" in style_name:
+        return f"1. {text}"
+    return text
 
 
 def _table_text(table: Any) -> str:

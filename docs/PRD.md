@@ -241,8 +241,8 @@ Run stages:
 - `chunk`
 - `clean`
 - `validate`
-- `classify`
 - `assemble`
+- `classify`
 - `index`
 - `complete`
 

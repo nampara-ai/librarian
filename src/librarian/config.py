@@ -8,6 +8,8 @@ from typing import Literal, Self
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+CoherenceModeSetting = Literal["fast", "balanced", "max-coherence"]
+
 
 class Settings(BaseSettings):
     """Librarian settings loaded from env and optional .env files."""
@@ -34,7 +36,7 @@ class Settings(BaseSettings):
     cleaning_prompt_version: str = Field(default="cmos_v1")
     classification_prompt_version: str = Field(default="dewey_v1")
     cleaning_mode: str = Field(default="standard")
-    coherence_mode: str = Field(default="balanced")
+    coherence_mode: CoherenceModeSetting = Field(default="balanced")
 
     chunk_target_chars: int = Field(default=12_000, gt=0)
     chunk_overlap_chars: int = Field(default=800, ge=0)

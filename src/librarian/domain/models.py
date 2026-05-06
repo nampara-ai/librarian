@@ -46,8 +46,8 @@ class RunStage(StrEnum):
     CHUNK = "chunk"
     CLEAN = "clean"
     VALIDATE = "validate"
-    CLASSIFY = "classify"
     ASSEMBLE = "assemble"
+    CLASSIFY = "classify"
     INDEX = "index"
     COMPLETE = "complete"
 

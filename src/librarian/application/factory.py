@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import cast
 
 from librarian.application.classify_document import ClassifyDocument
-from librarian.application.clean_chunks import CleanChunks, CoherenceMode
+from librarian.application.clean_chunks import CleanChunks
 from librarian.application.ingest_document import IngestDocument
 from librarian.application.ports import LLMProvider
 from librarian.application.process_document import ProcessDocument
@@ -79,7 +78,7 @@ async def build_container(settings: Settings | None = None) -> ApplicationContai
         prompt_catalog=PromptCatalog(),
         prompt_version=resolved_settings.cleaning_prompt_version,
         model=resolved_settings.llm_model,
-        coherence_mode=cast(CoherenceMode, resolved_settings.coherence_mode),
+        coherence_mode=resolved_settings.coherence_mode,
         max_parallel_chunks=resolved_settings.llm_max_concurrency,
     )
     taxonomy = DeweyTaxonomy()

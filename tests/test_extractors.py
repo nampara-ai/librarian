@@ -137,6 +137,22 @@ async def test_docx_extractor_reads_tables_headers_and_footers(tmp_path: Path) -
     assert "Footer text" in text
 
 
+@pytest.mark.asyncio
+async def test_docx_extractor_preserves_list_markers(tmp_path: Path) -> None:
+    from docx import Document
+
+    path = tmp_path / "fixture.docx"
+    document = Document()
+    document.add_paragraph("Bullet item", style="List Bullet")
+    document.add_paragraph("Numbered item", style="List Number")
+    document.save(str(path))
+
+    text = await CompositeExtractor().extract(path)
+
+    assert "- Bullet item" in text
+    assert "1. Numbered item" in text
+
+
 @pytest.mark.skipif(shutil.which("tesseract") is None, reason="tesseract not installed")
 @pytest.mark.asyncio
 async def test_image_ocr_extractor_reads_fixture(tmp_path: Path) -> None:
@@ -283,3 +299,95 @@ async def test_pdf_extractor_ocr_handles_mixed_text_and_scanned_pages(
     text = await PdfExtractor().extract(path)
 
     assert text == "Text page 1\n\nOCR page 2\n\nText page 3"
+
+
+@pytest.mark.asyncio
+async def test_pdf_extractor_fails_when_mixed_page_ocr_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "fixture.pdf"
+    path.write_bytes(b"%PDF")
+
+    class FakePage:
+        def __init__(self, text: str | None) -> None:
+            self._text = text
+
+        def extract_text(self) -> str | None:
+            return self._text
+
+    class FakePdf:
+        pages = [FakePage("Text page"), FakePage(None)]
+
+        def __enter__(self) -> "FakePdf":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(path: Path) -> FakePdf:
+            del path
+            return FakePdf()
+
+    def fake_import_module(name: str) -> object:
+        if name == "pdfplumber":
+            return FakePdfPlumber
+        return __import__(name)
+
+    def fake_ocr_pdf_page(*args: object, **kwargs: object) -> str:
+        del args, kwargs
+        raise RuntimeError("missing tesseract")
+
+    monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", fake_ocr_pdf_page)
+
+    with pytest.raises(RuntimeError, match="Unable to OCR scanned PDF page 2"):
+        await PdfExtractor().extract(path)
+
+
+@pytest.mark.asyncio
+async def test_pdf_extractor_fails_when_scanned_pages_exceed_ocr_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "fixture.pdf"
+    path.write_bytes(b"%PDF")
+
+    class FakePage:
+        def __init__(self, text: str | None) -> None:
+            self._text = text
+
+        def extract_text(self) -> str | None:
+            return self._text
+
+    class FakePdf:
+        pages = [FakePage("Text page"), FakePage(None), FakePage(None)]
+
+        def __enter__(self) -> "FakePdf":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(path: Path) -> FakePdf:
+            del path
+            return FakePdf()
+
+    def fake_import_module(name: str) -> object:
+        if name == "pdfplumber":
+            return FakePdfPlumber
+        return __import__(name)
+
+    def fake_ocr_pdf_page(*args: object, **kwargs: object) -> str:
+        del args, kwargs
+        return "OCR page 2"
+
+    monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", fake_ocr_pdf_page)
+
+    with pytest.raises(ValueError, match="beyond OCR page limit 1: 3"):
+        await PdfExtractor(ocr_pdf_max_pages=1).extract(path)
