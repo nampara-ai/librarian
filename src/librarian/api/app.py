@@ -339,6 +339,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/imports", response_model=ImportResponse)
     async def import_documents(request: ImportRequest) -> ImportResponse:
+        if settings.api_import_root is None:
+            raise HTTPException(status_code=400, detail="API import root is not configured")
         container = await build_container(settings)
         try:
             conversion_format = ConversionFormat(request.format)
@@ -456,7 +458,7 @@ def _validate_api_security(settings: Settings) -> None:
 def _resolve_api_path(path: Path, *, settings: Settings) -> Path:
     resolved = path.expanduser().resolve()
     if settings.api_import_root is None:
-        return resolved
+        raise HTTPException(status_code=400, detail="API import root is not configured")
     root = settings.api_import_root.expanduser().resolve()
     try:
         resolved.relative_to(root)
