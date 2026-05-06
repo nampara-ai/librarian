@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 from pathlib import Path
 from time import sleep
 
@@ -246,6 +247,65 @@ def test_api_delete_removes_raw_blob_and_owned_upload(tmp_path: Path) -> None:
     assert not list((tmp_path / ".librarian" / "uploads").glob("*/notes.txt"))
 
 
+def test_api_delete_removes_cleaned_chunk_cache_text(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    with TestClient(create_app(settings)) as client:
+        upload = client.post(
+            "/documents",
+            files={"file": ("notes.txt", b"Horse private cache deletion text.", "text/plain")},
+        )
+        assert upload.status_code == 200
+        document_id = upload.json()["id"]
+        run = client.post("/runs", json={"document_id": document_id})
+        assert run.status_code == 200
+        assert _wait_for_run(client, run.json()["id"]).json()["status"] == "succeeded"
+
+        deleted = client.delete(f"/documents/{document_id}")
+
+    assert deleted.status_code == 200
+    with sqlite3.connect(settings.database_path) as connection:
+        remaining = connection.execute("SELECT text FROM cleaned_chunk_cache").fetchall()
+    assert remaining == []
+
+
+def test_api_duplicate_upload_preserves_ready_status_and_removes_duplicate_file(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    with TestClient(create_app(settings)) as client:
+        first = client.post(
+            "/documents",
+            files={"file": ("same.txt", b"Horse duplicate stable text.", "text/plain")},
+        )
+        assert first.status_code == 200
+        document_id = first.json()["id"]
+        run = client.post("/runs", json={"document_id": document_id})
+        assert _wait_for_run(client, run.json()["id"]).json()["status"] == "succeeded"
+
+        second = client.post(
+            "/documents",
+            files={"file": ("same.txt", b"Horse duplicate stable text.", "text/plain")},
+        )
+        after_duplicate = client.get(f"/documents/{document_id}")
+        deleted = client.delete(f"/documents/{document_id}")
+
+    assert second.status_code == 200
+    assert second.json()["status"] == "ready"
+    assert after_duplicate.json()["status"] == "ready"
+    assert deleted.status_code == 200
+    assert not list((tmp_path / ".librarian" / "uploads").glob("*/same.txt"))
+
+
 def test_api_document_pagination(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",
@@ -317,6 +377,7 @@ def test_api_import_endpoint_and_run_controls(tmp_path: Path) -> None:
         data_dir=tmp_path / ".librarian",
         database_path=tmp_path / ".librarian" / "librarian.sqlite",
         api_import_root=tmp_path,
+        job_backend="sqlite",
     )
     with TestClient(create_app(settings)) as client:
         imported = client.post(
@@ -415,6 +476,40 @@ def test_api_import_new_directory_requires_output_dir(tmp_path: Path) -> None:
     assert "output_dir" in response.json()["detail"]
 
 
+def test_api_import_rejects_new_directory_at_or_above_source(tmp_path: Path) -> None:
+    source_dir = tmp_path / "input"
+    source_dir.mkdir()
+    (source_dir / "notes.txt").write_text("Horse import transcript", encoding="utf-8")
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_import_root=tmp_path,
+    )
+    with TestClient(create_app(settings)) as client:
+        same_dir = client.post(
+            "/imports",
+            json={
+                "source_dir": str(source_dir),
+                "output_mode": "new-directory",
+                "output_dir": str(source_dir),
+                "processing_mode": "none",
+            },
+        )
+        ancestor = client.post(
+            "/imports",
+            json={
+                "source_dir": str(source_dir),
+                "output_mode": "new-directory",
+                "output_dir": str(tmp_path),
+                "processing_mode": "none",
+            },
+        )
+
+    assert same_dir.status_code == 400
+    assert ancestor.status_code == 400
+    assert "ancestor" in ancestor.json()["detail"]
+
+
 def test_api_import_rejects_missing_or_non_directory_source(tmp_path: Path) -> None:
     import_root = tmp_path / "imports"
     import_root.mkdir()
@@ -462,6 +557,19 @@ def test_api_search_rejects_out_of_range_limits(tmp_path: Path) -> None:
 
     assert negative.status_code == 422
     assert huge.status_code == 422
+
+
+def test_api_run_events_return_404_for_missing_run(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    with TestClient(create_app(settings)) as client:
+        events = client.get("/runs/run_missing/events")
+        stream = client.get("/runs/run_missing/events/stream")
+
+    assert events.status_code == 404
+    assert stream.status_code == 404
 
 
 def _wait_for_run(client: TestClient, run_id: str):

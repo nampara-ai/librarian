@@ -11,6 +11,7 @@ from librarian.ingest.extractors import (
     CompositeExtractor,
     ImageOcrExtractor,
     MarkItDownExtractor,
+    PdfExtractor,
     TextFamilyExtractor,
 )
 
@@ -135,3 +136,63 @@ async def test_image_ocr_extractor_passes_timeout(
 
     assert text == "OCR text"
     assert captured_kwargs["timeout"] == 7
+
+
+@pytest.mark.asyncio
+async def test_pdf_ocr_passes_timeout_to_rasterizer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "fixture.pdf"
+    path.write_bytes(b"%PDF")
+    captured_kwargs: dict[str, Any] = {}
+
+    class FakePdf2Image:
+        @staticmethod
+        def convert_from_path(*args: Any, **kwargs: Any) -> list[Path]:
+            del args
+            captured_kwargs.update(kwargs)
+            return [tmp_path / "page.png"]
+
+    class FakePage:
+        @staticmethod
+        def extract_text() -> None:
+            return None
+
+    class FakePdf:
+        pages = [FakePage()]
+
+        def __enter__(self) -> "FakePdf":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(path: Path) -> FakePdf:
+            del path
+            return FakePdf()
+
+    def fake_import_module(name: str) -> object:
+        if name == "pdfplumber":
+            return FakePdfPlumber
+        if name == "pdf2image":
+            return FakePdf2Image
+        return __import__(name)
+
+    def fake_which(name: str) -> str:
+        return f"/usr/bin/{name}"
+
+    def fake_ocr_image(*args: object, **kwargs: object) -> str:
+        del args, kwargs
+        return "OCR text"
+
+    monkeypatch.setattr(shutil, "which", fake_which)
+    monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr("librarian.ingest.extractors._ocr_image", fake_ocr_image)
+
+    text = await PdfExtractor(ocr_timeout_seconds=9).extract(path)
+
+    assert text == "OCR text"
+    assert captured_kwargs["timeout"] == 9

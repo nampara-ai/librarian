@@ -204,6 +204,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception as exc:
             await _cleanup_upload(destination)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if ingested.duplicate:
+            await _cleanup_upload(destination)
         return _document_response(ingested.document)
 
     @app.get("/metrics")
@@ -370,6 +372,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=400,
                 detail="output_dir is required when output_mode is new-directory",
             )
+        _validate_conversion_output_dir(
+            source_dir=source_dir,
+            output_mode=output_mode,
+            output_dir=output_dir,
+        )
         if processing_mode == ImportProcessingMode.QUEUE and settings.job_backend != "sqlite":
             raise HTTPException(
                 status_code=400,
@@ -405,10 +412,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/runs/{run_id}/events")
     async def get_run_events(run_id: str) -> dict[str, list[str]]:
         container = await build_container(settings)
-        return {"events": list(await container.repository.list_events(RunId(run_id)))}
+        run = await container.repository.get_run(RunId(run_id))
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        return {"events": list(await container.repository.list_events(run.id))}
 
     @app.get("/runs/{run_id}/events/stream")
     async def stream_run_events(run_id: str) -> StreamingResponse:
+        container = await build_container(settings)
+        run = await container.repository.get_run(RunId(run_id))
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
         return StreamingResponse(
             _event_stream(settings, RunId(run_id)),
             media_type="text/event-stream",
@@ -544,6 +558,24 @@ def _validate_subdirectory_name(name: str) -> None:
             status_code=400,
             detail="subdirectory_name must be a relative safe path",
         )
+
+
+def _validate_conversion_output_dir(
+    *,
+    source_dir: Path,
+    output_mode: DirectoryOutputMode,
+    output_dir: Path | None,
+) -> None:
+    if output_mode != DirectoryOutputMode.NEW_DIRECTORY or output_dir is None:
+        return
+    try:
+        source_dir.relative_to(output_dir)
+    except ValueError:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail="output_dir must not be source_dir or an ancestor of source_dir",
+    )
 
 
 def _build_extractor(settings: Settings) -> CompositeExtractor:

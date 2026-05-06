@@ -316,6 +316,15 @@ class SQLiteRepository:
                 "DELETE FROM content_blobs WHERE key = ?",
                 (f"raw:{document_id}",),
             )
+            connection.execute(
+                """
+                DELETE FROM cleaned_chunk_cache
+                WHERE chunk_sha256 IN (
+                  SELECT sha256 FROM chunks WHERE document_id = ?
+                )
+                """,
+                (str(document_id),),
+            )
             connection.execute("DELETE FROM documents WHERE id = ?", (str(document_id),))
 
     def _save_run_sync(self, run: ProcessingRun) -> None:

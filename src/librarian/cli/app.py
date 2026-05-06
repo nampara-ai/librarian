@@ -21,6 +21,7 @@ from librarian.application.convert_document import (
     ConversionFormat,
     DirectoryOutputMode,
     DocumentConverter,
+    validate_directory_output,
 )
 from librarian.application.eval import eval_result_json, load_eval_suite, run_eval_suite
 from librarian.application.export_document import ExportedDocument, ExportFormat
@@ -168,6 +169,11 @@ def convert_dir(
     """Batch convert supported files in a directory."""
     conversion_format = _conversion_format(format)
     mode = _directory_output_mode(output_mode)
+    _validate_cli_directory_output(
+        path.resolve(),
+        mode,
+        output_dir.resolve() if output_dir else None,
+    )
 
     async def run() -> None:
         settings = Settings()
@@ -239,6 +245,11 @@ def import_directory(
         raise typer.BadParameter("Choose only one of --process or --queue")
     conversion_format = _conversion_format(format)
     mode = _directory_output_mode(output_mode)
+    _validate_cli_directory_output(
+        path.resolve(),
+        mode,
+        output_dir.resolve() if output_dir else None,
+    )
     processing_mode = ImportProcessingMode.NONE
     if process:
         processing_mode = ImportProcessingMode.PROCESS
@@ -656,6 +667,21 @@ def _directory_output_mode(value: str) -> DirectoryOutputMode:
         raise typer.BadParameter(
             "output-mode must be one of: new-directory, original, subdirectory"
         ) from exc
+
+
+def _validate_cli_directory_output(
+    source_dir: Path,
+    output_mode: DirectoryOutputMode,
+    output_dir: Path | None,
+) -> None:
+    try:
+        validate_directory_output(
+            source_dir=source_dir,
+            output_mode=output_mode,
+            output_dir=output_dir,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 
 def _build_extractor(settings: Settings) -> CompositeExtractor:

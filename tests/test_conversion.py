@@ -80,6 +80,31 @@ async def test_recursive_convert_directory_skips_own_output_subdirectory(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_new_directory_rejects_source_or_ancestor_output_dir(tmp_path: Path) -> None:
+    source_dir = tmp_path / "input"
+    source_dir.mkdir()
+    (source_dir / "a.txt").write_text("Alpha", encoding="utf-8")
+    converter = DocumentConverter(CompositeExtractor())
+
+    with pytest.raises(ValueError, match="ancestor"):
+        await converter.convert_directory(
+            source_dir,
+            format=ConversionFormat.MARKDOWN,
+            output_mode=DirectoryOutputMode.NEW_DIRECTORY,
+            output_dir=tmp_path,
+            recursive=True,
+        )
+    with pytest.raises(ValueError, match="ancestor"):
+        await converter.convert_directory(
+            source_dir,
+            format=ConversionFormat.MARKDOWN,
+            output_mode=DirectoryOutputMode.NEW_DIRECTORY,
+            output_dir=source_dir,
+            recursive=True,
+        )
+
+
+@pytest.mark.asyncio
 async def test_convert_directory_avoids_output_collisions_and_writes_sidecars(
     tmp_path: Path,
 ) -> None:

@@ -260,6 +260,7 @@ def _ocr_pdf(
                 output_folder=tmp_dir,
                 fmt="png",
                 paths_only=True,
+                timeout=timeout_seconds,
             ),
         )
         parts = [

@@ -20,6 +20,7 @@ from librarian.application.convert_document import (
     conversion_output_path,
     discover_supported_files,
     unique_output_path,
+    validate_directory_output,
 )
 from librarian.application.ingest_document import IngestDocument
 from librarian.application.jobs import RunQueue
@@ -127,6 +128,11 @@ class ImportLibrary:
         write_sidecar: bool = False,
     ) -> ImportResult:
         """Run the full import workflow for a directory."""
+        validate_directory_output(
+            source_dir=source_dir,
+            output_mode=output_mode,
+            output_dir=output_dir,
+        )
         manifest = await _load_manifest(manifest_path) if resume else {}
         files = discover_supported_files(
             source_dir,

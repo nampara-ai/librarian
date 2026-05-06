@@ -154,6 +154,11 @@ class DocumentConverter:
         write_sidecar: bool = False,
     ) -> BatchConversionResult:
         """Convert supported files in a directory."""
+        validate_directory_output(
+            source_dir=source_dir,
+            output_mode=output_mode,
+            output_dir=output_dir,
+        )
         files = discover_supported_files(
             source_dir,
             supported_extensions=self.extractor.supported_extensions,
@@ -241,6 +246,24 @@ def conversion_output_exclusions(
     if output_mode == DirectoryOutputMode.NEW_DIRECTORY and output_dir is not None:
         return (output_dir,)
     return ()
+
+
+def validate_directory_output(
+    *,
+    source_dir: Path,
+    output_mode: DirectoryOutputMode,
+    output_dir: Path | None,
+) -> None:
+    """Validate directory conversion output placement."""
+    if output_mode != DirectoryOutputMode.NEW_DIRECTORY:
+        return
+    if output_dir is None:
+        raise ValueError("--output-dir is required for new-directory mode")
+    try:
+        source_dir.resolve().relative_to(output_dir.resolve())
+    except ValueError:
+        return
+    raise ValueError("output_dir must not be source_dir or an ancestor of source_dir")
 
 
 def _is_under_any(path: Path, roots: tuple[Path, ...]) -> bool:

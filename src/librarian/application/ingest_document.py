@@ -18,6 +18,7 @@ class IngestedDocument:
 
     document: Document
     raw_text: str
+    duplicate: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +33,15 @@ class IngestDocument:
         source_path, payload = await _read_source(path)
         digest = hashlib.sha256(payload).hexdigest()
         document_id = DocumentId(f"doc_{digest[:16]}")
+        existing = await self.documents.get_document(document_id)
+        if existing is not None and existing.source.sha256 == digest:
+            try:
+                raw_text = await self.content.get_text(raw_text_key(document_id))
+            except KeyError:
+                raw_text = await self.extractor.extract(source_path)
+                await self.content.put_text(raw_text_key(document_id), raw_text)
+            return IngestedDocument(document=existing, raw_text=raw_text, duplicate=True)
+
         media_type = mimetypes.guess_type(source_path.name)[0] or "application/octet-stream"
         document = Document(
             id=document_id,
