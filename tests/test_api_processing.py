@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from time import sleep
 
@@ -6,8 +7,10 @@ from fastapi.testclient import TestClient
 
 from librarian.api.app import create_app
 from librarian.application.factory import build_container
+from librarian.application.ingest_document import raw_text_key
 from librarian.application.jobs import QueueWorker
 from librarian.config import Settings
+from librarian.domain.ids import DocumentId
 from librarian.storage.sqlite import SQLiteDatabase, SQLiteRunQueue
 
 
@@ -201,6 +204,48 @@ def test_api_upload_rejects_unsupported_file_and_cleans_upload(tmp_path: Path) -
     assert not list((tmp_path / ".librarian" / "uploads").glob("*"))
 
 
+def test_api_config_exposes_operational_controls(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_max_upload_bytes=1234,
+        ocr_language="eng",
+        universal_timeout_seconds=77,
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.get("/config")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["api_max_upload_bytes"] == 1234
+    assert payload["ocr_language"] == "eng"
+    assert payload["universal_timeout_seconds"] == 77
+    assert payload["llm_max_retries"] == settings.llm_max_retries
+
+
+def test_api_delete_removes_raw_blob_and_owned_upload(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    with TestClient(create_app(settings)) as client:
+        upload = client.post(
+            "/documents",
+            files={"file": ("notes.txt", b"Horse private source text", "text/plain")},
+        )
+        assert upload.status_code == 200
+        document_id = upload.json()["id"]
+        assert list((tmp_path / ".librarian" / "uploads").glob("*/notes.txt"))
+
+        deleted = client.delete(f"/documents/{document_id}")
+
+    assert deleted.status_code == 200
+    container = asyncio.run(build_container(settings))
+    with pytest.raises(KeyError):
+        asyncio.run(container.repository.get_text(raw_text_key(DocumentId(document_id))))
+    assert not list((tmp_path / ".librarian" / "uploads").glob("*/notes.txt"))
+
+
 def test_api_document_pagination(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",
@@ -268,6 +313,7 @@ def test_api_import_endpoint_and_run_controls(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",
         database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_import_root=tmp_path,
     )
     with TestClient(create_app(settings)) as client:
         imported = client.post(

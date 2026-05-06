@@ -243,6 +243,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if document is None:
             raise HTTPException(status_code=404, detail="Document not found")
         await container.repository.delete_document(DocumentId(document_id))
+        await _cleanup_owned_upload(settings, document.source.path)
         return {"status": "deleted", "document_id": document_id}
 
     @app.post("/documents/{document_id}/reprocess", response_model=RunResponse)
@@ -410,16 +411,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return SearchResponse(document_ids=[str(document_id) for document_id in results])
 
     @app.get("/config")
-    async def config() -> dict[str, str | int | None]:
+    async def config() -> dict[str, str | int | float | bool | None]:
         return {
             "data_dir": str(settings.data_dir),
             "llm_provider": settings.llm_provider,
             "llm_model": settings.llm_model,
+            "llm_base_url": settings.llm_base_url,
+            "llm_api_key_env": settings.llm_api_key_env,
+            "llm_timeout_seconds": settings.llm_timeout_seconds,
+            "llm_max_concurrency": settings.llm_max_concurrency,
+            "llm_max_retries": settings.llm_max_retries,
+            "llm_retry_base_delay_seconds": settings.llm_retry_base_delay_seconds,
+            "llm_retry_max_delay_seconds": settings.llm_retry_max_delay_seconds,
             "job_backend": settings.job_backend,
+            "job_max_concurrency": settings.job_max_concurrency,
+            "job_worker_id": settings.job_worker_id,
+            "job_lease_seconds": settings.job_lease_seconds,
+            "job_max_attempts": settings.job_max_attempts,
             "api_import_root": str(settings.api_import_root) if settings.api_import_root else None,
+            "api_max_upload_bytes": settings.api_max_upload_bytes,
             "coherence_mode": settings.coherence_mode,
             "chunk_target_chars": settings.chunk_target_chars,
             "chunk_overlap_chars": settings.chunk_overlap_chars,
+            "ocr_language": settings.ocr_language,
+            "ocr_timeout_seconds": settings.ocr_timeout_seconds,
+            "ocr_pdf_dpi": settings.ocr_pdf_dpi,
+            "ocr_pdf_max_pages": settings.ocr_pdf_max_pages,
+            "universal_max_input_bytes": settings.universal_max_input_bytes,
+            "universal_timeout_seconds": settings.universal_timeout_seconds,
+            "log_level": settings.log_level,
+            "log_format": settings.log_format,
+            "metrics_enabled": settings.metrics_enabled,
         }
 
     return app
@@ -482,6 +504,23 @@ async def _cleanup_upload(destination: Path) -> None:
         await asyncio.to_thread(destination.parent.rmdir)
     except OSError:
         pass
+
+
+async def _cleanup_owned_upload(settings: Settings, path: Path) -> None:
+    upload_root = await asyncio.to_thread(_resolve_path, settings.data_dir / "uploads")
+    try:
+        resolved = await asyncio.to_thread(_resolve_path, path)
+    except OSError:
+        return
+    try:
+        resolved.relative_to(upload_root)
+    except ValueError:
+        return
+    await _cleanup_upload(resolved)
+
+
+def _resolve_path(path: Path) -> Path:
+    return path.expanduser().resolve()
 
 
 def _validate_subdirectory_name(name: str) -> None:

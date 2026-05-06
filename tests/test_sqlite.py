@@ -161,3 +161,22 @@ async def test_canceled_queue_row_is_not_completed_or_retried(tmp_path: Path) ->
     rows = await queue.list()
     assert rows[0].status == QueueStatus.CANCELED
     assert rows[0].last_error == "canceled by user"
+
+
+@pytest.mark.asyncio
+async def test_sqlite_rejects_unbounded_limits(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    container = await build_container(settings)
+    queue = SQLiteRunQueue(container.database)
+
+    with pytest.raises(ValueError, match="limit"):
+        await container.repository.search("horse", limit=-1)
+    with pytest.raises(ValueError, match="limit"):
+        await container.repository.list_runs(limit=0)
+    with pytest.raises(ValueError, match="offset"):
+        await container.repository.list_runs(offset=-1)
+    with pytest.raises(ValueError, match="limit"):
+        await queue.list(limit=10_000)

@@ -2,7 +2,9 @@ from pathlib import Path
 
 import pytest
 
+from librarian.application.classify_document import ClassifyDocument
 from librarian.application.factory import build_container
+from librarian.application.process_document import ProcessDocument
 from librarian.config import Settings
 from librarian.domain.ids import RunId
 from librarian.domain.models import DocumentStatus, RunStage, RunStatus
@@ -133,6 +135,88 @@ async def test_running_run_observes_cancellation_without_succeeding(
     assert latest.status == RunStatus.CANCELED
     assert document.status == DocumentStatus.INGESTED
     assert output is None
+
+
+@pytest.mark.asyncio
+async def test_canceled_run_does_not_publish_classification_or_search(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Horse transcript with uniquecancelterm.", encoding="utf-8")
+    container = await build_container(settings)
+    ingested = await container.ingest_document.execute(source)
+    run = await container.process_document.start(ingested.document.id)
+
+    class CancelingProvider:
+        name = container.process_document.classifier.provider.name
+
+        def __init__(self) -> None:
+            self._provider = container.process_document.classifier.provider
+
+        async def complete(
+            self,
+            *,
+            system_prompt: str,
+            user_prompt: str,
+            model: str,
+            max_tokens: int,
+            temperature: float,
+        ) -> str:
+            response = await self._provider.complete(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            await container.repository.update_status(
+                run.id,
+                status=RunStatus.CANCELED,
+                stage=RunStage.COMPLETE,
+                error="canceled by user",
+            )
+            return response
+
+    classifier = container.process_document.classifier
+    canceling_classifier = ClassifyDocument(
+        provider=CancelingProvider(),
+        prompt_catalog=classifier.prompt_catalog,
+        prompt_version=classifier.prompt_version,
+        model=classifier.model,
+        taxonomy=classifier.taxonomy,
+    )
+
+    process = ProcessDocument(
+        documents=container.repository,
+        runs=container.repository,
+        chunks=container.repository,
+        content=container.repository,
+        outputs=container.repository,
+        search=container.repository,
+        events=container.repository,
+        cleaner=container.process_document.cleaner,
+        classifier=canceling_classifier,
+        chunking_policy=container.process_document.chunking_policy,
+    )
+
+    with pytest.raises(RuntimeError, match="Run canceled"):
+        await process.execute_existing(run.id)
+
+    latest = await container.repository.get_run(run.id)
+    output = await container.repository.get_cleaned_output(ingested.document.id)
+    classification = await container.repository.get_classification(ingested.document.id)
+    results = await container.repository.search("uniquecancelterm")
+    assert latest is not None
+    assert latest.status == RunStatus.CANCELED
+    assert output is None
+    assert classification is None
+    assert ingested.document.id not in results
 
 
 @pytest.mark.asyncio

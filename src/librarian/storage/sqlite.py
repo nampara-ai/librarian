@@ -312,6 +312,10 @@ class SQLiteRepository:
                 "DELETE FROM cleaned_outputs_fts WHERE document_id = ?",
                 (str(document_id),),
             )
+            connection.execute(
+                "DELETE FROM content_blobs WHERE key = ?",
+                (f"raw:{document_id}",),
+            )
             connection.execute("DELETE FROM documents WHERE id = ?", (str(document_id),))
 
     def _save_run_sync(self, run: ProcessingRun) -> None:
@@ -361,6 +365,10 @@ class SQLiteRepository:
         return row is not None
 
     def _list_runs_sync(self, limit: int, offset: int) -> list[ProcessingRun]:
+        if limit < 1 or limit > 500:
+            raise ValueError("limit must be between 1 and 500")
+        if offset < 0:
+            raise ValueError("offset must be greater than or equal to 0")
         with self.database.connect() as connection:
             rows = connection.execute(
                 """
@@ -386,7 +394,10 @@ class SQLiteRepository:
                 UPDATE runs
                 SET status = ?, stage = ?, error = ?, updated_at = ?
                 WHERE id = ?
-                  AND (? = 'canceled' OR status != 'canceled')
+                  AND (
+                    status NOT IN ('canceled', 'succeeded')
+                    OR (status = 'canceled' AND ? = 'canceled')
+                  )
                 """,
                 (
                     status.value,
@@ -675,16 +686,20 @@ class SQLiteRepository:
             )
 
     def _search_sync(self, query: str, limit: int) -> list[DocumentId]:
+        if limit < 1 or limit > 500:
+            raise ValueError("limit must be between 1 and 500")
         with self.database.connect() as connection:
             try:
                 rows = connection.execute(
                     """
-                    SELECT document_id
+                    SELECT DISTINCT cleaned_outputs_fts.document_id
                     FROM cleaned_outputs_fts
+                    JOIN runs ON runs.id = cleaned_outputs_fts.run_id
                     WHERE cleaned_outputs_fts MATCH ?
+                      AND runs.status = ?
                     LIMIT ?
                     """,
-                    (query, limit),
+                    (query, RunStatus.SUCCEEDED.value, limit),
                 ).fetchall()
             except sqlite3.OperationalError as exc:
                 raise ValueError("Invalid search query") from exc
@@ -877,6 +892,8 @@ class SQLiteRunQueue:
             )
 
     def _list_sync(self, limit: int) -> tuple[QueuedRun, ...]:
+        if limit < 1 or limit > 500:
+            raise ValueError("limit must be between 1 and 500")
         with self.database.connect() as connection:
             rows = connection.execute(
                 """

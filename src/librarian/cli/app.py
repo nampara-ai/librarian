@@ -292,8 +292,8 @@ def import_directory(
 
 @app.command("runs")
 def list_runs(
-    limit: Annotated[int, typer.Option(help="Maximum runs.")] = 100,
-    offset: Annotated[int, typer.Option(help="Runs to skip.")] = 0,
+    limit: Annotated[int, typer.Option(help="Maximum runs.", min=1, max=500)] = 100,
+    offset: Annotated[int, typer.Option(help="Runs to skip.", min=0)] = 0,
 ) -> None:
     """List processing runs."""
 
@@ -366,7 +366,7 @@ def retry_run(
 
 @app.command("queue")
 def inspect_queue(
-    limit: Annotated[int, typer.Option(help="Maximum queue rows.")] = 100,
+    limit: Annotated[int, typer.Option(help="Maximum queue rows.", min=1, max=500)] = 100,
 ) -> None:
     """List durable queue items."""
 
@@ -513,7 +513,7 @@ def status(
 @app.command()
 def search(
     query: Annotated[str, typer.Argument(help="Search query.")],
-    limit: Annotated[int, typer.Option(help="Maximum results.")] = 20,
+    limit: Annotated[int, typer.Option(help="Maximum results.", min=1, max=500)] = 20,
 ) -> None:
     """Search cleaned outputs."""
 
