@@ -29,12 +29,18 @@ docker build -t librarian-release-check .
 8. Tag and push:
 
 ```bash
-git tag v0.1.0a2
-git push origin v0.1.0a2
+git tag v0.1.0a3
+git push origin v0.1.0a3
 ```
 
 The release workflow builds source and wheel distributions, generates an SBOM, publishes a Docker
 image to GitHub Container Registry, and creates a GitHub release.
+
+For alpha users downloading artifacts directly from GitHub Releases, install the wheel with:
+
+```bash
+pip install "nampara_librarian-0.1.0a3-py3-none-any.whl[all]"
+```
 
 The Docker image binds to `0.0.0.0` by default and intentionally refuses to start unless
 `LIBRARIAN_API_KEY` and `LIBRARIAN_API_IMPORT_ROOT` are set. Use `docker compose` for the default

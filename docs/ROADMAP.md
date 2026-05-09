@@ -1,10 +1,12 @@
 # Roadmap
 
-## v0.1.0a2
+## v0.1.0a3
 
 - Local CLI and FastAPI service.
 - Universal conversion to Markdown/plain text.
 - Tesseract OCR for images and scanned PDFs.
+- Page-aware PDF extraction with 1,000-page OCR defaults.
+- Upgraded v2 cleaning/classification prompt stack.
 - Batch import with manifest/resume and JSON reports.
 - SQLite-backed persistence and worker queue.
 - Docker Compose deployment.

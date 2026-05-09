@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+No unreleased changes.
+
+## 0.1.0a3 - 2026-05-09
+
 - Added configurable 1,000-page PDF/OCR defaults, page-aware Markdown output documentation, and
   large-PDF smoke-test guidance.
 - Fixed direct PDF extractor defaults to match runtime settings.

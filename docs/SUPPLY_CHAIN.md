@@ -4,8 +4,7 @@ Current release safeguards:
 
 - GitHub Actions CI runs lint, tests, type checking, and Docker build.
 - Dependabot monitors Python and GitHub Actions dependencies.
-- CodeQL workflow scaffold is present. Enable GitHub code scanning in repository settings before
-  running it.
+- CodeQL runs on pushes to the default branch.
 - Release workflow builds wheels/sdist from tags.
 - Release workflow publishes Docker images to GitHub Container Registry.
 - Release workflow generates a CycloneDX SBOM artifact.

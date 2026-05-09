@@ -6,11 +6,22 @@ This repository is the production rewrite of an earlier prototype. The architect
 
 ## Status
 
-`v0.1.0a2` is the latest public alpha. Current `main` includes local CLI workflows, a FastAPI
-service, directory conversion/import, durable SQLite-backed processing runs, page-aware OCR and
-broad-format extraction, search/export, release automation, and OSS governance files.
+`v0.1.0a3` is the latest public alpha. It includes local CLI workflows, a FastAPI service,
+directory conversion/import, durable SQLite-backed processing runs, page-aware OCR and broad-format
+extraction, the upgraded v2 prompt stack, search/export, release automation, and OSS governance
+files.
 
 ## Install
+
+From a downloaded release wheel:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install "nampara_librarian-0.1.0a3-py3-none-any.whl[all]"
+```
+
+From a source checkout:
 
 ```bash
 python -m venv .venv
@@ -123,7 +134,7 @@ For direct image runs, also set an import root because the image binds publicly 
 docker run --rm -p 8080:8080 \
   -e LIBRARIAN_API_KEY=change-me \
   -e LIBRARIAN_API_IMPORT_ROOT=/data/imports \
-  ghcr.io/nampara-ai/librarian:v0.1.0a2
+  ghcr.io/nampara-ai/librarian:v0.1.0a3
 ```
 
 ## Privacy
