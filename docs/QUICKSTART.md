@@ -46,3 +46,14 @@ export LIBRARIAN_LLM_MODEL=gpt-4.1-mini
 export OPENAI_API_KEY=...
 librarian import ./input --recursive --format md --process
 ```
+
+## Large PDF Smoke Test
+
+```bash
+export LIBRARIAN_OCR_PDF_MAX_PAGES=1000
+export LIBRARIAN_PDF_MAX_PAGES=1000
+export LIBRARIAN_OCR_LLM_CORRECTION=never
+librarian convert ./large.pdf --format md --output ./large.md
+librarian import ./large.md --format md --process
+librarian search "known phrase"
+```

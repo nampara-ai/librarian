@@ -20,6 +20,8 @@ class MockLLMProvider:
         temperature: float,
     ) -> str:
         del system_prompt, model, max_tokens, temperature
+        if user_prompt.startswith("Correct OCR text from PDF page"):
+            return " ".join(user_prompt.rsplit("\n\n", 1)[-1].split())
         if "Text to analyze:" in user_prompt and "dewey_code" in user_prompt:
             text = user_prompt.split("Text to analyze:", 1)[-1].lower()
             code = "000"

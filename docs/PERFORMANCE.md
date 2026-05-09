@@ -29,13 +29,29 @@ Record:
 
 - model/provider/base URL
 - `LIBRARIAN_LLM_MAX_CONCURRENCY`
+- `LIBRARIAN_OCR_PAGE_CONCURRENCY`
+- `LIBRARIAN_OCR_LLM_CORRECTION`
 - chunk target and overlap
 - coherence mode
+- document page count and scanned-page count
 - eval pass/fail
 - average and fastest chars/sec
 
 Do not commit provider outputs that contain private text. Sanitized benchmark JSON may be attached
 to releases.
+
+## Large PDF/OCR Baseline
+
+For 500-1000 page PDFs, measure conversion and processing separately:
+
+```bash
+time librarian convert ./large.pdf --format md --output ./large.md
+time librarian import ./large.md --format md --process
+```
+
+Run once with `LIBRARIAN_OCR_LLM_CORRECTION=never` to isolate extraction/OCR throughput, then run
+again with `always` and the intended provider/model to measure final correction quality and cost.
+Record peak memory separately with the host's normal process monitor.
 
 ## Current Status
 

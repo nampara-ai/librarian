@@ -14,6 +14,7 @@ from librarian.ingest.extractors import (
     PdfExtractor,
     TextFamilyExtractor,
 )
+from librarian.llm.mock import MockLLMProvider
 
 
 @pytest.mark.asyncio
@@ -495,3 +496,25 @@ async def test_pdf_extractor_llm_corrects_ocr_pages(
     pages = extractor.last_metadata["pages"]
     assert isinstance(pages, list)
     assert pages[0]["corrected"] is True
+
+
+@pytest.mark.asyncio
+async def test_pdf_extractor_defaults_to_1000_ocr_pages() -> None:
+    extractor = PdfExtractor()
+
+    assert extractor.ocr_pdf_max_pages == 1_000
+
+
+@pytest.mark.asyncio
+async def test_mock_provider_ocr_correction_returns_only_page_text() -> None:
+    provider = MockLLMProvider()
+
+    text = await provider.complete(
+        system_prompt="correct OCR",
+        user_prompt="Correct OCR text from PDF page 1. Return only corrected text.\n\nOCR raw text",
+        model="mock-cleaner",
+        max_tokens=128,
+        temperature=0.0,
+    )
+
+    assert text == "OCR raw text"

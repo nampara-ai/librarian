@@ -90,7 +90,9 @@ OCR support:
   `LIBRARIAN_OCR_PDF_MAX_PAGES`.
 - Tune scanned-PDF throughput with `LIBRARIAN_OCR_PAGE_CONCURRENCY`.
 - Control LLM OCR correction with `LIBRARIAN_OCR_LLM_CORRECTION=always|never|low-confidence`
-  and optionally override the correction model with `LIBRARIAN_OCR_LLM_MODEL`.
+  and optionally override the correction model with `LIBRARIAN_OCR_LLM_MODEL`. `low-confidence`
+  is reserved for extractors that surface confidence scores; current PDF OCR uses `always` or
+  `never`.
 
 PDF extraction is page-aware. Librarian reads embedded text from pages that have it and OCRs only
 pages where embedded extraction is empty. This avoids the old all-or-nothing scanned-PDF fallback
@@ -126,3 +128,21 @@ provider before the document enters the normal cleaning/classification/indexing 
 Batch conversion sidecars include extraction metadata for page count, per-page source
 (`embedded`, `ocr`, or `failed`), correction status, and OCR confidence when the extractor can
 surface it. Recursive conversion/import skips Librarian-generated sidecars and converted outputs.
+
+## Large-PDF Test Recipe
+
+For a real 500-1000 page PDF, run conversion first, then process/index the converted Markdown:
+
+```bash
+export LIBRARIAN_OCR_PDF_MAX_PAGES=1000
+export LIBRARIAN_PDF_MAX_PAGES=1000
+export LIBRARIAN_OCR_PAGE_CONCURRENCY=2
+export LIBRARIAN_OCR_LLM_CORRECTION=never
+
+librarian convert ./massive.pdf --format md --output ./massive.md
+librarian import ./massive.md --format md --process
+librarian search "known phrase from the document"
+```
+
+Use `LIBRARIAN_OCR_LLM_CORRECTION=always` with real provider credentials when measuring final
+quality instead of raw OCR throughput.
