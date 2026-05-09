@@ -30,6 +30,7 @@ from librarian.config import Settings
 from librarian.domain.ids import DocumentId, RunId
 from librarian.domain.models import Document, ProcessingRun, RunStage, RunStatus
 from librarian.ingest.extractors import CompositeExtractor
+from librarian.llm import LazyLLMProvider
 from librarian.observability import MetricsRecorder, configure_logging
 from librarian.storage.sqlite import SQLiteRunQueue
 from librarian.taxonomy.dewey import DeweyTaxonomy
@@ -487,6 +488,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "ocr_timeout_seconds": settings.ocr_timeout_seconds,
             "ocr_pdf_dpi": settings.ocr_pdf_dpi,
             "ocr_pdf_max_pages": settings.ocr_pdf_max_pages,
+            "ocr_llm_correction": settings.ocr_llm_correction,
+            "ocr_llm_model": settings.ocr_llm_model,
+            "ocr_page_concurrency": settings.ocr_page_concurrency,
+            "ocr_fail_on_page_error": settings.ocr_fail_on_page_error,
             "universal_max_input_bytes": settings.universal_max_input_bytes,
             "universal_timeout_seconds": settings.universal_timeout_seconds,
             "log_level": settings.log_level,
@@ -607,6 +612,11 @@ def _build_extractor(settings: Settings) -> CompositeExtractor:
         ocr_timeout_seconds=settings.ocr_timeout_seconds,
         ocr_pdf_dpi=settings.ocr_pdf_dpi,
         ocr_pdf_max_pages=settings.ocr_pdf_max_pages,
+        ocr_correction_provider=LazyLLMProvider(settings),
+        ocr_correction_mode=settings.ocr_llm_correction,
+        ocr_correction_model=settings.ocr_llm_model or settings.llm_model,
+        ocr_page_concurrency=settings.ocr_page_concurrency,
+        ocr_fail_on_page_error=settings.ocr_fail_on_page_error,
         text_max_input_bytes=settings.text_max_input_bytes,
         docx_max_input_bytes=settings.docx_max_input_bytes,
         pdf_max_input_bytes=settings.pdf_max_input_bytes,

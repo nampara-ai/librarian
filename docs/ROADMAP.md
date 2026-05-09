@@ -12,6 +12,8 @@
 
 ## v0.2
 
+- 1,000-page PDF/OCR performance baselines on real corpora.
+- Page-level OCR progress/resume metadata for long scanned PDFs.
 - Richer retrieval beyond SQLite FTS.
 - Batch import API hardening for hosted deployments.
 - OpenTelemetry/Prometheus adapter.

@@ -248,9 +248,11 @@ async def test_pdf_ocr_passes_timeout_to_rasterizer(
     monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
     monkeypatch.setattr("librarian.ingest.extractors._ocr_image", fake_ocr_image)
 
-    text = await PdfExtractor(ocr_timeout_seconds=9).extract(path)
+    text = await PdfExtractor(ocr_timeout_seconds=9, ocr_correction_mode="never").extract(path)
 
-    assert text == "OCR text"
+    assert "## Page 1" in text
+    assert "OCR text" in text
+    assert "source: ocr" in text
     assert captured_kwargs["timeout"] == 9
 
 
@@ -296,9 +298,14 @@ async def test_pdf_extractor_ocr_handles_mixed_text_and_scanned_pages(
     monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
     monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", fake_ocr_pdf_page)
 
-    text = await PdfExtractor().extract(path)
+    text = await PdfExtractor(ocr_correction_mode="never").extract(path)
 
-    assert text == "Text page 1\n\nOCR page 2\n\nText page 3"
+    assert "## Page 1" in text
+    assert "Text page 1" in text
+    assert "## Page 2" in text
+    assert "OCR page 2" in text
+    assert "## Page 3" in text
+    assert "Text page 3" in text
 
 
 @pytest.mark.asyncio
@@ -344,7 +351,7 @@ async def test_pdf_extractor_fails_when_mixed_page_ocr_fails(
     monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", fake_ocr_pdf_page)
 
     with pytest.raises(RuntimeError, match="Unable to OCR scanned PDF page 2"):
-        await PdfExtractor().extract(path)
+        await PdfExtractor(ocr_correction_mode="never").extract(path)
 
 
 @pytest.mark.asyncio
@@ -389,5 +396,102 @@ async def test_pdf_extractor_fails_when_scanned_pages_exceed_ocr_limit(
     monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
     monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", fake_ocr_pdf_page)
 
-    with pytest.raises(ValueError, match="beyond OCR page limit 1: 3"):
+    with pytest.raises(ValueError, match="exceeding OCR page limit 1"):
         await PdfExtractor(ocr_pdf_max_pages=1).extract(path)
+
+
+@pytest.mark.asyncio
+async def test_pdf_extractor_fails_when_page_count_exceeds_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "fixture.pdf"
+    path.write_bytes(b"%PDF")
+
+    class FakePage:
+        @staticmethod
+        def extract_text() -> str:
+            return "page text"
+
+    class FakePdf:
+        pages = [FakePage(), FakePage()]
+
+        def __enter__(self) -> "FakePdf":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(path: Path) -> FakePdf:
+            del path
+            return FakePdf()
+
+    def fake_import_module(name: str) -> object:
+        if name == "pdfplumber":
+            return FakePdfPlumber
+        return __import__(name)
+
+    monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
+
+    with pytest.raises(ValueError, match="2 pages, exceeding configured limit 1"):
+        await PdfExtractor(max_pages=1).extract(path)
+
+
+@pytest.mark.asyncio
+async def test_pdf_extractor_llm_corrects_ocr_pages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "fixture.pdf"
+    path.write_bytes(b"%PDF")
+
+    class FakeProvider:
+        name = "fake"
+
+        async def complete(self, **kwargs: object) -> str:
+            assert "OCR raw" in str(kwargs["user_prompt"])
+            return "OCR corrected"
+
+    class FakePage:
+        @staticmethod
+        def extract_text() -> None:
+            return None
+
+    class FakePdf:
+        pages = [FakePage()]
+
+        def __enter__(self) -> "FakePdf":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(path: Path) -> FakePdf:
+            del path
+            return FakePdf()
+
+    def fake_import_module(name: str) -> object:
+        if name == "pdfplumber":
+            return FakePdfPlumber
+        return __import__(name)
+
+    def fake_ocr_pdf_page(*args: object, **kwargs: object) -> str:
+        del args, kwargs
+        return "OCR raw"
+
+    monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", fake_ocr_pdf_page)
+
+    extractor = PdfExtractor(ocr_correction_provider=FakeProvider())
+    text = await extractor.extract(path)
+
+    assert "OCR corrected" in text
+    assert "corrected: true" in text
+    assert extractor.last_metadata is not None
+    pages = extractor.last_metadata["pages"]
+    assert isinstance(pages, list)
+    assert pages[0]["corrected"] is True

@@ -131,11 +131,18 @@ class DocumentConverter:
         await asyncio.to_thread(output_path.parent.mkdir, parents=True, exist_ok=True)
         await asyncio.to_thread(output_path.write_text, rendered, encoding="utf-8")
         if write_sidecar:
+            metadata_obj = getattr(self.extractor, "last_metadata", None)
+            metadata = (
+                cast(dict[str, object], metadata_obj)
+                if isinstance(metadata_obj, dict)
+                else None
+            )
             await write_conversion_sidecar(
                 source_path=source_path,
                 output_path=output_path,
                 format=format,
                 text=rendered,
+                extraction_metadata=metadata if isinstance(metadata, dict) else None,
             )
         return ConvertedDocument(
             source_path=source_path,
@@ -348,6 +355,8 @@ def render_conversion(text: str, *, source_path: Path, format: ConversionFormat)
         return markdown_to_text(normalized) + "\n"
     if source_path.suffix.lower() == ".md":
         return normalized + "\n"
+    if source_path.suffix.lower() == ".pdf" and normalized.startswith("---\n"):
+        return normalized + "\n"
     title = source_path.stem.replace("_", " ").replace("-", " ").strip() or source_path.name
     return f"# {title}\n\n{normalized}\n"
 
@@ -370,6 +379,7 @@ async def write_conversion_sidecar(
     output_path: Path,
     format: ConversionFormat,
     text: str,
+    extraction_metadata: dict[str, object] | None = None,
 ) -> None:
     """Write sidecar conversion metadata."""
     payload = json.dumps(
@@ -380,6 +390,7 @@ async def write_conversion_sidecar(
             "output_path": str(output_path),
             "format": format.value,
             "output_chars": len(text),
+            "extraction": extraction_metadata,
         },
         indent=2,
     )
@@ -404,6 +415,8 @@ def classify_conversion_error(exc: Exception) -> ConversionFailureType:
 def markdown_to_text(markdown: str) -> str:
     """Convert simple Markdown to readable plain text without extra dependencies."""
     text = re.sub(r"```.*?```", "", markdown, flags=re.DOTALL)
+    text = re.sub(r"^---\n.*?\n---\n?", "", text, flags=re.DOTALL)
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
     text = re.sub(r"`([^`]*)`", r"\1", text)
     text = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", text)
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)

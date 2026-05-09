@@ -36,6 +36,7 @@ from librarian.config import Settings
 from librarian.domain.ids import DocumentId, RunId, digest_text
 from librarian.domain.models import RunStage, RunStatus
 from librarian.ingest.extractors import CompositeExtractor
+from librarian.llm import LazyLLMProvider
 from librarian.pipeline.chunking import ChunkingPolicy, chunk_text
 from librarian.storage.sqlite import SQLiteDatabase, SQLiteRunQueue
 from librarian.version import __version__
@@ -708,6 +709,11 @@ def _build_extractor(settings: Settings) -> CompositeExtractor:
         ocr_timeout_seconds=settings.ocr_timeout_seconds,
         ocr_pdf_dpi=settings.ocr_pdf_dpi,
         ocr_pdf_max_pages=settings.ocr_pdf_max_pages,
+        ocr_correction_provider=LazyLLMProvider(settings),
+        ocr_correction_mode=settings.ocr_llm_correction,
+        ocr_correction_model=settings.ocr_llm_model or settings.llm_model,
+        ocr_page_concurrency=settings.ocr_page_concurrency,
+        ocr_fail_on_page_error=settings.ocr_fail_on_page_error,
         text_max_input_bytes=settings.text_max_input_bytes,
         docx_max_input_bytes=settings.docx_max_input_bytes,
         pdf_max_input_bytes=settings.pdf_max_input_bytes,

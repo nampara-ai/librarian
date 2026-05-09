@@ -88,13 +88,41 @@ OCR support:
 - Configure language with `LIBRARIAN_OCR_LANGUAGE`, for example `eng` or `eng+spa`.
 - Bound OCR work with `LIBRARIAN_OCR_TIMEOUT_SECONDS`, `LIBRARIAN_OCR_PDF_DPI`, and
   `LIBRARIAN_OCR_PDF_MAX_PAGES`.
+- Tune scanned-PDF throughput with `LIBRARIAN_OCR_PAGE_CONCURRENCY`.
+- Control LLM OCR correction with `LIBRARIAN_OCR_LLM_CORRECTION=always|never|low-confidence`
+  and optionally override the correction model with `LIBRARIAN_OCR_LLM_MODEL`.
 
-Scanned PDFs first try normal PDF text extraction. If no embedded text is found, Librarian falls
-back to PDF-to-image conversion plus Tesseract OCR.
+PDF extraction is page-aware. Librarian reads embedded text from pages that have it and OCRs only
+pages where embedded extraction is empty. This avoids the old all-or-nothing scanned-PDF fallback
+where mixed PDFs could silently lose scanned pages. PDFs over `LIBRARIAN_PDF_MAX_PAGES` are
+rejected before page extraction. Scanned-page OCR is separately bounded by
+`LIBRARIAN_OCR_PDF_MAX_PAGES`, which defaults to `1000`.
+
+Markdown PDF output includes stable page boundaries:
+
+```markdown
+---
+generated_by: librarian
+artifact_type: pdf-page-extraction
+source_file: report.pdf
+page_count: 3
+---
+
+# report
+
+<!-- page: 1 source: embedded corrected: false -->
+## Page 1
+
+...
+```
 
 ## OCR Strategy
 
-Tesseract is used as the raw OCR engine. LLM-aided OCR is handled through Librarian's existing
-pipeline: convert raw OCR to text/Markdown first, then run normal processing to clean, correct,
-classify, and index the result. This keeps OCR deterministic and makes LLM correction provider
-agnostic.
+Tesseract is used as the raw OCR engine. For PDF pages that require OCR,
+`LIBRARIAN_OCR_LLM_CORRECTION=always` sends each page through the configured OpenAI-compatible
+provider before the document enters the normal cleaning/classification/indexing pipeline. Set
+`LIBRARIAN_OCR_LLM_CORRECTION=never` for fully deterministic OCR-only conversion.
+
+Batch conversion sidecars include extraction metadata for page count, per-page source
+(`embedded`, `ocr`, or `failed`), correction status, and OCR confidence when the extractor can
+surface it. Recursive conversion/import skips Librarian-generated sidecars and converted outputs.

@@ -19,7 +19,7 @@ Adapters
   API: FastAPI
   Storage: SQLite repository and SQLite-backed alpha content store
   LLM: OpenAI-compatible, mock
-  Extraction: txt, md, csv, json, docx, pdf
+  Extraction: txt, md, csv, json, docx, pdf, OCR images
 
 Application
   IngestDocument
@@ -82,7 +82,8 @@ The prototype used a max-coherence style. Production defaults should start with 
 
 The alpha content store persists raw text, chunks, cleaned chunks, final outputs, and the FTS mirror
 in SQLite. This keeps the first release portable and easy to back up, but it duplicates large text
-payloads. A filesystem or object-store content adapter is planned before beta-scale corpora.
+payloads. A filesystem or object-store content adapter remains a future option for very large
+hosted deployments; SQLite is still the supported alpha backend.
 
 ## Prompt Governance
 

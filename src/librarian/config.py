@@ -9,6 +9,7 @@ from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 CoherenceModeSetting = Literal["fast", "balanced", "max-coherence"]
+OcrLlmCorrectionMode = Literal["always", "never", "low-confidence"]
 
 
 class Settings(BaseSettings):
@@ -48,7 +49,11 @@ class Settings(BaseSettings):
     ocr_language: str = Field(default="eng")
     ocr_timeout_seconds: int = Field(default=120, gt=0)
     ocr_pdf_dpi: int = Field(default=200, gt=0)
-    ocr_pdf_max_pages: int = Field(default=100, gt=0)
+    ocr_pdf_max_pages: int = Field(default=1_000, gt=0)
+    ocr_llm_correction: OcrLlmCorrectionMode = Field(default="always")
+    ocr_llm_model: str | None = Field(default=None)
+    ocr_page_concurrency: int = Field(default=2, gt=0)
+    ocr_fail_on_page_error: bool = Field(default=True)
     universal_max_input_bytes: int = Field(default=50 * 1024 * 1024, gt=0)
     universal_timeout_seconds: int = Field(default=120, gt=0)
 

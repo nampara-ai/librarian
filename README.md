@@ -6,9 +6,9 @@ This repository is the production rewrite of an earlier prototype. The architect
 
 ## Status
 
-`v0.1.0a2` is the latest public alpha. It includes local CLI workflows, a FastAPI service,
-directory conversion/import, durable SQLite-backed processing runs, OCR/broad-format extraction,
-search/export, release automation, and OSS governance files.
+`v0.1.0a2` is the latest public alpha. Current `main` includes local CLI workflows, a FastAPI
+service, directory conversion/import, durable SQLite-backed processing runs, page-aware OCR and
+broad-format extraction, search/export, release automation, and OSS governance files.
 
 ## Install
 

@@ -10,10 +10,47 @@ import queue
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, Protocol, cast
 
 IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"})
+OcrCorrectionMode = Literal["always", "never", "low-confidence"]
+
+OCR_CORRECTION_PROMPT = """You are correcting OCR text extracted from a PDF page.
+Preserve every detail, name, number, heading, and paragraph. Fix OCR recognition errors,
+line-break artifacts, spacing, and obvious punctuation issues. Do not summarize, omit,
+invent, or reorder content. Return only corrected Markdown-compatible text."""
+
+
+class OcrCorrectionProvider(Protocol):
+    """Minimal LLM provider surface needed for OCR correction."""
+
+    @property
+    def name(self) -> str: ...
+
+    async def complete(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        model: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> str: ...
+
+
+@dataclass(frozen=True, slots=True)
+class PdfPageExtraction:
+    """One extracted PDF page."""
+
+    page_number: int
+    text: str
+    source: str
+    confidence: float | None = None
+    corrected: bool = False
+    error: str | None = None
 
 
 class TextFamilyExtractor:
@@ -80,6 +117,11 @@ class PdfExtractor:
         ocr_timeout_seconds: int = 120,
         ocr_pdf_dpi: int = 200,
         ocr_pdf_max_pages: int = 100,
+        ocr_correction_provider: OcrCorrectionProvider | None = None,
+        ocr_correction_mode: OcrCorrectionMode = "always",
+        ocr_correction_model: str = "mock-cleaner",
+        ocr_page_concurrency: int = 2,
+        ocr_fail_on_page_error: bool = True,
         max_input_bytes: int = 200 * 1024 * 1024,
         max_pages: int = 1_000,
     ) -> None:
@@ -87,43 +129,108 @@ class PdfExtractor:
         self.ocr_timeout_seconds = ocr_timeout_seconds
         self.ocr_pdf_dpi = ocr_pdf_dpi
         self.ocr_pdf_max_pages = ocr_pdf_max_pages
+        self.ocr_correction_provider = ocr_correction_provider
+        self.ocr_correction_mode = ocr_correction_mode
+        self.ocr_correction_model = ocr_correction_model
+        self.ocr_page_concurrency = ocr_page_concurrency
+        self.ocr_fail_on_page_error = ocr_fail_on_page_error
         self.max_input_bytes = max_input_bytes
         self.max_pages = max_pages
+        self.last_metadata: dict[str, object] | None = None
 
     async def extract(self, path: Path) -> str:
-        return await asyncio.to_thread(self._extract_sync, path)
+        _validate_input_size(path, self.max_input_bytes, "PDF extraction input")
+        pages, page_count = await asyncio.to_thread(self._extract_embedded_pages, path)
+        if page_count > self.max_pages:
+            raise ValueError(
+                f"PDF has {page_count} pages, exceeding configured limit {self.max_pages}: {path}"
+            )
+
+        empty_pages = [page.page_number for page in pages if not page.text.strip()]
+        if len(empty_pages) > self.ocr_pdf_max_pages:
+            page_list = ", ".join(str(page_number) for page_number in empty_pages)
+            raise ValueError(
+                f"PDF contains {len(empty_pages)} scanned/empty pages, exceeding OCR page "
+                f"limit {self.ocr_pdf_max_pages}: {page_list}"
+            )
+
+        page_results: list[PdfPageExtraction | None] = list(pages)
+        semaphore = asyncio.Semaphore(max(1, self.ocr_page_concurrency))
+
+        async def recover_page(page_number: int) -> None:
+            async with semaphore:
+                try:
+                    ocr_text = await asyncio.to_thread(
+                        _ocr_pdf_page,
+                        path,
+                        page_number=page_number,
+                        language=self.ocr_language,
+                        timeout_seconds=self.ocr_timeout_seconds,
+                        dpi=self.ocr_pdf_dpi,
+                    )
+                    corrected = await self._correct_ocr_page(
+                        page_number=page_number,
+                        text=ocr_text,
+                    )
+                    page_results[page_number - 1] = PdfPageExtraction(
+                        page_number=page_number,
+                        text=corrected,
+                        source="ocr",
+                        corrected=corrected != ocr_text,
+                    )
+                except Exception as exc:
+                    if self.ocr_fail_on_page_error:
+                        raise RuntimeError(
+                            f"Unable to OCR scanned PDF page {page_number}: {exc}"
+                        ) from exc
+                    page_results[page_number - 1] = PdfPageExtraction(
+                        page_number=page_number,
+                        text="",
+                        source="ocr",
+                        error=str(exc),
+                    )
+
+        await asyncio.gather(*(recover_page(page_number) for page_number in empty_pages))
+        final_pages = [page for page in page_results if page is not None]
+        if not any(page.text.strip() for page in final_pages):
+            raise ValueError(f"No extractable content found in PDF: {path}")
+
+        self.last_metadata = {
+            "artifact_type": "pdf-page-extraction",
+            "page_count": page_count,
+            "pages": [
+                {
+                    "page_number": page.page_number,
+                    "source": page.source,
+                    "chars": len(page.text),
+                    "confidence": page.confidence,
+                    "corrected": page.corrected,
+                    "status": "failed" if page.error else "succeeded",
+                    "error": page.error,
+                }
+                for page in final_pages
+            ],
+        }
+        return render_pdf_pages_markdown(path, final_pages)
 
     def _extract_sync(self, path: Path) -> str:
+        """Compatibility wrapper for callers that still use synchronous extraction."""
         _validate_input_size(path, self.max_input_bytes, "PDF extraction input")
-        try:
-            pdfplumber = importlib.import_module("pdfplumber")
-        except ImportError as exc:
-            raise RuntimeError("PDF support requires installing the 'pdf' extra") from exc
-
-        page_outputs: list[str | None] = []
-        empty_pages: list[int] = []
-        pdf_module = cast(Any, pdfplumber)
-        with pdf_module.open(path) as pdf:
-            for page_number, page in enumerate(pdf.pages[: self.max_pages], start=1):
-                page_text = cast(str | None, page.extract_text())
-                if page_text and page_text.strip():
-                    page_outputs.append(page_text)
-                else:
-                    page_outputs.append(None)
-                    empty_pages.append(page_number)
-
-        if not any(part for part in page_outputs):
-            return _ocr_pdf(
-                path,
-                language=self.ocr_language,
-                timeout_seconds=self.ocr_timeout_seconds,
-                dpi=self.ocr_pdf_dpi,
-                max_pages=self.ocr_pdf_max_pages,
+        pages, page_count = self._extract_embedded_pages(path)
+        if page_count > self.max_pages:
+            raise ValueError(
+                f"PDF has {page_count} pages, exceeding configured limit {self.max_pages}: {path}"
             )
-        unrecovered_pages = empty_pages[self.ocr_pdf_max_pages :]
-        for page_number in empty_pages[: self.ocr_pdf_max_pages]:
+        empty_pages = [page.page_number for page in pages if not page.text.strip()]
+        if len(empty_pages) > self.ocr_pdf_max_pages:
+            raise ValueError(
+                f"PDF contains {len(empty_pages)} scanned/empty pages, exceeding OCR page "
+                f"limit {self.ocr_pdf_max_pages}: {path}"
+            )
+        page_outputs = list(pages)
+        for page_number in empty_pages:
             try:
-                page_outputs[page_number - 1] = _ocr_pdf_page(
+                ocr_text = _ocr_pdf_page(
                     path,
                     page_number=page_number,
                     language=self.ocr_language,
@@ -134,13 +241,82 @@ class PdfExtractor:
                 raise RuntimeError(
                     f"Unable to OCR scanned PDF page {page_number}: {exc}"
                 ) from exc
-        if unrecovered_pages:
-            page_list = ", ".join(str(page_number) for page_number in unrecovered_pages)
-            raise ValueError(
-                f"PDF contains scanned pages beyond OCR page limit "
-                f"{self.ocr_pdf_max_pages}: {page_list}"
+            page_outputs[page_number - 1] = PdfPageExtraction(
+                page_number=page_number,
+                text=ocr_text,
+                source="ocr",
             )
-        return "\n\n".join(part for part in page_outputs if part and part.strip())
+        self.last_metadata = {
+            "artifact_type": "pdf-page-extraction",
+            "page_count": page_count,
+            "pages": [
+                {
+                    "page_number": page.page_number,
+                    "source": page.source,
+                    "chars": len(page.text),
+                    "confidence": page.confidence,
+                    "corrected": page.corrected,
+                    "status": "failed" if page.error else "succeeded",
+                    "error": page.error,
+                }
+                for page in page_outputs
+            ],
+        }
+        return render_pdf_pages_markdown(path, page_outputs)
+
+    def _extract_embedded_pages(self, path: Path) -> tuple[list[PdfPageExtraction], int]:
+        try:
+            pdfplumber = importlib.import_module("pdfplumber")
+        except ImportError as exc:
+            raise RuntimeError("PDF support requires installing the 'pdf' extra") from exc
+
+        pages: list[PdfPageExtraction] = []
+        pdf_module = cast(Any, pdfplumber)
+        with pdf_module.open(path) as pdf:
+            page_count = len(pdf.pages)
+            for page_number, page in enumerate(pdf.pages, start=1):
+                page_text = cast(str | None, page.extract_text())
+                if page_text and page_text.strip():
+                    pages.append(
+                        PdfPageExtraction(
+                            page_number=page_number,
+                            text=page_text,
+                            source="embedded",
+                        )
+                    )
+                else:
+                    pages.append(
+                        PdfPageExtraction(
+                            page_number=page_number,
+                            text="",
+                            source="empty",
+                        )
+                    )
+        return pages, page_count
+
+    async def _correct_ocr_page(self, *, page_number: int, text: str) -> str:
+        if self.ocr_correction_mode == "never":
+            return text
+        if self.ocr_correction_mode == "low-confidence":
+            return text
+        provider = self.ocr_correction_provider
+        if provider is None:
+            raise RuntimeError("LLM OCR correction is enabled but no LLM provider is configured")
+        corrected = await provider.complete(
+            system_prompt=OCR_CORRECTION_PROMPT,
+            user_prompt=(
+                f"Correct OCR text from PDF page {page_number}. "
+                "Return only corrected text.\n\n"
+                f"{text}"
+            ),
+            model=self.ocr_correction_model,
+            max_tokens=8192,
+            temperature=0.0,
+        )
+        clean = str(corrected).strip()
+        if not clean:
+            raise ValueError(f"LLM OCR correction returned empty text for page {page_number}")
+        return clean
 
 
 class ImageOcrExtractor:
@@ -232,6 +408,11 @@ class CompositeExtractor:
         ocr_timeout_seconds: int = 120,
         ocr_pdf_dpi: int = 200,
         ocr_pdf_max_pages: int = 100,
+        ocr_correction_provider: OcrCorrectionProvider | None = None,
+        ocr_correction_mode: OcrCorrectionMode = "always",
+        ocr_correction_model: str = "mock-cleaner",
+        ocr_page_concurrency: int = 2,
+        ocr_fail_on_page_error: bool = True,
         text_max_input_bytes: int = 100 * 1024 * 1024,
         docx_max_input_bytes: int = 100 * 1024 * 1024,
         pdf_max_input_bytes: int = 200 * 1024 * 1024,
@@ -247,6 +428,11 @@ class CompositeExtractor:
                 ocr_timeout_seconds=ocr_timeout_seconds,
                 ocr_pdf_dpi=ocr_pdf_dpi,
                 ocr_pdf_max_pages=ocr_pdf_max_pages,
+                ocr_correction_provider=ocr_correction_provider,
+                ocr_correction_mode=ocr_correction_mode,
+                ocr_correction_model=ocr_correction_model,
+                ocr_page_concurrency=ocr_page_concurrency,
+                ocr_fail_on_page_error=ocr_fail_on_page_error,
                 max_input_bytes=pdf_max_input_bytes,
                 max_pages=pdf_max_pages,
             ),
@@ -262,13 +448,17 @@ class CompositeExtractor:
             for extension in extractor.supported_extensions
         }
         self.supported_extensions = frozenset(self._extractors)
+        self.last_metadata: dict[str, object] | None = None
 
     async def extract(self, path: Path) -> str:
         extension = path.suffix.lower()
         extractor = self._extractors.get(extension)
         if extractor is None:
             raise ValueError(f"Unsupported file extension: {extension}")
-        return await extractor.extract(path)
+        text = await extractor.extract(path)
+        metadata = getattr(extractor, "last_metadata", None)
+        self.last_metadata = metadata if isinstance(metadata, dict) else None
+        return text
 
 
 def _ocr_image(path: Path, *, language: str = "eng", timeout_seconds: int = 120) -> str:
@@ -364,6 +554,48 @@ def _ocr_pdf_page(
     if not text:
         raise ValueError(f"No OCR text found on PDF page {page_number}: {path}")
     return text
+
+
+def render_pdf_pages_markdown(path: Path, pages: Sequence[PdfPageExtraction]) -> str:
+    """Render ordered PDF page records as canonical Markdown."""
+    title = path.stem.replace("_", " ").replace("-", " ").strip() or path.name
+    lines = [
+        "---",
+        "generated_by: librarian",
+        "artifact_type: pdf-page-extraction",
+        f"source_file: {path.name}",
+        f"page_count: {len(pages)}",
+        "---",
+        "",
+        f"# {title}",
+        "",
+    ]
+    for page in sorted(pages, key=lambda item: item.page_number):
+        if not page.text.strip() and page.error:
+            lines.extend(
+                [
+                    (
+                        f"<!-- page: {page.page_number} source: {page.source} "
+                        f"status: failed error: {page.error} -->"
+                    ),
+                    "",
+                ]
+            )
+            continue
+        lines.extend(
+            [
+                (
+                    f"<!-- page: {page.page_number} source: {page.source} "
+                    f"corrected: {str(page.corrected).lower()} -->"
+                ),
+                "",
+                f"## Page {page.page_number}",
+                "",
+                page.text.strip(),
+                "",
+            ]
+        )
+    return "\n".join(lines).strip() + "\n"
 
 
 def _markitdown_worker(

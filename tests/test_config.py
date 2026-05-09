@@ -20,6 +20,9 @@ from librarian.config import Settings
         {"docx_max_input_bytes": 0},
         {"pdf_max_input_bytes": 0},
         {"pdf_max_pages": 0},
+        {"ocr_pdf_max_pages": 0},
+        {"ocr_llm_correction": "bogus"},
+        {"ocr_page_concurrency": 0},
     ],
 )
 def test_settings_reject_invalid_runtime_controls(kwargs: dict[str, Any]) -> None:

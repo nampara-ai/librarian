@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -155,6 +156,36 @@ async def test_convert_directory_avoids_output_collisions_and_writes_sidecars(
     assert result.converted == 2
     assert outputs[0] != outputs[1]
     assert outputs[0].with_suffix(".md.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_convert_file_sidecar_includes_extraction_metadata(tmp_path: Path) -> None:
+    class MetadataExtractor:
+        supported_extensions = frozenset({".txt"})
+        last_metadata: dict[str, object] | None = None
+
+        async def extract(self, path: Path) -> str:
+            del path
+            self.last_metadata = {
+                "artifact_type": "pdf-page-extraction",
+                "page_count": 2,
+                "pages": [{"page_number": 1, "source": "embedded"}],
+            }
+            return "Alpha"
+
+    source = tmp_path / "source.txt"
+    output = tmp_path / "source.md"
+    source.write_text("Alpha", encoding="utf-8")
+
+    await DocumentConverter(MetadataExtractor()).convert_file(
+        source,
+        output,
+        format=ConversionFormat.MARKDOWN,
+        write_sidecar=True,
+    )
+
+    payload = json.loads(output.with_suffix(".md.json").read_text(encoding="utf-8"))
+    assert payload["extraction"]["page_count"] == 2
 
 
 def test_conversion_output_path_new_directory(tmp_path: Path) -> None:

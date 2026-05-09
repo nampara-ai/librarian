@@ -11,7 +11,7 @@ from librarian.application.ports import LLMProvider
 from librarian.application.process_document import ProcessDocument
 from librarian.config import Settings
 from librarian.ingest.extractors import CompositeExtractor
-from librarian.llm import MockLLMProvider, OpenAICompatibleProvider
+from librarian.llm import LazyLLMProvider, build_provider
 from librarian.pipeline.chunking import ChunkingPolicy
 from librarian.prompts import PromptCatalog
 from librarian.storage.sqlite import SQLiteDatabase, SQLiteRepository
@@ -46,6 +46,11 @@ async def build_ingest_container(settings: Settings | None = None) -> IngestCont
         ocr_timeout_seconds=resolved_settings.ocr_timeout_seconds,
         ocr_pdf_dpi=resolved_settings.ocr_pdf_dpi,
         ocr_pdf_max_pages=resolved_settings.ocr_pdf_max_pages,
+        ocr_correction_provider=LazyLLMProvider(resolved_settings),
+        ocr_correction_mode=resolved_settings.ocr_llm_correction,
+        ocr_correction_model=resolved_settings.ocr_llm_model or resolved_settings.llm_model,
+        ocr_page_concurrency=resolved_settings.ocr_page_concurrency,
+        ocr_fail_on_page_error=resolved_settings.ocr_fail_on_page_error,
         text_max_input_bytes=resolved_settings.text_max_input_bytes,
         docx_max_input_bytes=resolved_settings.docx_max_input_bytes,
         pdf_max_input_bytes=resolved_settings.pdf_max_input_bytes,
@@ -114,16 +119,4 @@ async def build_container(settings: Settings | None = None) -> ApplicationContai
 
 
 def _build_provider(settings: Settings) -> LLMProvider:
-    if settings.llm_provider == "mock":
-        return MockLLMProvider()
-    if settings.llm_provider == "openai-compatible":
-        return OpenAICompatibleProvider(
-            api_key_env=settings.llm_api_key_env,
-        base_url=settings.llm_base_url,
-        timeout_seconds=settings.llm_timeout_seconds,
-        max_concurrency=settings.llm_max_concurrency,
-        max_retries=settings.llm_max_retries,
-        retry_base_delay_seconds=settings.llm_retry_base_delay_seconds,
-        retry_max_delay_seconds=settings.llm_retry_max_delay_seconds,
-    )
-    raise ValueError(f"Unsupported LLM provider: {settings.llm_provider}")
+    return build_provider(settings)
