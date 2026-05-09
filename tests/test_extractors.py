@@ -157,17 +157,18 @@ async def test_docx_extractor_preserves_list_markers(tmp_path: Path) -> None:
 @pytest.mark.skipif(shutil.which("tesseract") is None, reason="tesseract not installed")
 @pytest.mark.asyncio
 async def test_image_ocr_extractor_reads_fixture(tmp_path: Path) -> None:
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageDraw, ImageFont
 
     path = tmp_path / "fixture.png"
-    image = Image.new("RGB", (400, 120), "white")
+    image = Image.new("RGB", (800, 220), "white")
     draw = ImageDraw.Draw(image)
-    draw.text((20, 40), "OCR fixture text", fill="black")
+    font = ImageFont.load_default(size=48)
+    draw.text((40, 70), "OCR fixture text", fill="black", font=font)
     image.save(path)
 
     text = await CompositeExtractor().extract(path)
 
-    assert "OCR" in text
+    assert "fixture text" in text
 
 
 @pytest.mark.asyncio
