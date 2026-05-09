@@ -34,8 +34,8 @@ class Settings(BaseSettings):
     llm_retry_base_delay_seconds: float = Field(default=0.5, ge=0)
     llm_retry_max_delay_seconds: float = Field(default=10.0, ge=0)
 
-    cleaning_prompt_version: str = Field(default="cmos_v1")
-    classification_prompt_version: str = Field(default="dewey_v1")
+    cleaning_prompt_version: str = Field(default="cmos_v2")
+    classification_prompt_version: str = Field(default="dewey_v2")
     cleaning_mode: str = Field(default="standard")
     coherence_mode: CoherenceModeSetting = Field(default="balanced")
 

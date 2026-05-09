@@ -320,6 +320,8 @@ def test_api_config_exposes_operational_controls(tmp_path: Path) -> None:
     payload = response.json()
     assert payload["api_max_upload_bytes"] == 1234
     assert payload["ocr_language"] == "eng"
+    assert payload["cleaning_prompt_version"] == "cmos_v2"
+    assert payload["classification_prompt_version"] == "dewey_v2"
     assert payload["universal_timeout_seconds"] == 77
     assert payload["llm_max_retries"] == settings.llm_max_retries
 

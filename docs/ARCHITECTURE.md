@@ -87,7 +87,11 @@ hosted deployments; SQLite is still the supported alpha backend.
 
 ## Prompt Governance
 
-Prompts live under `src/librarian/prompts`. Prompt text is versioned and recorded in run metadata. The cleaning prompt is intentionally ported from the prototype without wording changes until evals justify changes.
+Prompts live under `src/librarian/prompts`. Prompt text is versioned and recorded in run metadata.
+The default cleaning prompt is `cmos_v2`, which preserves the prototype's CMOS copy-editing intent
+while adding explicit instructions for OCR cleanup, structure preservation, context-marker handling,
+and chunk-local fidelity. `cmos_v1` remains bundled so older run provenance and cache keys stay
+resolvable.
 
 ## Migrations
 

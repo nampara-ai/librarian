@@ -2,10 +2,19 @@ from librarian.prompts.loader import PromptCatalog
 
 
 def test_prompt_catalog_loads_cleaning_prompt() -> None:
-    prompt = PromptCatalog().get("cleaning", "cmos_v1")
+    prompt = PromptCatalog().get("cleaning", "cmos_v2")
 
     assert "Chicago Manual of Style" in prompt
-    assert "Do NOT summarize" in prompt
+    assert "do not summarize" in prompt
+    assert "OCR errors" in prompt
+
+
+def test_prompt_catalog_loads_classification_prompt() -> None:
+    prompt = PromptCatalog().get("classification", "dewey_v2")
+
+    assert "Dewey Decimal Classification" in prompt
+    assert "340 = Law" in prompt
+    assert "confidence" in prompt
 
 
 def test_prompt_catalog_caches_prompt_reads() -> None:

@@ -24,5 +24,5 @@ class PromptCatalog:
 
 @lru_cache(maxsize=64)
 def _load_prompt(family: str, version: str) -> str:
-        resource = files("librarian.prompts").joinpath(family, f"{version}.md")
-        return resource.read_text(encoding="utf-8")
+    resource = files("librarian.prompts").joinpath(family, f"{version}.md")
+    return resource.read_text(encoding="utf-8")

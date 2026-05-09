@@ -30,6 +30,8 @@ Run the same eval and benchmark suite while varying:
 - `LIBRARIAN_CHUNK_OVERLAP_CHARS`: start with `400`, `800`, `1200`.
 - `LIBRARIAN_LLM_MAX_CONCURRENCY`: start with `4`, `8`, `16`.
 - `LIBRARIAN_COHERENCE_MODE`: compare `fast`, `balanced`, and `max-coherence`.
+- `LIBRARIAN_CLEANING_PROMPT_VERSION`: compare `cmos_v2` against any candidate prompt.
+- `LIBRARIAN_CLASSIFICATION_PROMPT_VERSION`: compare `dewey_v2` against any candidate prompt.
 
 Promote a configuration only when evals pass and benchmark throughput improves on the same input
 text. Keep raw JSON results with the commit or release candidate being tuned.

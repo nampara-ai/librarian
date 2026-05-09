@@ -28,3 +28,10 @@ from librarian.config import Settings
 def test_settings_reject_invalid_runtime_controls(kwargs: dict[str, Any]) -> None:
     with pytest.raises(ValidationError):
         Settings(**kwargs)
+
+
+def test_settings_default_to_v2_prompt_stack() -> None:
+    settings = Settings()
+
+    assert settings.cleaning_prompt_version == "cmos_v2"
+    assert settings.classification_prompt_version == "dewey_v2"

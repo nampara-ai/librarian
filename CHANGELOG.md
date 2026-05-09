@@ -7,6 +7,10 @@
 - Fixed direct PDF extractor defaults to match runtime settings.
 - Fixed mock-provider OCR correction so local dry runs do not include correction instructions in
   converted OCR text.
+- Added `cmos_v2` and `dewey_v2` prompts as defaults, with stronger OCR cleanup, structure
+  preservation, context-handling, and Dewey reference guidance.
+- Added final assembly cleanup for echoed context markers, assistant artifacts, duplicate sentences,
+  duplicate headers, and boundary whitespace.
 
 ## 0.1.0a2 - 2026-05-06
 
