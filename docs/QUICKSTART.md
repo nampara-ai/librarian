@@ -54,6 +54,7 @@ export LIBRARIAN_OCR_PDF_MAX_PAGES=1000
 export LIBRARIAN_PDF_MAX_PAGES=1000
 export LIBRARIAN_OCR_LLM_CORRECTION=never
 librarian convert ./large.pdf --format md --output ./large.md
-librarian import ./large.md --format md --process
+librarian ingest ./large.md
+librarian process doc_...
 librarian search "known phrase"
 ```

@@ -131,7 +131,8 @@ surface it. Recursive conversion/import skips Librarian-generated sidecars and c
 
 ## Large-PDF Test Recipe
 
-For a real 500-1000 page PDF, run conversion first, then process/index the converted Markdown:
+For a real 500-1000 page PDF, run conversion first, then ingest and process the converted
+Markdown:
 
 ```bash
 export LIBRARIAN_OCR_PDF_MAX_PAGES=1000
@@ -140,9 +141,12 @@ export LIBRARIAN_OCR_PAGE_CONCURRENCY=2
 export LIBRARIAN_OCR_LLM_CORRECTION=never
 
 librarian convert ./massive.pdf --format md --output ./massive.md
-librarian import ./massive.md --format md --process
+librarian ingest ./massive.md
+librarian process doc_...
 librarian search "known phrase from the document"
 ```
 
 Use `LIBRARIAN_OCR_LLM_CORRECTION=always` with real provider credentials when measuring final
 quality instead of raw OCR throughput.
+
+For a folder of PDFs, use `librarian import ./input --recursive --format md --process` instead.

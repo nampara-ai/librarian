@@ -46,7 +46,8 @@ For 500-1000 page PDFs, measure conversion and processing separately:
 
 ```bash
 time librarian convert ./large.pdf --format md --output ./large.md
-time librarian import ./large.md --format md --process
+time librarian ingest ./large.md
+time librarian process doc_...
 ```
 
 Run once with `LIBRARIAN_OCR_LLM_CORRECTION=never` to isolate extraction/OCR throughput, then run
