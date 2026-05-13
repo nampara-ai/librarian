@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.0a17 - 2026-05-13
+
+- Redacted per-file API batch-upload failure details before returning item-level errors so
+  unexpected exceptions cannot echo API keys or provider tokens in batch responses.
+
 ## 0.1.0a16 - 2026-05-13
 
 - Rejected malformed and oversized API search queries before storage access so `/search`,

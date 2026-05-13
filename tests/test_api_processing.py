@@ -871,6 +871,38 @@ def test_api_batch_upload_rejects_too_many_bytes_before_ingest(tmp_path: Path) -
     assert not list((tmp_path / ".librarian" / "uploads").glob("*"))
 
 
+def test_api_batch_upload_item_errors_are_redacted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+
+    async def fail_ingest_upload(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise RuntimeError("provider failed api_key=abc123 sk-testSECRET123")
+
+    monkeypatch.setattr(api_app, "_ingest_upload", fail_ingest_upload)
+
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/documents/batch",
+            files=[("files", ("a.txt", b"first", "text/plain"))],
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    error = payload["documents"][0]["error"]
+    assert payload["failed"] == 1
+    assert error["code"] == "bad_request"
+    assert "api_key=[REDACTED]" in error["detail"]
+    assert "[REDACTED]" in error["detail"]
+    assert "abc123" not in error["detail"]
+    assert "sk-testSECRET123" not in error["detail"]
+
+
 def test_api_document_list_uses_paginated_response_metadata(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",

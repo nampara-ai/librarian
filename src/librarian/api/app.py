@@ -904,7 +904,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             except HTTPException as exc:
                 failed_count += 1
-                detail = exc.detail
+                detail = sanitize_error_message(exc.detail)
                 items.append(
                     BatchDocumentItemResponse(
                         filename=filename,
@@ -918,7 +918,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 continue
             except Exception as exc:
                 failed_count += 1
-                detail = str(exc)
+                detail = sanitize_error_message(exc)
                 items.append(
                     BatchDocumentItemResponse(
                         filename=filename,
