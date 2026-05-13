@@ -1,0 +1,30 @@
+{
+  "cases": [
+    {
+      "name": "markdown transcript conversion and search",
+      "source_path": "corpus/markdown-transcript.md",
+      "tags": ["markdown", "transcript", "search"],
+      "format": "md",
+      "process": true,
+      "expected_contains": ["canter transitions", "saddle fit", "groundwork"],
+      "expected_search_phrases": ["canter transitions", "saddle fit"],
+      "expected_classification_prefix": "636",
+      "min_output_char_ratio": 0.5,
+      "max_output_char_ratio": 2.0,
+      "require_markdown_headings": true
+    },
+    {
+      "name": "plain text health interview",
+      "source_path": "corpus/health-interview.txt",
+      "tags": ["text", "interview", "classification"],
+      "format": "md",
+      "process": true,
+      "expected_contains": ["medicine adherence", "follow-up care"],
+      "expected_search_phrases": ["medicine adherence"],
+      "expected_classification_prefix": "610",
+      "min_output_char_ratio": 0.5,
+      "max_output_char_ratio": 3.0,
+      "require_markdown_headings": true
+    }
+  ]
+}

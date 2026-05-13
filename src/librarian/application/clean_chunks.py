@@ -36,6 +36,7 @@ class CleanChunks:
     coherence_mode: CoherenceMode = "balanced"
     max_parallel_chunks: int = 8
     balanced_group_size: int = 4
+    max_response_chars: int = 2 * 1024 * 1024
 
     async def execute(self, chunks: list[Chunk]) -> list[CleanedChunk]:
         if self.coherence_mode == "fast":
@@ -124,5 +125,14 @@ class CleanChunks:
             max_tokens=self.max_tokens,
             temperature=self.temperature,
         )
-        validated = validate_cleaned_text(raw, input_size=len(chunk.text))
+        if len(raw) > self.max_response_chars:
+            raise ValueError(
+                "cleaning provider response exceeded configured character limit "
+                f"({len(raw)} > {self.max_response_chars})"
+            )
+        validated = validate_cleaned_text(
+            raw,
+            input_size=len(chunk.text),
+            source_text=chunk.text,
+        )
         return CleanedChunk(chunk=chunk, text=validated.text, warnings=validated.warnings)

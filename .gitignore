@@ -20,6 +20,8 @@ node_modules/
 
 # Librarian runtime data
 .librarian/
+docs/results/
+release-evidence/
 library/
 output/
 input/

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nampara-librarian"
-version = "0.1.0a3"
+version = "0.1.0a4"
 description = "Local-first corpus cleaner and library organizer with CLI and API surfaces."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -45,8 +45,16 @@ ocr = [
   "pytesseract>=0.3.13",
 ]
 universal = ["markitdown[pdf,docx,pptx,xlsx,xls,outlook]>=0.1.5"]
+otel = [
+  "opentelemetry-api>=1.27.0",
+  "opentelemetry-exporter-otlp-proto-http>=1.27.0",
+  "opentelemetry-sdk>=1.27.0",
+]
 all = [
   "markitdown[pdf,docx,pptx,xlsx,xls,outlook]>=0.1.5",
+  "opentelemetry-api>=1.27.0",
+  "opentelemetry-exporter-otlp-proto-http>=1.27.0",
+  "opentelemetry-sdk>=1.27.0",
   "pdf2image>=1.17.0",
   "pdfplumber>=0.11.4",
   "pillow>=10.4.0",
@@ -59,6 +67,8 @@ dev = [
   "pyright>=1.1.384",
   "build>=1.2.2",
   "cyclonedx-bom>=6.1.0",
+  "pip-audit>=2.9.0",
+  "urllib3>=2.7.0",
 ]
 
 [project.scripts]

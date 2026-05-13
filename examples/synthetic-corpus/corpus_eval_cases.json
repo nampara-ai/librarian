@@ -1,0 +1,206 @@
+{
+  "cases": [
+    {
+      "name": "Horse Training Seminar 1",
+      "source_path": "corpus/001-equine-training.md",
+      "tags": [
+        "synthetic",
+        "long-document",
+        "equine-training"
+      ],
+      "format": "md",
+      "process": true,
+      "expected_contains": [
+        "canter transitions",
+        "saddle fit"
+      ],
+      "expected_search_phrases": [
+        "canter transitions",
+        "saddle fit"
+      ],
+      "expected_classification_prefix": "636",
+      "min_output_char_ratio": 0.5,
+      "max_output_char_ratio": 4.0,
+      "require_markdown_headings": true
+    },
+    {
+      "name": "Health Interview Transcript 2",
+      "source_path": "corpus/002-health-interview.md",
+      "tags": [
+        "synthetic",
+        "long-document",
+        "health-interview"
+      ],
+      "format": "md",
+      "process": true,
+      "expected_contains": [
+        "medicine adherence",
+        "follow-up care"
+      ],
+      "expected_search_phrases": [
+        "medicine adherence",
+        "follow-up care"
+      ],
+      "expected_classification_prefix": "610",
+      "min_output_char_ratio": 0.5,
+      "max_output_char_ratio": 4.0,
+      "require_markdown_headings": true
+    },
+    {
+      "name": "Horse Training Seminar DOCX 1",
+      "source_path": "corpus/003-equine-training-docx.docx",
+      "tags": [
+        "synthetic",
+        "docx",
+        "tables",
+        "headers-footers",
+        "equine-training"
+      ],
+      "format": "md",
+      "process": true,
+      "expected_contains": [
+        "canter transitions",
+        "saddle fit",
+        "Synthetic header",
+        "Synthetic footer",
+        "Table checkpoint"
+      ],
+      "expected_search_phrases": [
+        "canter transitions",
+        "Table checkpoint"
+      ],
+      "expected_classification_prefix": "636",
+      "min_output_char_ratio": 0.02,
+      "max_output_char_ratio": 20.0
+    },
+    {
+      "name": "Health Interview Transcript DOCX 2",
+      "source_path": "corpus/004-health-interview-docx.docx",
+      "tags": [
+        "synthetic",
+        "docx",
+        "tables",
+        "headers-footers",
+        "health-interview"
+      ],
+      "format": "md",
+      "process": true,
+      "expected_contains": [
+        "medicine adherence",
+        "follow-up care",
+        "Synthetic header",
+        "Synthetic footer",
+        "Table checkpoint"
+      ],
+      "expected_search_phrases": [
+        "medicine adherence",
+        "Table checkpoint"
+      ],
+      "expected_classification_prefix": "610",
+      "min_output_char_ratio": 0.02,
+      "max_output_char_ratio": 20.0
+    },
+    {
+      "name": "Library Workshop Transcript DOCX 3",
+      "source_path": "corpus/005-library-workshop-docx.docx",
+      "tags": [
+        "synthetic",
+        "docx",
+        "tables",
+        "headers-footers",
+        "library-workshop"
+      ],
+      "format": "md",
+      "process": true,
+      "expected_contains": [
+        "catalog metadata",
+        "search recall",
+        "Synthetic header",
+        "Synthetic footer",
+        "Table checkpoint"
+      ],
+      "expected_search_phrases": [
+        "catalog metadata",
+        "Table checkpoint"
+      ],
+      "expected_classification_prefix": "020",
+      "min_output_char_ratio": 0.02,
+      "max_output_char_ratio": 20.0
+    },
+    {
+      "name": "Horse Training Seminar Embedded PDF 1",
+      "source_path": "corpus/006-equine-training-embedded.pdf",
+      "tags": [
+        "synthetic",
+        "pdf",
+        "embedded-text",
+        "equine-training"
+      ],
+      "format": "md",
+      "process": true,
+      "expected_contains": [
+        "canter transitions",
+        "saddle fit"
+      ],
+      "expected_search_phrases": [
+        "canter transitions",
+        "saddle fit"
+      ],
+      "expected_classification_prefix": "636",
+      "expected_page_count": 1,
+      "min_output_char_ratio": 0.05,
+      "max_output_char_ratio": 50.0,
+      "require_markdown_headings": true
+    },
+    {
+      "name": "Health Interview Transcript Embedded PDF 2",
+      "source_path": "corpus/007-health-interview-embedded.pdf",
+      "tags": [
+        "synthetic",
+        "pdf",
+        "embedded-text",
+        "health-interview"
+      ],
+      "format": "md",
+      "process": true,
+      "expected_contains": [
+        "medicine adherence",
+        "follow-up care"
+      ],
+      "expected_search_phrases": [
+        "medicine adherence",
+        "follow-up care"
+      ],
+      "expected_classification_prefix": "610",
+      "expected_page_count": 1,
+      "min_output_char_ratio": 0.05,
+      "max_output_char_ratio": 50.0,
+      "require_markdown_headings": true
+    },
+    {
+      "name": "Library Workshop Transcript Embedded PDF 3",
+      "source_path": "corpus/008-library-workshop-embedded.pdf",
+      "tags": [
+        "synthetic",
+        "pdf",
+        "embedded-text",
+        "library-workshop"
+      ],
+      "format": "md",
+      "process": true,
+      "expected_contains": [
+        "catalog metadata",
+        "search recall"
+      ],
+      "expected_search_phrases": [
+        "catalog metadata",
+        "search recall"
+      ],
+      "expected_classification_prefix": "020",
+      "expected_page_count": 1,
+      "min_output_char_ratio": 0.05,
+      "max_output_char_ratio": 50.0,
+      "require_markdown_headings": true
+    }
+  ]
+}

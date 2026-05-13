@@ -15,12 +15,21 @@ Each applied filename is recorded in `schema_migrations`.
 ## Local Commands
 
 ```bash
+librarian db-backup .librarian/backups/pre-migrate.sqlite
 librarian migrate
+librarian db-check
+librarian db-maintain
 sqlite3 .librarian/librarian.sqlite "select * from schema_migrations"
+sqlite3 .librarian/librarian.sqlite "pragma journal_mode; pragma busy_timeout;"
 ```
 
 ## Recovery
 
-If a migration fails locally, restore from backup or remove the incomplete database and rerun
+If a migration fails locally, restore from the backup or remove the incomplete database and rerun
 `librarian migrate`. Do not manually insert rows into `schema_migrations` unless you have verified
 the schema state.
+
+```bash
+librarian db-restore .librarian/backups/pre-migrate.sqlite --yes
+librarian db-check
+```

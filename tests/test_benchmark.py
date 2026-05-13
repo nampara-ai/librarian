@@ -1,7 +1,9 @@
+import json
 from pathlib import Path
 
 import pytest
 
+from librarian.application import benchmark as benchmark_module
 from librarian.application.benchmark import (
     benchmark_result_json,
     load_benchmark_text,
@@ -37,7 +39,14 @@ async def test_benchmark_reports_throughput() -> None:
     assert result.runs[0].input_chars > 0
     assert result.runs[0].chunks > 0
     assert result.average_chars_per_second > 0
-    assert '"provider": "mock"' in benchmark_result_json(result)
+    rendered = json.loads(benchmark_result_json(result))
+    assert rendered["librarian_version"]
+    assert rendered["generated_at"].endswith("+00:00")
+    assert rendered["cleaning_prompt_version"] == "cmos_v1"
+    assert rendered["summary"]["run_count"] == 2
+    assert rendered["summary"]["total_input_chars"] == sum(item.input_chars for item in result.runs)
+    assert rendered["summary"]["total_chunks"] == sum(item.chunks for item in result.runs)
+    assert rendered["runs"][0]["provider"] == "mock"
 
 
 def test_load_benchmark_text_from_file(tmp_path: Path) -> None:
@@ -45,6 +54,43 @@ def test_load_benchmark_text_from_file(tmp_path: Path) -> None:
     path.write_text("benchmark text", encoding="utf-8")
 
     assert load_benchmark_text(path, paragraphs=1, paragraph_chars=10) == "benchmark text"
+
+
+def test_load_benchmark_text_rejects_oversized_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "benchmark.txt"
+    path.write_text("too large", encoding="utf-8")
+    monkeypatch.setattr(benchmark_module, "_MAX_BENCHMARK_INPUT_BYTES", 4)
+
+    with pytest.raises(ValueError, match="Benchmark input exceeds configured limit"):
+        load_benchmark_text(path, paragraphs=1, paragraph_chars=10)
+
+
+def test_synthetic_text_rejects_invalid_dimensions() -> None:
+    with pytest.raises(ValueError, match="paragraphs must be at least 1"):
+        synthetic_text(paragraphs=0, paragraph_chars=10)
+    with pytest.raises(ValueError, match="paragraph_chars must be at least 1"):
+        synthetic_text(paragraphs=1, paragraph_chars=0)
+
+
+@pytest.mark.asyncio
+async def test_benchmark_suite_rejects_invalid_repeats() -> None:
+    cleaner = CleanChunks(
+        provider=MockLLMProvider(),
+        prompt_catalog=PromptCatalog(),
+        prompt_version="cmos_v1",
+        model="mock-cleaner",
+    )
+
+    with pytest.raises(ValueError, match="repeats must be at least 1"):
+        await run_benchmark_suite(
+            cleaner=cleaner,
+            document_id=DocumentId("doc_benchmark"),
+            text="benchmark text",
+            policy=ChunkingPolicy(target_chars=1_000, overlap_chars=50, min_chunk_chars=100),
+            repeats=0,
+        )
 
 
 @pytest.mark.asyncio

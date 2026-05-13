@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib
 import json
 import multiprocessing
@@ -10,12 +11,16 @@ import queue
 import shutil
 import subprocess
 import tempfile
+import time
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
 IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"})
+ARCHIVE_EXTENSIONS = frozenset({".zip", ".tar", ".tgz", ".gz", ".bz2", ".xz", ".7z", ".rar"})
+_MAX_PDF_PAGE_MANIFEST_BYTES = 256 * 1024 * 1024
 OcrCorrectionMode = Literal["always", "never", "low-confidence"]
 
 OCR_CORRECTION_PROMPT = """You are correcting OCR text extracted from a PDF page.
@@ -41,6 +46,19 @@ class OcrCorrectionProvider(Protocol):
     ) -> str: ...
 
 
+class ExtractionMetrics(Protocol):
+    """Metrics sink for extraction adapters."""
+
+    def record_ocr_page(
+        self,
+        *,
+        source: str,
+        status: str,
+        duration_ms: float,
+        corrected: bool = False,
+    ) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class PdfPageExtraction:
     """One extracted PDF page."""
@@ -51,6 +69,18 @@ class PdfPageExtraction:
     confidence: float | None = None
     corrected: bool = False
     error: str | None = None
+    raw_text: str | None = None
+    warnings: tuple[str, ...] = ()
+    attempts: int = 0
+    duration_ms: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OcrTextResult:
+    """Raw OCR text plus optional engine confidence."""
+
+    text: str
+    confidence: float | None = None
 
 
 class TextFamilyExtractor:
@@ -67,7 +97,11 @@ class TextFamilyExtractor:
     def _extract_sync(self, path: Path) -> str:
         _validate_input_size(path, self.max_input_bytes, "Text extraction input")
         _validate_text_like(path)
-        text = path.read_text(encoding="utf-8")
+        text = _read_limited_text_file(
+            path,
+            max_bytes=self.max_input_bytes,
+            label="Text extraction input",
+        )
         if path.suffix.lower() == ".json":
             try:
                 parsed = json.loads(text)
@@ -120,10 +154,13 @@ class PdfExtractor:
         ocr_correction_provider: OcrCorrectionProvider | None = None,
         ocr_correction_mode: OcrCorrectionMode = "always",
         ocr_correction_model: str = "mock-cleaner",
+        ocr_low_confidence_threshold: float = 85.0,
+        ocr_max_correction_response_chars: int = 2 * 1024 * 1024,
         ocr_page_concurrency: int = 2,
         ocr_fail_on_page_error: bool = True,
         max_input_bytes: int = 200 * 1024 * 1024,
         max_pages: int = 1_000,
+        metrics: ExtractionMetrics | None = None,
     ) -> None:
         self.ocr_language = ocr_language
         self.ocr_timeout_seconds = ocr_timeout_seconds
@@ -132,11 +169,19 @@ class PdfExtractor:
         self.ocr_correction_provider = ocr_correction_provider
         self.ocr_correction_mode = ocr_correction_mode
         self.ocr_correction_model = ocr_correction_model
+        self.ocr_low_confidence_threshold = ocr_low_confidence_threshold
+        self.ocr_max_correction_response_chars = ocr_max_correction_response_chars
         self.ocr_page_concurrency = ocr_page_concurrency
         self.ocr_fail_on_page_error = ocr_fail_on_page_error
         self.max_input_bytes = max_input_bytes
         self.max_pages = max_pages
+        self.metrics = metrics
         self.last_metadata: dict[str, object] | None = None
+        self.page_manifest_path: Path | None = None
+
+    def set_page_manifest_path(self, path: Path | None) -> None:
+        """Set an optional durable manifest path for page-level extraction state."""
+        self.page_manifest_path = path
 
     async def extract(self, path: Path) -> str:
         _validate_input_size(path, self.max_input_bytes, "PDF extraction input")
@@ -154,13 +199,56 @@ class PdfExtractor:
                 f"limit {self.ocr_pdf_max_pages}: {page_list}"
             )
 
-        page_results: list[PdfPageExtraction | None] = list(pages)
+        source_sha256 = await asyncio.to_thread(_file_sha256, path)
+        extraction_config = self._extraction_config()
+        manifest = await _load_pdf_page_manifest(self.page_manifest_path)
+        reusable_pages = _reusable_manifest_pages(
+            manifest,
+            source_sha256=source_sha256,
+            extraction_config=extraction_config,
+            page_count=page_count,
+        )
+        previous_attempts = _manifest_page_attempts(manifest)
+        page_results: list[PdfPageExtraction | None] = []
+        for page in pages:
+            reusable_page = reusable_pages.get(page.page_number)
+            if reusable_page is not None:
+                page_results.append(reusable_page)
+            elif page.text.strip():
+                page_results.append(page)
+            else:
+                page_results.append(
+                    PdfPageExtraction(
+                        page_number=page.page_number,
+                        text="",
+                        source="pending",
+                        attempts=previous_attempts.get(page.page_number, 0),
+                    )
+                )
+        manifest_lock = asyncio.Lock()
+
+        async def write_manifest() -> None:
+            async with manifest_lock:
+                await _write_pdf_page_manifest(
+                    self.page_manifest_path,
+                    source_path=path,
+                    source_sha256=source_sha256,
+                    extraction_config=extraction_config,
+                    page_count=page_count,
+                    pages=page_results,
+                )
+
+        await write_manifest()
         semaphore = asyncio.Semaphore(max(1, self.ocr_page_concurrency))
 
         async def recover_page(page_number: int) -> None:
+            existing = page_results[page_number - 1]
+            if existing is not None and existing.text.strip() and existing.source == "ocr":
+                return
             async with semaphore:
+                page_start = time.perf_counter()
                 try:
-                    ocr_text = await asyncio.to_thread(
+                    ocr_result_obj = await asyncio.to_thread(
                         _ocr_pdf_page,
                         path,
                         page_number=page_number,
@@ -168,18 +256,51 @@ class PdfExtractor:
                         timeout_seconds=self.ocr_timeout_seconds,
                         dpi=self.ocr_pdf_dpi,
                     )
+                    ocr_result = _coerce_ocr_result(ocr_result_obj)
                     corrected = await self._correct_ocr_page(
                         page_number=page_number,
-                        text=ocr_text,
+                        text=ocr_result.text,
+                        confidence=ocr_result.confidence,
                     )
+                    corrected_page = corrected != ocr_result.text
+                    duration_ms = (time.perf_counter() - page_start) * 1000
                     page_results[page_number - 1] = PdfPageExtraction(
                         page_number=page_number,
                         text=corrected,
                         source="ocr",
-                        corrected=corrected != ocr_text,
+                        confidence=ocr_result.confidence,
+                        corrected=corrected_page,
+                        raw_text=ocr_result.text,
+                        attempts=previous_attempts.get(page_number, 0) + 1,
+                        duration_ms=duration_ms,
+                        warnings=_ocr_page_warnings(
+                            confidence=ocr_result.confidence,
+                            low_confidence_threshold=self.ocr_low_confidence_threshold,
+                        ),
                     )
+                    self._record_ocr_page(
+                        status="succeeded",
+                        duration_ms=duration_ms,
+                        corrected=corrected_page,
+                    )
+                    await write_manifest()
                 except Exception as exc:
+                    duration_ms = (time.perf_counter() - page_start) * 1000
+                    self._record_ocr_page(
+                        status="failed",
+                        duration_ms=duration_ms,
+                    )
                     if self.ocr_fail_on_page_error:
+                        page_results[page_number - 1] = PdfPageExtraction(
+                            page_number=page_number,
+                            text="",
+                            source="ocr",
+                            error=str(exc),
+                            warnings=("ocr-page-failed",),
+                            attempts=previous_attempts.get(page_number, 0) + 1,
+                            duration_ms=duration_ms,
+                        )
+                        await write_manifest()
                         raise RuntimeError(
                             f"Unable to OCR scanned PDF page {page_number}: {exc}"
                         ) from exc
@@ -188,7 +309,11 @@ class PdfExtractor:
                         text="",
                         source="ocr",
                         error=str(exc),
+                        warnings=("ocr-page-failed",),
+                        attempts=previous_attempts.get(page_number, 0) + 1,
+                        duration_ms=duration_ms,
                     )
+                    await write_manifest()
 
         await asyncio.gather(*(recover_page(page_number) for page_number in empty_pages))
         final_pages = [page for page in page_results if page is not None]
@@ -197,6 +322,9 @@ class PdfExtractor:
 
         self.last_metadata = {
             "artifact_type": "pdf-page-extraction",
+            "manifest_path": str(self.page_manifest_path) if self.page_manifest_path else None,
+            "source_sha256": source_sha256,
+            "extraction_config": extraction_config,
             "page_count": page_count,
             "pages": [
                 {
@@ -205,13 +333,43 @@ class PdfExtractor:
                     "chars": len(page.text),
                     "confidence": page.confidence,
                     "corrected": page.corrected,
-                    "status": "failed" if page.error else "succeeded",
+                    "status": _pdf_page_status(page),
                     "error": page.error,
+                    "warnings": list(page.warnings),
+                    "attempts": page.attempts,
+                    "duration_ms": page.duration_ms,
                 }
                 for page in final_pages
             ],
         }
         return render_pdf_pages_markdown(path, final_pages)
+
+    def _record_ocr_page(
+        self,
+        *,
+        status: str,
+        duration_ms: float,
+        corrected: bool = False,
+    ) -> None:
+        if self.metrics is None:
+            return
+        self.metrics.record_ocr_page(
+            source="pdf",
+            status=status,
+            duration_ms=duration_ms,
+            corrected=corrected,
+        )
+
+    def _extraction_config(self) -> dict[str, object]:
+        return {
+            "ocr_language": self.ocr_language,
+            "ocr_timeout_seconds": self.ocr_timeout_seconds,
+            "ocr_pdf_dpi": self.ocr_pdf_dpi,
+            "ocr_correction_mode": self.ocr_correction_mode,
+            "ocr_correction_model": self.ocr_correction_model,
+            "ocr_low_confidence_threshold": self.ocr_low_confidence_threshold,
+            "ocr_max_correction_response_chars": self.ocr_max_correction_response_chars,
+        }
 
     def _extract_sync(self, path: Path) -> str:
         """Compatibility wrapper for callers that still use synchronous extraction."""
@@ -230,12 +388,14 @@ class PdfExtractor:
         page_outputs = list(pages)
         for page_number in empty_pages:
             try:
-                ocr_text = _ocr_pdf_page(
-                    path,
-                    page_number=page_number,
-                    language=self.ocr_language,
-                    timeout_seconds=self.ocr_timeout_seconds,
-                    dpi=self.ocr_pdf_dpi,
+                ocr_result = _coerce_ocr_result(
+                    _ocr_pdf_page(
+                        path,
+                        page_number=page_number,
+                        language=self.ocr_language,
+                        timeout_seconds=self.ocr_timeout_seconds,
+                        dpi=self.ocr_pdf_dpi,
+                    )
                 )
             except (RuntimeError, ValueError) as exc:
                 raise RuntimeError(
@@ -243,8 +403,14 @@ class PdfExtractor:
                 ) from exc
             page_outputs[page_number - 1] = PdfPageExtraction(
                 page_number=page_number,
-                text=ocr_text,
+                text=ocr_result.text,
                 source="ocr",
+                confidence=ocr_result.confidence,
+                raw_text=ocr_result.text,
+                warnings=_ocr_page_warnings(
+                    confidence=ocr_result.confidence,
+                    low_confidence_threshold=self.ocr_low_confidence_threshold,
+                ),
             )
         self.last_metadata = {
             "artifact_type": "pdf-page-extraction",
@@ -256,8 +422,11 @@ class PdfExtractor:
                     "chars": len(page.text),
                     "confidence": page.confidence,
                     "corrected": page.corrected,
-                    "status": "failed" if page.error else "succeeded",
+                    "status": _pdf_page_status(page),
                     "error": page.error,
+                    "warnings": list(page.warnings),
+                    "attempts": page.attempts,
+                    "duration_ms": page.duration_ms,
                 }
                 for page in page_outputs
             ],
@@ -294,10 +463,22 @@ class PdfExtractor:
                     )
         return pages, page_count
 
-    async def _correct_ocr_page(self, *, page_number: int, text: str) -> str:
+    async def _correct_ocr_page(
+        self,
+        *,
+        page_number: int,
+        text: str,
+        confidence: float | None = None,
+    ) -> str:
         if self.ocr_correction_mode == "never":
             return text
-        if self.ocr_correction_mode == "low-confidence":
+        if (
+            self.ocr_correction_mode == "low-confidence"
+            and (
+                confidence is None
+                or confidence >= self.ocr_low_confidence_threshold
+            )
+        ):
             return text
         provider = self.ocr_correction_provider
         if provider is None:
@@ -314,6 +495,12 @@ class PdfExtractor:
             temperature=0.0,
         )
         clean = str(corrected).strip()
+        if len(clean) > self.ocr_max_correction_response_chars:
+            raise ValueError(
+                f"LLM OCR correction returned {len(clean)} characters for page {page_number}, "
+                "exceeding configured limit "
+                f"{self.ocr_max_correction_response_chars}"
+            )
         if not clean:
             raise ValueError(f"LLM OCR correction returned empty text for page {page_number}")
         return clean
@@ -411,6 +598,8 @@ class CompositeExtractor:
         ocr_correction_provider: OcrCorrectionProvider | None = None,
         ocr_correction_mode: OcrCorrectionMode = "always",
         ocr_correction_model: str = "mock-cleaner",
+        ocr_low_confidence_threshold: float = 85.0,
+        ocr_max_correction_response_chars: int = 2 * 1024 * 1024,
         ocr_page_concurrency: int = 2,
         ocr_fail_on_page_error: bool = True,
         text_max_input_bytes: int = 100 * 1024 * 1024,
@@ -419,6 +608,7 @@ class CompositeExtractor:
         pdf_max_pages: int = 1_000,
         universal_max_input_bytes: int = 50 * 1024 * 1024,
         universal_timeout_seconds: int = 120,
+        metrics: ExtractionMetrics | None = None,
     ) -> None:
         extractors = [
             TextFamilyExtractor(max_input_bytes=text_max_input_bytes),
@@ -431,10 +621,13 @@ class CompositeExtractor:
                 ocr_correction_provider=ocr_correction_provider,
                 ocr_correction_mode=ocr_correction_mode,
                 ocr_correction_model=ocr_correction_model,
+                ocr_low_confidence_threshold=ocr_low_confidence_threshold,
+                ocr_max_correction_response_chars=ocr_max_correction_response_chars,
                 ocr_page_concurrency=ocr_page_concurrency,
                 ocr_fail_on_page_error=ocr_fail_on_page_error,
                 max_input_bytes=pdf_max_input_bytes,
                 max_pages=pdf_max_pages,
+                metrics=metrics,
             ),
             ImageOcrExtractor(language=ocr_language, timeout_seconds=ocr_timeout_seconds),
             MarkItDownExtractor(
@@ -452,6 +645,8 @@ class CompositeExtractor:
 
     async def extract(self, path: Path) -> str:
         extension = path.suffix.lower()
+        if extension in ARCHIVE_EXTENSIONS:
+            raise ValueError(f"Archive inputs are not supported by default: {extension}")
         extractor = self._extractors.get(extension)
         if extractor is None:
             raise ValueError(f"Unsupported file extension: {extension}")
@@ -459,6 +654,13 @@ class CompositeExtractor:
         metadata = getattr(extractor, "last_metadata", None)
         self.last_metadata = metadata if isinstance(metadata, dict) else None
         return text
+
+    def set_page_manifest_path(self, path: Path | None) -> None:
+        """Forward page manifest paths to extractors that support them."""
+        for extractor in self._extractors.values():
+            setter = getattr(extractor, "set_page_manifest_path", None)
+            if callable(setter):
+                setter(path)
 
 
 def _ocr_image(path: Path, *, language: str = "eng", timeout_seconds: int = 120) -> str:
@@ -476,6 +678,71 @@ def _ocr_image(path: Path, *, language: str = "eng", timeout_seconds: int = 120)
     if not text:
         raise ValueError(f"No OCR text found in image: {path}")
     return text
+
+
+def _ocr_image_result(
+    path: Path,
+    *,
+    language: str = "eng",
+    timeout_seconds: int = 120,
+) -> OcrTextResult:
+    text = _ocr_image(path, language=language, timeout_seconds=timeout_seconds)
+    try:
+        confidence = _ocr_image_confidence(
+            path,
+            language=language,
+            timeout_seconds=timeout_seconds,
+        )
+    except Exception:
+        confidence = None
+    return OcrTextResult(text=text, confidence=confidence)
+
+
+def _ocr_image_confidence(
+    path: Path,
+    *,
+    language: str = "eng",
+    timeout_seconds: int = 120,
+) -> float | None:
+    tesseract_path = shutil.which("tesseract")
+    if tesseract_path is None:
+        raise RuntimeError("OCR requires the 'tesseract' executable on PATH")
+    completed = subprocess.run(  # noqa: S603
+        [tesseract_path, str(path), "stdout", "-l", language, "tsv"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout_seconds,
+    )
+    return parse_tesseract_tsv_confidence(completed.stdout)
+
+
+def parse_tesseract_tsv_confidence(tsv: str) -> float | None:
+    lines = [line for line in tsv.splitlines() if line.strip()]
+    if not lines:
+        return None
+    header = lines[0].split("\t")
+    try:
+        confidence_index = header.index("conf")
+        text_index = header.index("text")
+    except ValueError:
+        return None
+    confidences: list[float] = []
+    for line in lines[1:]:
+        fields = line.split("\t")
+        if len(fields) <= max(confidence_index, text_index):
+            continue
+        if not fields[text_index].strip():
+            continue
+        try:
+            confidence = float(fields[confidence_index])
+        except ValueError:
+            continue
+        if confidence >= 0:
+            confidences.append(confidence)
+    if not confidences:
+        return None
+    return sum(confidences) / len(confidences)
 
 
 def _ocr_pdf(
@@ -524,7 +791,7 @@ def _ocr_pdf_page(
     language: str = "eng",
     timeout_seconds: int = 120,
     dpi: int = 200,
-) -> str:
+) -> OcrTextResult:
     if shutil.which("tesseract") is None:
         raise RuntimeError("Scanned PDF OCR requires the 'tesseract' executable on PATH")
     try:
@@ -546,14 +813,233 @@ def _ocr_pdf_page(
                 timeout=timeout_seconds,
             ),
         )
-        parts = [
-            _ocr_image(image_path, language=language, timeout_seconds=timeout_seconds)
+        results = [
+            _ocr_image_result(image_path, language=language, timeout_seconds=timeout_seconds)
             for image_path in image_paths
         ]
-    text = "\n\n".join(part for part in parts if part.strip())
+    text = "\n\n".join(result.text for result in results if result.text.strip())
     if not text:
         raise ValueError(f"No OCR text found on PDF page {page_number}: {path}")
-    return text
+    confidences = [result.confidence for result in results if result.confidence is not None]
+    confidence = sum(confidences) / len(confidences) if confidences else None
+    return OcrTextResult(text=text, confidence=confidence)
+
+
+def _coerce_ocr_result(value: OcrTextResult | str) -> OcrTextResult:
+    if isinstance(value, OcrTextResult):
+        return value
+    return OcrTextResult(text=value)
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+async def _load_pdf_page_manifest(path: Path | None) -> dict[str, object] | None:
+    if path is None or not await asyncio.to_thread(path.exists):
+        return None
+    if await asyncio.to_thread(path.is_symlink):
+        return None
+    try:
+        manifest_text = await asyncio.to_thread(
+            _read_limited_text_file,
+            path,
+            max_bytes=_MAX_PDF_PAGE_MANIFEST_BYTES,
+            label="PDF page manifest",
+        )
+        payload = json.loads(manifest_text)
+    except (OSError, json.JSONDecodeError):
+        return None
+    return cast(dict[str, object], payload) if isinstance(payload, dict) else None
+
+
+async def _write_pdf_page_manifest(
+    path: Path | None,
+    *,
+    source_path: Path,
+    source_sha256: str,
+    extraction_config: dict[str, object],
+    page_count: int,
+    pages: Sequence[PdfPageExtraction | None],
+) -> None:
+    if path is None:
+        return
+    if await asyncio.to_thread(path.is_symlink):
+        raise ValueError(f"PDF page manifest path must not be a symlink: {path}")
+    records: list[dict[str, object]] = []
+    for page_number, page in enumerate(pages, start=1):
+        if page is None:
+            records.append(
+                {
+                    "page_number": page_number,
+                    "source": "pending",
+                    "status": "pending",
+                    "attempts": 0,
+                    "duration_ms": None,
+                    "text": "",
+                }
+            )
+            continue
+        records.append(
+            {
+                "page_number": page.page_number,
+                "source": page.source,
+                "status": _pdf_page_status(page),
+                "chars": len(page.text),
+                "raw_chars": len(page.raw_text) if page.raw_text is not None else None,
+                "confidence": page.confidence,
+                "corrected": page.corrected,
+                "error": page.error,
+                "warnings": list(page.warnings),
+                "attempts": page.attempts,
+                "duration_ms": page.duration_ms,
+                "raw_text": page.raw_text,
+                "corrected_text": page.text if page.corrected else None,
+                "text": page.text,
+            }
+        )
+    payload = json.dumps(
+        {
+            "generated_by": "librarian",
+            "artifact_type": "pdf-page-extraction-manifest",
+            "source_path": str(source_path),
+            "source_sha256": source_sha256,
+            "extraction_config": extraction_config,
+            "page_count": page_count,
+            "pages": records,
+        },
+        indent=2,
+    )
+    await asyncio.to_thread(_write_text_atomic, path, payload)
+
+
+def _pdf_page_status(page: PdfPageExtraction) -> str:
+    if page.error:
+        return "failed"
+    if page.source == "pending":
+        return "pending"
+    return "succeeded"
+
+
+def _write_text_atomic(path: Path, payload: str) -> None:
+    _reject_symlinked_output_path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary_path.write_text(payload, encoding="utf-8")
+        temporary_path.replace(path)
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+
+def _reject_symlinked_output_path(path: Path) -> None:
+    if path.is_symlink():
+        raise ValueError(f"Output path must not be a symlink: {path}")
+    for parent in reversed(path.parents):
+        if parent.exists() and parent.is_symlink():
+            raise ValueError(f"Output path crosses symlinked parent: {path}")
+
+
+def _reusable_manifest_pages(
+    manifest: dict[str, object] | None,
+    *,
+    source_sha256: str,
+    extraction_config: dict[str, object],
+    page_count: int,
+) -> dict[int, PdfPageExtraction]:
+    if manifest is None:
+        return {}
+    if manifest.get("source_sha256") != source_sha256:
+        return {}
+    if manifest.get("extraction_config") != extraction_config:
+        return {}
+    if manifest.get("page_count") != page_count:
+        return {}
+    pages_obj = manifest.get("pages")
+    if not isinstance(pages_obj, list):
+        return {}
+    pages: dict[int, PdfPageExtraction] = {}
+    for page_obj in cast(list[object], pages_obj):
+        if not isinstance(page_obj, dict):
+            continue
+        item = cast(dict[str, object], page_obj)
+        if item.get("status") != "succeeded":
+            continue
+        page_number = item.get("page_number")
+        text = item.get("text")
+        source = item.get("source")
+        if not isinstance(page_number, int) or not isinstance(text, str):
+            continue
+        if source not in {"embedded", "ocr"}:
+            continue
+        pages[page_number] = PdfPageExtraction(
+            page_number=page_number,
+            text=text,
+            source=str(source),
+            confidence=cast(float | None, item.get("confidence")),
+            corrected=item.get("corrected") is True,
+            raw_text=cast(str | None, item.get("raw_text")),
+            warnings=_manifest_warnings(item.get("warnings")),
+            attempts=_manifest_attempt_count(item.get("attempts")),
+            duration_ms=_manifest_duration_ms(item.get("duration_ms")),
+        )
+    return pages
+
+
+def _manifest_page_attempts(manifest: dict[str, object] | None) -> dict[int, int]:
+    if manifest is None:
+        return {}
+    pages_obj = manifest.get("pages")
+    if not isinstance(pages_obj, list):
+        return {}
+    attempts: dict[int, int] = {}
+    for page_obj in cast(list[object], pages_obj):
+        if not isinstance(page_obj, dict):
+            continue
+        item = cast(dict[str, object], page_obj)
+        page_number = item.get("page_number")
+        if isinstance(page_number, int):
+            attempts[page_number] = _manifest_attempt_count(item.get("attempts"))
+    return attempts
+
+
+def _manifest_attempt_count(value: object) -> int:
+    if isinstance(value, int) and value >= 0:
+        return value
+    return 0
+
+
+def _manifest_duration_ms(value: object) -> float | None:
+    if isinstance(value, int | float) and value >= 0:
+        return float(value)
+    return None
+
+
+def _ocr_page_warnings(
+    *,
+    confidence: float | None,
+    low_confidence_threshold: float,
+) -> tuple[str, ...]:
+    if confidence is None:
+        return ("missing-ocr-confidence",)
+    if confidence < low_confidence_threshold:
+        return ("low-ocr-confidence",)
+    return ()
+
+
+def _manifest_warnings(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    warnings: list[str] = []
+    for item in cast(list[object], value):
+        if isinstance(item, str):
+            warnings.append(item)
+    return tuple(warnings)
 
 
 def render_pdf_pages_markdown(path: Path, pages: Sequence[PdfPageExtraction]) -> str:
@@ -636,6 +1122,14 @@ def _validate_input_size(path: Path, max_input_bytes: int, label: str) -> None:
     byte_size = path.stat().st_size
     if byte_size > max_input_bytes:
         raise ValueError(f"{label} exceeds {max_input_bytes} bytes: {path}")
+
+
+def _read_limited_text_file(path: Path, *, max_bytes: int, label: str) -> str:
+    with path.open("rb") as handle:
+        payload = handle.read(max_bytes + 1)
+    if len(payload) > max_bytes:
+        raise ValueError(f"{label} exceeds {max_bytes} bytes: {path}")
+    return payload.decode("utf-8")
 
 
 def _validate_text_like(path: Path) -> None:

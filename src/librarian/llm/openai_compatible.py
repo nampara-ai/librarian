@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import random
+from typing import Protocol
 
 from openai import (
     APIConnectionError,
@@ -15,6 +16,21 @@ from openai import (
     RateLimitError,
 )
 from openai.types.chat import ChatCompletion
+
+
+class LLMUsageMetrics(Protocol):
+    """Metrics sink for provider token usage."""
+
+    def record_llm_usage(
+        self,
+        *,
+        provider: str,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        estimated_cost_usd: float = 0.0,
+    ) -> None: ...
 
 
 class OpenAICompatibleProvider:
@@ -32,6 +48,9 @@ class OpenAICompatibleProvider:
         max_retries: int = 5,
         retry_base_delay_seconds: float = 0.5,
         retry_max_delay_seconds: float = 10.0,
+        metrics: LLMUsageMetrics | None = None,
+        prompt_cost_per_1k_tokens_usd: float = 0.0,
+        completion_cost_per_1k_tokens_usd: float = 0.0,
     ) -> None:
         api_key = os.environ.get(api_key_env)
         if not api_key:
@@ -42,6 +61,9 @@ class OpenAICompatibleProvider:
         self._max_retries = max_retries
         self._retry_base_delay_seconds = retry_base_delay_seconds
         self._retry_max_delay_seconds = retry_max_delay_seconds
+        self._metrics = metrics
+        self._prompt_cost_per_1k_tokens_usd = prompt_cost_per_1k_tokens_usd
+        self._completion_cost_per_1k_tokens_usd = completion_cost_per_1k_tokens_usd
 
     async def complete(
         self,
@@ -60,6 +82,7 @@ class OpenAICompatibleProvider:
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
+        self._record_usage(response, model=model)
         return response.choices[0].message.content or ""
 
     async def _complete_with_retries(
@@ -99,6 +122,25 @@ class OpenAICompatibleProvider:
         if last_error is not None:
             raise last_error
         raise RuntimeError("LLM completion failed without an exception")
+
+    def _record_usage(self, response: ChatCompletion, *, model: str) -> None:
+        if self._metrics is None or response.usage is None:
+            return
+        prompt_tokens = int(response.usage.prompt_tokens or 0)
+        completion_tokens = int(response.usage.completion_tokens or 0)
+        total_tokens = int(response.usage.total_tokens or (prompt_tokens + completion_tokens))
+        estimated_cost_usd = (
+            prompt_tokens * self._prompt_cost_per_1k_tokens_usd / 1000
+            + completion_tokens * self._completion_cost_per_1k_tokens_usd / 1000
+        )
+        self._metrics.record_llm_usage(
+            provider=self.name,
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            estimated_cost_usd=estimated_cost_usd,
+        )
 
 
 def is_retriable_openai_error(exc: Exception) -> bool:

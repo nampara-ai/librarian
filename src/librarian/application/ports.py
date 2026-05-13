@@ -114,6 +114,45 @@ class EventSink(Protocol):
     def stream(self, run_id: RunId) -> AsyncIterator[str]: ...
 
 
+class ApplicationMetrics(Protocol):
+    """Metrics sink for application services."""
+
+    def record_run_stage(self, *, stage: str, duration_ms: float) -> None: ...
+
+    def record_run_finished(self, *, status: str) -> None: ...
+
+    def record_queue_claim(self, *, wait_ms: float) -> None: ...
+
+    def record_queue_failure(self) -> None: ...
+
+    def record_conversion_failure(
+        self,
+        *,
+        failure_type: str,
+        source_extension: str,
+    ) -> None: ...
+
+    def record_ocr_page(
+        self,
+        *,
+        source: str,
+        status: str,
+        duration_ms: float,
+        corrected: bool = False,
+    ) -> None: ...
+
+    def record_llm_usage(
+        self,
+        *,
+        provider: str,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        estimated_cost_usd: float = 0.0,
+    ) -> None: ...
+
+
 class ChunkRepository(Protocol):
     """Persistence port for chunks."""
 

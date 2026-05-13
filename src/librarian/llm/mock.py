@@ -35,6 +35,9 @@ class MockLLMProvider:
             elif any(term in text for term in ("writing", "literature", "novel", "poetry")):
                 code = "800"
                 label = "Literature"
+            elif any(term in text for term in ("library", "catalog", "metadata", "search recall")):
+                code = "020"
+                label = "Library & Information Sciences"
             return json.dumps(
                 {
                     "summary": " ".join(user_prompt.split("Text to analyze:", 1)[-1].split())[:300],
@@ -43,4 +46,14 @@ class MockLLMProvider:
                     "confidence": 1.0,
                 }
             )
-        return " ".join(user_prompt.split())
+        return _normalize_cleaned_text(user_prompt)
+
+
+def _normalize_cleaned_text(value: str) -> str:
+    """Normalize intra-line whitespace while preserving document structure."""
+    lines = [" ".join(line.split()) for line in value.splitlines()]
+    while lines and not lines[0]:
+        lines.pop(0)
+    while lines and not lines[-1]:
+        lines.pop()
+    return "\n".join(lines)

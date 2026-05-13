@@ -70,8 +70,15 @@ async def _read_source(path: Path, *, max_source_bytes: int | None = None) -> tu
 
     def read() -> tuple[Path, bytes]:
         source_path = path.expanduser().resolve()
-        if max_source_bytes is not None and source_path.stat().st_size > max_source_bytes:
+        stat = source_path.stat()
+        if max_source_bytes is not None and stat.st_size > max_source_bytes:
             raise ValueError(f"Source file exceeds {max_source_bytes} bytes: {source_path}")
-        return source_path, source_path.read_bytes()
+        if max_source_bytes is None:
+            return source_path, source_path.read_bytes()
+        with source_path.open("rb") as handle:
+            payload = handle.read(max_source_bytes + 1)
+        if len(payload) > max_source_bytes:
+            raise ValueError(f"Source file exceeds {max_source_bytes} bytes: {source_path}")
+        return source_path, payload
 
     return await asyncio.to_thread(read)

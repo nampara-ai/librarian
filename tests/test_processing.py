@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any, cast
 
@@ -20,6 +21,37 @@ from librarian.domain.models import (
     RunStatus,
 )
 from librarian.prompts import PromptCatalog
+from librarian.taxonomy.dewey import DeweyTaxonomy
+
+
+class FakeSpan:
+    def __init__(self, name: str, attributes: dict[str, object]) -> None:
+        self.name = name
+        self.attributes = dict(attributes)
+
+    def __enter__(self) -> "FakeSpan":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        del args
+
+    def set_attribute(self, key: str, value: object) -> None:
+        self.attributes[key] = value
+
+
+class FakeTracer:
+    def __init__(self) -> None:
+        self.spans: list[FakeSpan] = []
+
+    def start_as_current_span(
+        self,
+        name: str,
+        *,
+        attributes: dict[str, object],
+    ) -> FakeSpan:
+        span = FakeSpan(name, attributes)
+        self.spans.append(span)
+        return span
 
 
 @pytest.mark.asyncio
@@ -42,6 +74,30 @@ async def test_ingest_process_and_search_round_trip(tmp_path: Path) -> None:
     output = await container.repository.get_cleaned_output(ingested.document.id)
     classification = await container.repository.get_classification(ingested.document.id)
     results = await container.repository.search("horse")
+    detailed_results = await container.repository.search_results("horse")
+    classification_filtered = await container.repository.search(
+        "horse",
+        classification_code="636.1",
+    )
+    filename_filtered = await container.repository.search(
+        "horse",
+        filename_contains="horse-notes",
+    )
+    status_filtered = await container.repository.search(
+        "horse",
+        document_status=DocumentStatus.READY,
+    )
+    raw_results = await container.repository.search_results(
+        "rough horse",
+        scope="raw",
+        filename_contains="horse-notes",
+    )
+    cleaned_facets = await container.repository.search_facets("horse")
+    raw_facets = await container.repository.search_facets("rough horse", scope="raw")
+    wrong_classification = await container.repository.search(
+        "horse",
+        classification_code="000.0",
+    )
 
     assert run.status == "succeeded"
     assert run.total_chunks == 1
@@ -51,11 +107,150 @@ async def test_ingest_process_and_search_round_trip(tmp_path: Path) -> None:
     assert classification is not None
     assert classification.code == "636.1"
     assert ingested.document.id in results
+    assert detailed_results[0].document_id == ingested.document.id
+    assert detailed_results[0].run_id == run.id
+    assert detailed_results[0].filename == "horse-notes.txt"
+    assert detailed_results[0].document_status == DocumentStatus.READY
+    assert detailed_results[0].classification_code == "636.1"
+    assert "<mark>horse</mark>" in detailed_results[0].snippet.casefold()
+    assert ingested.document.id in classification_filtered
+    assert ingested.document.id in filename_filtered
+    assert ingested.document.id in status_filtered
+    assert raw_results[0].document_id == ingested.document.id
+    assert raw_results[0].run_id is None
+    assert raw_results[0].source == "raw"
+    assert "<mark>rough</mark>" in raw_results[0].snippet
+    assert cleaned_facets.classifications[0].value == "636.1"
+    assert cleaned_facets.statuses[0].value == "ready"
+    assert cleaned_facets.sources[0].value == "cleaned"
+    assert cleaned_facets.filenames[0].value == "horse-notes.txt"
+    assert raw_facets.sources[0].value == "raw"
+    assert ingested.document.id not in wrong_classification
 
     second_run = await container.process_document.execute(ingested.document.id)
     events = await container.repository.list_events(second_run.id)
 
     assert any("1 cache hit(s)" in event for event in events)
+
+
+@pytest.mark.asyncio
+async def test_processing_logs_structured_run_stage_metrics(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    source = tmp_path / "horse-notes.txt"
+    source.write_text("Horse transcript for structured run logs.", encoding="utf-8")
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    container = await build_container(settings)
+    ingested = await container.ingest_document.execute(source)
+
+    with caplog.at_level(logging.INFO, logger="librarian.application.process_document"):
+        run = await container.process_document.execute(ingested.document.id)
+
+    stage_records = [
+        record for record in caplog.records if record.getMessage() == "run_stage_finished"
+    ]
+    assert any(cast(Any, record).stage == "clean" for record in stage_records)
+    clean_record = cast(
+        Any,
+        next(record for record in stage_records if cast(Any, record).stage == "clean"),
+    )
+    assert clean_record.run_id == str(run.id)
+    assert clean_record.document_id == str(ingested.document.id)
+    assert clean_record.status == "succeeded"
+    assert clean_record.duration_ms >= 0
+    assert source.read_text(encoding="utf-8") not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_processing_emits_stage_tracing_spans(tmp_path: Path) -> None:
+    source = tmp_path / "horse-notes.txt"
+    source.write_text("Horse transcript for tracing spans.", encoding="utf-8")
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    tracer = FakeTracer()
+    container = await build_container(settings, tracer=tracer)
+    ingested = await container.ingest_document.execute(source)
+
+    run = await container.process_document.execute(ingested.document.id)
+
+    stage_spans = [span for span in tracer.spans if span.name == "librarian.run_stage"]
+    assert {span.attributes["librarian.stage"] for span in stage_spans} >= {
+        "ingest",
+        "clean",
+        "classify",
+        "index",
+    }
+    clean_span = next(
+        span for span in stage_spans if span.attributes["librarian.stage"] == "clean"
+    )
+    assert clean_span.attributes["librarian.run_id"] == str(run.id)
+    assert clean_span.attributes["librarian.document_id"] == str(ingested.document.id)
+    assert clean_span.attributes["librarian.status"] == "succeeded"
+    assert isinstance(clean_span.attributes["librarian.duration_ms"], float)
+
+
+@pytest.mark.asyncio
+async def test_search_normalizes_punctuation_and_hyphenated_queries(tmp_path: Path) -> None:
+    source = tmp_path / "horse-notes.txt"
+    source.write_text(
+        "This transcript mentions canter transitions, saddle fit, and follow-up care.",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    container = await build_container(settings)
+    ingested = await container.ingest_document.execute(source)
+
+    await container.process_document.execute(ingested.document.id)
+    hyphenated = await container.repository.search("canter-transitions")
+    punctuated = await container.repository.search("follow-up care?!")
+
+    assert ingested.document.id in hyphenated
+    assert ingested.document.id in punctuated
+
+
+@pytest.mark.asyncio
+async def test_search_supports_quoted_exact_phrases(tmp_path: Path) -> None:
+    first = tmp_path / "first.txt"
+    first.write_text(
+        "This transcript mentions follow up care after a clinic visit.",
+        encoding="utf-8",
+    )
+    second = tmp_path / "second.txt"
+    second.write_text("This transcript mentions care and then follow up later.", encoding="utf-8")
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    container = await build_container(settings)
+    first_ingested = await container.ingest_document.execute(first)
+    second_ingested = await container.ingest_document.execute(second)
+
+    await container.process_document.execute(first_ingested.document.id)
+    await container.process_document.execute(second_ingested.document.id)
+    loose = await container.repository.search("follow-up care")
+    exact = await container.repository.search('"follow-up care"')
+
+    assert first_ingested.document.id in loose
+    assert second_ingested.document.id in loose
+    assert first_ingested.document.id in exact
+    assert second_ingested.document.id not in exact
 
 
 @pytest.mark.asyncio
@@ -201,6 +396,124 @@ async def test_balanced_coherence_carries_context_within_parallel_groups() -> No
     assert provider.prompts[2] == "chunk 2"
     assert provider.prompts[3].startswith("[CONTEXT:")
     assert "chunk 2" in provider.prompts[3]
+
+
+@pytest.mark.asyncio
+async def test_clean_chunks_preserves_markdown_quality_warnings() -> None:
+    class CollapsingProvider:
+        name = "collapsing"
+
+        async def complete(
+            self,
+            *,
+            system_prompt: str,
+            user_prompt: str,
+            model: str,
+            max_tokens: int,
+            temperature: float,
+        ) -> str:
+            del system_prompt, user_prompt, model, max_tokens, temperature
+            return "Visit Notes First paragraph. Second paragraph. First item Second item A B 1 2"
+
+    chunk = Chunk(
+        id=ChunkId("chk_quality"),
+        document_id=DocumentId("doc_quality"),
+        ordinal=0,
+        text=(
+            "# Visit Notes\n\n"
+            "First paragraph.\n\n"
+            "Second paragraph with [1].\n\n"
+            "- First item\n"
+            "- Second item\n\n"
+            "| A | B |\n"
+            "|---|---|\n"
+            "| 1 | 2 |"
+        ),
+        start_char=0,
+        end_char=120,
+        sha256="sha-quality",
+    )
+    cleaner = CleanChunks(
+        provider=CollapsingProvider(),
+        prompt_catalog=PromptCatalog(),
+        prompt_version="cmos_v1",
+        model="test",
+    )
+
+    results = await cleaner.execute([chunk])
+
+    assert "missing-markdown-heading" in results[0].warnings
+    assert "missing-markdown-list" in results[0].warnings
+    assert "missing-markdown-table" in results[0].warnings
+    assert "missing-citation-marker" in results[0].warnings
+
+
+@pytest.mark.asyncio
+async def test_clean_chunks_rejects_oversized_provider_response() -> None:
+    class OversizedProvider:
+        name = "oversized"
+
+        async def complete(
+            self,
+            *,
+            system_prompt: str,
+            user_prompt: str,
+            model: str,
+            max_tokens: int,
+            temperature: float,
+        ) -> str:
+            del system_prompt, user_prompt, model, max_tokens, temperature
+            return "x" * 11
+
+    chunk = Chunk(
+        id=ChunkId("chk_oversized"),
+        document_id=DocumentId("doc_oversized"),
+        ordinal=0,
+        text="Horse transcript.",
+        start_char=0,
+        end_char=17,
+        sha256="sha-oversized",
+    )
+    cleaner = CleanChunks(
+        provider=OversizedProvider(),
+        prompt_catalog=PromptCatalog(),
+        prompt_version="cmos_v1",
+        model="test",
+        max_response_chars=10,
+    )
+
+    with pytest.raises(ValueError, match="cleaning provider response exceeded"):
+        await cleaner.execute([chunk])
+
+
+@pytest.mark.asyncio
+async def test_classifier_rejects_oversized_provider_response() -> None:
+    class OversizedProvider:
+        name = "oversized"
+
+        async def complete(
+            self,
+            *,
+            system_prompt: str,
+            user_prompt: str,
+            model: str,
+            max_tokens: int,
+            temperature: float,
+        ) -> str:
+            del system_prompt, user_prompt, model, max_tokens, temperature
+            return "x" * 11
+
+    classifier = ClassifyDocument(
+        provider=OversizedProvider(),
+        prompt_catalog=PromptCatalog(),
+        prompt_version="dewey_v1",
+        model="test",
+        taxonomy=DeweyTaxonomy(),
+        max_response_chars=10,
+    )
+
+    with pytest.raises(ValueError, match="classification provider response exceeded"):
+        await classifier.execute(DocumentId("doc_oversized"), "Horse transcript.")
 
 
 @pytest.mark.asyncio
@@ -435,6 +748,49 @@ async def test_start_event_failure_marks_created_run_failed(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_processing_persisted_errors_are_redacted_and_bounded(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Horse transcript with sensitive provider failure.", encoding="utf-8")
+    container = await build_container(settings)
+    ingested = await container.ingest_document.execute(source)
+    run = await container.process_document.start(ingested.document.id)
+
+    class FailingEvents:
+        async def emit(self, run_id: RunId, stage: RunStage, message: str) -> None:
+            del run_id, stage, message
+            raise RuntimeError("api_key=abc123 " + ("private transcript text " * 100))
+
+    process = ProcessDocument(
+        documents=container.repository,
+        runs=container.repository,
+        chunks=container.repository,
+        content=container.repository,
+        outputs=container.repository,
+        events=cast(EventSink, FailingEvents()),
+        cleaner=container.process_document.cleaner,
+        classifier=container.process_document.classifier,
+        chunking_policy=container.process_document.chunking_policy,
+    )
+
+    with pytest.raises(RuntimeError, match="api_key=abc123"):
+        await process.execute_existing(run.id)
+
+    latest = await container.repository.get_run(run.id)
+    assert latest is not None
+    assert latest.error is not None
+    assert "api_key=[REDACTED]" in latest.error
+    assert "abc123" not in latest.error
+    assert latest.error.endswith("...[truncated]")
+    assert len(latest.error) <= 1_014
+
+
+@pytest.mark.asyncio
 async def test_task_cancellation_marks_run_failed_and_restores_document_status(
     tmp_path: Path,
 ) -> None:
@@ -602,6 +958,30 @@ async def test_ingest_rejects_source_above_size_limit(tmp_path: Path) -> None:
         await container.ingest_document.execute(source)
 
     assert list(await container.repository.list()) == []
+
+
+@pytest.mark.asyncio
+async def test_ingest_uses_bounded_source_read_when_limit_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        max_source_bytes=10,
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("safe", encoding="utf-8")
+    container = await build_container(settings)
+
+    def fail_read_bytes(self: Path) -> bytes:
+        raise AssertionError(f"unbounded read_bytes called for {self}")
+
+    monkeypatch.setattr(Path, "read_bytes", fail_read_bytes)
+
+    ingested = await container.ingest_document.execute(source)
+
+    assert ingested.raw_text == "safe"
+    assert ingested.document.source.byte_size == 4
 
 
 @pytest.mark.asyncio

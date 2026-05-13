@@ -5,13 +5,17 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol, cast
 
 _MAX_METADATA_BYTES = 64 * 1024
-_LIBRARIAN_ARTIFACT_TYPES = frozenset({"conversion-sidecar", "import-report"})
+_LIBRARIAN_ARTIFACT_TYPES = frozenset(
+    {"conversion-sidecar", "import-report", "pdf-page-extraction-manifest"}
+)
 
 
 class ConversionFormat(StrEnum):
@@ -45,6 +49,17 @@ class TextConverter(Protocol):
     supported_extensions: frozenset[str]
 
     async def extract(self, path: Path) -> str: ...
+
+
+class ConversionMetrics(Protocol):
+    """Metrics sink for conversion outcomes."""
+
+    def record_conversion_failure(
+        self,
+        *,
+        failure_type: str,
+        source_extension: str,
+    ) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +127,7 @@ class DocumentConverter:
     """Convert arbitrary supported source files to Markdown or plain text."""
 
     extractor: TextConverter
+    metrics: ConversionMetrics | None = None
 
     async def convert_file(
         self,
@@ -123,13 +139,21 @@ class DocumentConverter:
         write_sidecar: bool = False,
     ) -> ConvertedDocument:
         """Convert one file and write the rendered output."""
+        await asyncio.to_thread(_reject_symlinked_output_path, output_path)
+        sidecar_path = output_path.with_suffix(f"{output_path.suffix}.json")
+        if write_sidecar:
+            await asyncio.to_thread(_reject_symlinked_output_path, sidecar_path)
         output_exists = await asyncio.to_thread(output_path.exists)
         if output_exists and not overwrite:
             raise FileExistsError(f"Output already exists: {output_path}")
+        page_manifest_path = output_path.with_suffix(f"{output_path.suffix}.pages.json")
+        set_page_manifest_path = getattr(self.extractor, "set_page_manifest_path", None)
+        if callable(set_page_manifest_path):
+            set_page_manifest_path(page_manifest_path if write_sidecar else None)
         text = await self.extractor.extract(source_path)
         rendered = render_conversion(text, source_path=source_path, format=format)
         await asyncio.to_thread(output_path.parent.mkdir, parents=True, exist_ok=True)
-        await asyncio.to_thread(output_path.write_text, rendered, encoding="utf-8")
+        await asyncio.to_thread(_write_text_atomic, output_path, rendered)
         if write_sidecar:
             metadata_obj = getattr(self.extractor, "last_metadata", None)
             metadata = (
@@ -203,6 +227,7 @@ class DocumentConverter:
                     write_sidecar=True,
                 )
             except Exception as exc:
+                self.record_conversion_failure(source_path, exc)
                 items.append(
                     BatchConversionItem(
                         source_path=source_path,
@@ -222,6 +247,15 @@ class DocumentConverter:
             )
         return BatchConversionResult(items=tuple(items))
 
+    def record_conversion_failure(self, source_path: Path, exc: Exception) -> None:
+        """Record a classified conversion failure if metrics are configured."""
+        if self.metrics is None:
+            return
+        self.metrics.record_conversion_failure(
+            failure_type=classify_conversion_error(exc).value,
+            source_extension=source_path.suffix.lower() or "<none>",
+        )
+
 
 def discover_supported_files(
     source_dir: Path,
@@ -232,21 +266,44 @@ def discover_supported_files(
     exclude_paths: tuple[Path, ...] = (),
 ) -> list[Path]:
     """Find supported files in stable order."""
-    pattern = "**/*" if recursive else "*"
-    excluded = tuple(path.resolve() for path in exclude_paths)
-    resolved_allowed_root = allowed_root.resolve() if allowed_root else None
     return sorted(
-        (
-            path
-            for path in source_dir.glob(pattern)
-            if path.is_file()
-            and path.suffix.lower() in supported_extensions
-            and not _is_under_any(path.resolve(), excluded)
-            and _is_under_allowed_root(path, resolved_allowed_root)
-            and not _has_librarian_sidecar(path)
+        iter_supported_files(
+            source_dir,
+            supported_extensions=supported_extensions,
+            recursive=recursive,
+            allowed_root=allowed_root,
+            exclude_paths=exclude_paths,
         ),
         key=lambda item: str(item.relative_to(source_dir)).lower(),
     )
+
+
+def iter_supported_files(
+    source_dir: Path,
+    *,
+    supported_extensions: frozenset[str],
+    recursive: bool,
+    allowed_root: Path | None = None,
+    exclude_paths: tuple[Path, ...] = (),
+) -> Iterator[Path]:
+    """Yield supported files without materializing the whole tree."""
+    pattern = "**/*" if recursive else "*"
+    excluded = tuple(path.resolve() for path in exclude_paths)
+    resolved_allowed_root = allowed_root.resolve() if allowed_root else None
+    for path in source_dir.glob(pattern):
+        if not path.is_file() or path.suffix.lower() not in supported_extensions:
+            continue
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if _is_under_any(resolved, excluded):
+            continue
+        if not _is_under_allowed_root(path, resolved_allowed_root):
+            continue
+        if _has_librarian_sidecar(path):
+            continue
+        yield path
 
 
 def conversion_output_exclusions(
@@ -304,19 +361,33 @@ def _is_under_allowed_root(path: Path, allowed_root: Path | None) -> bool:
 
 
 def _has_librarian_sidecar(path: Path) -> bool:
-    if path.suffix.lower() == ".json" and _is_librarian_metadata_file(path):
+    if path.suffix.lower() == ".json" and _is_librarian_metadata_file(
+        path,
+        allow_large_prefix=True,
+    ):
         return True
     sidecar = path.with_suffix(f"{path.suffix}.json")
     return _is_librarian_metadata_file(sidecar)
 
 
-def _is_librarian_metadata_file(path: Path) -> bool:
+def _is_librarian_metadata_file(path: Path, *, allow_large_prefix: bool = False) -> bool:
     try:
         stat = path.stat()
-        if not path.is_file() or stat.st_size > _MAX_METADATA_BYTES:
+        if not path.is_file():
             return False
-        payload_obj = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        if stat.st_size > _MAX_METADATA_BYTES:
+            if not allow_large_prefix:
+                return False
+            prefix = _read_text_prefix(path, max_bytes=_MAX_METADATA_BYTES)
+            return (
+                '"generated_by": "librarian"' in prefix
+                and any(
+                    f'"artifact_type": "{kind}"' in prefix
+                    for kind in _LIBRARIAN_ARTIFACT_TYPES
+                )
+            )
+        payload_obj = json.loads(_read_limited_text_file(path, max_bytes=_MAX_METADATA_BYTES))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return False
     if not isinstance(payload_obj, dict):
         return False
@@ -325,6 +396,19 @@ def _is_librarian_metadata_file(path: Path) -> bool:
         payload.get("generated_by") == "librarian"
         and payload.get("artifact_type") in _LIBRARIAN_ARTIFACT_TYPES
     )
+
+
+def _read_text_prefix(path: Path, *, max_bytes: int) -> str:
+    with path.open("rb") as handle:
+        return handle.read(max_bytes).decode("utf-8", errors="ignore")
+
+
+def _read_limited_text_file(path: Path, *, max_bytes: int) -> str:
+    with path.open("rb") as handle:
+        payload = handle.read(max_bytes + 1)
+    if len(payload) > max_bytes:
+        raise ValueError(f"Metadata file exceeds {max_bytes} bytes: {path}")
+    return payload.decode("utf-8")
 
 
 def conversion_output_path(
@@ -395,7 +479,27 @@ async def write_conversion_sidecar(
         indent=2,
     )
     sidecar_path = output_path.with_suffix(f"{output_path.suffix}.json")
-    await asyncio.to_thread(sidecar_path.write_text, payload, encoding="utf-8")
+    await asyncio.to_thread(_write_text_atomic, sidecar_path, payload)
+
+
+def _write_text_atomic(path: Path, payload: str) -> None:
+    _reject_symlinked_output_path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary_path.write_text(payload, encoding="utf-8")
+        temporary_path.replace(path)
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+
+def _reject_symlinked_output_path(path: Path) -> None:
+    if path.is_symlink():
+        raise ValueError(f"Output path must not be a symlink: {path}")
+    for parent in reversed(path.parents):
+        if parent.exists() and parent.is_symlink():
+            raise ValueError(f"Output path crosses symlinked parent: {path}")
 
 
 def classify_conversion_error(exc: Exception) -> ConversionFailureType:

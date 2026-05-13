@@ -1,7 +1,8 @@
 {
+  "artifact_type": "baseline-manifest",
   "provider": "mock",
   "model": "mock-cleaner",
   "suite": "examples/eval_cases.json",
   "expected_passed": true,
-  "notes": "Deterministic CI baseline. Regenerate with librarian eval examples/eval_cases.json --output examples/baselines/mock-eval.json only when output schema changes."
+  "notes": "Manifest for deterministic CI expectations. This is not a release evidence artifact; generate release evidence with librarian eval examples/eval_cases.json --output docs/results/eval-provider.json."
 }

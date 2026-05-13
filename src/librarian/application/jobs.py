@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Protocol
 
+from librarian.application.ports import ApplicationMetrics
 from librarian.application.process_document import ProcessingCanceled
 from librarian.domain.ids import RunId
+from librarian.domain.models import utc_now
+from librarian.observability import NoOpMetricsRecorder, sanitize_error_message, start_span
 
 JobFactory = Callable[[], Awaitable[object]]
 RunProcessor = Callable[[RunId], Coroutine[Any, Any, object]]
@@ -63,7 +67,7 @@ class RunQueue(Protocol):
 
     async def cancel(self, run_id: RunId, *, error: str | None = None) -> None: ...
 
-    async def list(self, *, limit: int = 100) -> tuple[QueuedRun, ...]: ...
+    async def list(self, *, limit: int = 100, offset: int = 0) -> tuple[QueuedRun, ...]: ...
 
 
 @dataclass(slots=True)
@@ -144,6 +148,8 @@ class QueueWorker:
     max_attempts: int = 3
     poll_interval_seconds: float = 1.0
     heartbeat_interval_seconds: float | None = None
+    metrics: ApplicationMetrics = field(default_factory=NoOpMetricsRecorder)
+    tracer: Any | None = None
     _stopping: bool = False
 
     def stop(self) -> None:
@@ -158,21 +164,42 @@ class QueueWorker:
         )
         if item is None:
             return False
+        wait_ms = max((utc_now() - item.available_at).total_seconds() * 1000, 0.0)
+        self.metrics.record_queue_claim(wait_ms=wait_ms)
 
         try:
-            await self._process_with_heartbeat(item.run_id)
+            started_at = time.perf_counter()
+            with start_span(
+                self.tracer,
+                "librarian.queue_process",
+                attributes={
+                    "librarian.run_id": str(item.run_id),
+                    "librarian.worker_id": self.worker_id,
+                    "librarian.queue_attempts": item.attempts,
+                },
+            ) as span:
+                await self._process_with_heartbeat(item.run_id)
+                span.set_attribute("librarian.status", QueueStatus.SUCCEEDED.value)
         except ProcessingCanceled as exc:
-            await self.queue.cancel(item.run_id, error=str(exc))
+            await self.queue.cancel(item.run_id, error=sanitize_error_message(exc))
+            self.metrics.record_run_finished(status=QueueStatus.CANCELED.value)
             return True
         except Exception as exc:
             await self.queue.fail(
                 item.run_id,
-                error=str(exc),
+                error=sanitize_error_message(exc),
                 max_attempts=self.max_attempts,
                 worker_id=self.worker_id,
             )
+            self.metrics.record_queue_failure()
+            self.metrics.record_run_finished(status=QueueStatus.FAILED.value)
             return True
         await self.queue.complete(item.run_id, worker_id=self.worker_id)
+        self.metrics.record_run_finished(status=QueueStatus.SUCCEEDED.value)
+        self.metrics.record_run_stage(
+            stage="queue_process",
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+        )
         return True
 
     async def run_forever(self) -> None:

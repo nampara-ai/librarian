@@ -48,6 +48,10 @@ Ports
   RunQueue
 ```
 
+`RunQueue` is the durable job backend port. Queue adapters must support enqueue, claim, heartbeat,
+complete, fail/retry, cancel, and paginated list operations so CLI/API operator views keep the same
+shape when SQLite is replaced by a networked backend.
+
 ## Fast Processing Model
 
 The pipeline is a resumable DAG:
@@ -85,13 +89,17 @@ in SQLite. This keeps the first release portable and easy to back up, but it dup
 payloads. A filesystem or object-store content adapter remains a future option for very large
 hosted deployments; SQLite is still the supported alpha backend.
 
+Search uses SQLite FTS over cleaned outputs. User queries are normalized before `MATCH` so ordinary
+punctuation and hyphenated terms behave like word queries instead of exposing raw FTS syntax.
+
 ## Prompt Governance
 
 Prompts live under `src/librarian/prompts`. Prompt text is versioned and recorded in run metadata.
 The default cleaning prompt is `cmos_v2`, which preserves the prototype's CMOS copy-editing intent
 while adding explicit instructions for OCR cleanup, structure preservation, context-marker handling,
 and chunk-local fidelity. `cmos_v1` remains bundled so older run provenance and cache keys stay
-resolvable.
+resolvable. Classification prompts are versioned the same way with `dewey_v1` and `dewey_v2`.
+Startup settings reject prompt versions that are not bundled with the package.
 
 ## Migrations
 

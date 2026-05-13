@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sqlite3
 from collections.abc import Sequence
-from datetime import timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from importlib.resources import files
 from pathlib import Path
+from typing import Literal
 
 from librarian.application.clean_chunks import CleanedChunk
 from librarian.application.jobs import QueuedRun, QueueStatus
@@ -20,13 +23,73 @@ from librarian.domain.models import (
     Document,
     DocumentStatus,
     ProcessingRun,
+    RunEvent,
     RunStage,
     RunStatus,
+    SearchFacets,
+    SearchFacetValue,
+    SearchResult,
     SourceFile,
     utc_now,
 )
 
 _SQLITE_BUSY_TIMEOUT_MS = 5_000
+_MAX_SEARCH_QUERY_CHARS = 4_096
+_MAX_EVENT_PAGE_SIZE = 1_000
+_SEARCH_TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
+SearchScope = Literal["cleaned", "raw"]
+
+
+def _path_crosses_symlink(path: Path) -> bool:
+    for current in reversed(path.parents):
+        if current.is_absolute() and len(current.parts) <= 2:
+            continue
+        if current.exists() and current.is_symlink():
+            return True
+    return False
+
+
+@dataclass(frozen=True, slots=True)
+class SQLiteMaintenanceResult:
+    """Result from an operator-triggered SQLite maintenance run."""
+
+    checkpoint_busy: int
+    checkpoint_log_frames: int
+    checkpoint_checkpointed_frames: int
+    vacuumed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SQLiteBackupResult:
+    """Result from an operator-triggered SQLite backup."""
+
+    source_path: Path
+    destination_path: Path
+    byte_size: int
+
+
+@dataclass(frozen=True, slots=True)
+class SQLiteRestoreResult:
+    """Result from an operator-triggered SQLite restore."""
+
+    source_path: Path
+    destination_path: Path
+    byte_size: int
+
+
+@dataclass(frozen=True, slots=True)
+class SQLiteVerifyResult:
+    """Result from an operator-triggered SQLite verification."""
+
+    database_path: Path
+    integrity_ok: bool
+    foreign_key_violations: int
+    applied_migrations: int
+
+    @property
+    def ok(self) -> bool:
+        """Return true when the database passes all verification checks."""
+        return self.integrity_ok and self.foreign_key_violations == 0
 
 
 class SQLiteDatabase:
@@ -37,6 +100,22 @@ class SQLiteDatabase:
 
     async def initialize(self) -> None:
         await asyncio.to_thread(self._initialize_sync)
+
+    async def maintain(self, *, vacuum: bool = False) -> SQLiteMaintenanceResult:
+        """Run lightweight SQLite maintenance for long-lived local databases."""
+        return await asyncio.to_thread(self._maintain_sync, vacuum)
+
+    async def backup(self, destination: Path, *, overwrite: bool = False) -> SQLiteBackupResult:
+        """Create a consistent online SQLite backup."""
+        return await asyncio.to_thread(self._backup_sync, destination, overwrite)
+
+    async def restore(self, source: Path) -> SQLiteRestoreResult:
+        """Restore the database from a verified SQLite backup."""
+        return await asyncio.to_thread(self._restore_sync, source)
+
+    async def verify(self) -> SQLiteVerifyResult:
+        """Verify SQLite integrity, foreign keys, and migration metadata."""
+        return await asyncio.to_thread(self._verify_sync)
 
     def _initialize_sync(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -70,7 +149,131 @@ class SQLiteDatabase:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
+        connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute("PRAGMA synchronous = NORMAL")
         return connection
+
+    def _maintain_sync(self, vacuum: bool) -> SQLiteMaintenanceResult:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.connect() as connection:
+            connection.execute("PRAGMA optimize")
+            row = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        if vacuum:
+            with self.connect() as connection:
+                connection.execute("VACUUM")
+        if row is None:
+            return SQLiteMaintenanceResult(
+                checkpoint_busy=0,
+                checkpoint_log_frames=0,
+                checkpoint_checkpointed_frames=0,
+                vacuumed=vacuum,
+            )
+        return SQLiteMaintenanceResult(
+            checkpoint_busy=int(row[0]),
+            checkpoint_log_frames=int(row[1]),
+            checkpoint_checkpointed_frames=int(row[2]),
+            vacuumed=vacuum,
+        )
+
+    def _backup_sync(self, destination: Path, overwrite: bool) -> SQLiteBackupResult:
+        source_path = self.path.expanduser().resolve()
+        expanded_destination = destination.expanduser()
+        if expanded_destination.is_symlink():
+            raise ValueError("Backup destination must not be a symlink")
+        if _path_crosses_symlink(expanded_destination):
+            raise ValueError("Backup destination must not cross a symlinked parent")
+        destination_path = expanded_destination.resolve()
+        if source_path == destination_path:
+            raise ValueError("Backup destination must be different from the source database")
+        if not source_path.exists():
+            raise FileNotFoundError(f"SQLite database does not exist: {source_path}")
+        if destination_path.exists() and not overwrite:
+            raise FileExistsError(f"Backup destination already exists: {destination_path}")
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = destination_path.with_name(f".{destination_path.name}.tmp")
+        temporary_path.unlink(missing_ok=True)
+        try:
+            with self.connect() as source, sqlite3.connect(temporary_path) as target:
+                source.backup(target)
+                integrity = target.execute("PRAGMA integrity_check").fetchone()
+                if integrity is None or str(integrity[0]).lower() != "ok":
+                    raise RuntimeError("SQLite backup failed integrity check")
+            temporary_path.replace(destination_path)
+        except Exception:
+            temporary_path.unlink(missing_ok=True)
+            raise
+        return SQLiteBackupResult(
+            source_path=source_path,
+            destination_path=destination_path,
+            byte_size=destination_path.stat().st_size,
+        )
+
+    def _restore_sync(self, source: Path) -> SQLiteRestoreResult:
+        source_path = source.expanduser().resolve()
+        expanded_destination = self.path.expanduser()
+        if expanded_destination.is_symlink():
+            raise ValueError("Restore destination must not be a symlink")
+        if _path_crosses_symlink(expanded_destination):
+            raise ValueError("Restore destination must not cross a symlinked parent")
+        destination_path = expanded_destination.resolve()
+        if source_path == destination_path:
+            raise ValueError("Restore source must be different from the destination database")
+        if not source_path.exists():
+            raise FileNotFoundError(f"SQLite backup does not exist: {source_path}")
+        self._verify_sqlite_file(source_path, "SQLite backup failed integrity check")
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = destination_path.with_name(f".{destination_path.name}.restore.tmp")
+        temporary_path.unlink(missing_ok=True)
+        try:
+            with sqlite3.connect(source_path) as backup, sqlite3.connect(temporary_path) as target:
+                backup.backup(target)
+                integrity = target.execute("PRAGMA integrity_check").fetchone()
+                if integrity is None or str(integrity[0]).lower() != "ok":
+                    raise RuntimeError("Restored SQLite database failed integrity check")
+            self._remove_sidecars(destination_path)
+            temporary_path.replace(destination_path)
+            self._remove_sidecars(destination_path)
+        except Exception:
+            temporary_path.unlink(missing_ok=True)
+            raise
+        return SQLiteRestoreResult(
+            source_path=source_path,
+            destination_path=destination_path,
+            byte_size=destination_path.stat().st_size,
+        )
+
+    def _verify_sync(self) -> SQLiteVerifyResult:
+        database_path = self.path.expanduser().resolve()
+        if not database_path.exists():
+            raise FileNotFoundError(f"SQLite database does not exist: {database_path}")
+        with self.connect() as connection:
+            integrity = connection.execute("PRAGMA integrity_check").fetchone()
+            integrity_ok = integrity is not None and str(integrity[0]).lower() == "ok"
+            foreign_key_violations = len(connection.execute("PRAGMA foreign_key_check").fetchall())
+            migration_row = connection.execute(
+                "SELECT COUNT(*) AS count FROM schema_migrations"
+            ).fetchone()
+        return SQLiteVerifyResult(
+            database_path=database_path,
+            integrity_ok=integrity_ok,
+            foreign_key_violations=foreign_key_violations,
+            applied_migrations=int(migration_row["count"]) if migration_row else 0,
+        )
+
+    @staticmethod
+    def _verify_sqlite_file(path: Path, failure_message: str) -> None:
+        try:
+            with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as connection:
+                integrity = connection.execute("PRAGMA integrity_check").fetchone()
+        except sqlite3.DatabaseError as exc:
+            raise RuntimeError(failure_message) from exc
+        if integrity is None or str(integrity[0]).lower() != "ok":
+            raise RuntimeError(failure_message)
+
+    @staticmethod
+    def _remove_sidecars(path: Path) -> None:
+        Path(f"{path}-wal").unlink(missing_ok=True)
+        Path(f"{path}-shm").unlink(missing_ok=True)
 
 
 class SQLiteRepository:
@@ -250,22 +453,148 @@ class SQLiteRepository:
         del classification
         await asyncio.to_thread(self._index_sync, output)
 
-    async def search(self, query: str, *, limit: int = 20) -> Sequence[DocumentId]:
+    async def search(
+        self,
+        query: str,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        classification_code: str | None = None,
+        document_status: DocumentStatus | None = None,
+        filename_contains: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        scope: SearchScope = "cleaned",
+        phrase: bool = False,
+    ) -> Sequence[DocumentId]:
         """Search cleaned outputs."""
-        return await asyncio.to_thread(self._search_sync, query, limit)
+        return await asyncio.to_thread(
+            self._search_sync,
+            query,
+            limit,
+            offset,
+            classification_code,
+            document_status,
+            filename_contains,
+            created_after,
+            created_before,
+            scope,
+            phrase,
+        )
+
+    async def search_results(
+        self,
+        query: str,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        classification_code: str | None = None,
+        document_status: DocumentStatus | None = None,
+        filename_contains: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        scope: SearchScope = "cleaned",
+        phrase: bool = False,
+    ) -> Sequence[SearchResult]:
+        """Search cleaned outputs with ranking metadata and snippets."""
+        return await asyncio.to_thread(
+            self._search_results_sync,
+            query,
+            limit,
+            offset,
+            classification_code,
+            document_status,
+            filename_contains,
+            created_after,
+            created_before,
+            scope,
+            phrase,
+        )
+
+    async def search_count(
+        self,
+        query: str,
+        *,
+        classification_code: str | None = None,
+        document_status: DocumentStatus | None = None,
+        filename_contains: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        scope: SearchScope = "cleaned",
+        phrase: bool = False,
+    ) -> int:
+        """Count documents matching the same filters used by search results."""
+        return await asyncio.to_thread(
+            self._search_count_sync,
+            query,
+            classification_code,
+            document_status,
+            filename_contains,
+            created_after,
+            created_before,
+            scope,
+            phrase,
+        )
+
+    async def search_facets(
+        self,
+        query: str,
+        *,
+        classification_code: str | None = None,
+        document_status: DocumentStatus | None = None,
+        filename_contains: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        scope: SearchScope = "cleaned",
+        phrase: bool = False,
+    ) -> SearchFacets:
+        """Return facet counts for matching documents."""
+        return await asyncio.to_thread(
+            self._search_facets_sync,
+            query,
+            classification_code,
+            document_status,
+            filename_contains,
+            created_after,
+            created_before,
+            scope,
+            phrase,
+        )
 
     async def emit(self, run_id: RunId, stage: RunStage, message: str) -> None:
         """Persist a run event."""
         await asyncio.to_thread(self._emit_sync, run_id, stage, message)
 
-    async def list_events(self, run_id: RunId) -> Sequence[str]:
+    async def list_events(
+        self,
+        run_id: RunId,
+        *,
+        limit: int = _MAX_EVENT_PAGE_SIZE,
+        offset: int = 0,
+    ) -> Sequence[str]:
         """List run event messages."""
-        return await asyncio.to_thread(self._list_events_sync, run_id)
+        return await asyncio.to_thread(self._list_events_sync, run_id, limit, offset)
+
+    async def list_event_records(
+        self,
+        run_id: RunId,
+        *,
+        limit: int = _MAX_EVENT_PAGE_SIZE,
+        offset: int = 0,
+    ) -> Sequence[RunEvent]:
+        """List structured run events."""
+        return await asyncio.to_thread(self._list_event_records_sync, run_id, limit, offset)
 
     async def stream(self, run_id: RunId):
         """Yield persisted run event messages."""
-        for message in await self.list_events(run_id):
-            yield message
+        offset = 0
+        while True:
+            messages = await self.list_events(run_id, limit=_MAX_EVENT_PAGE_SIZE, offset=offset)
+            if not messages:
+                break
+            for message in messages:
+                yield message
+            offset += len(messages)
 
     def _save_document_sync(self, document: Document) -> None:
         with self.database.connect() as connection:
@@ -341,6 +670,10 @@ class SQLiteRepository:
 
     def _delete_document_sync(self, document_id: DocumentId) -> None:
         with self.database.connect() as connection:
+            connection.execute(
+                "DELETE FROM raw_content_fts WHERE document_id = ?",
+                (str(document_id),),
+            )
             connection.execute(
                 "DELETE FROM cleaned_outputs_fts WHERE document_id = ?",
                 (str(document_id),),
@@ -487,6 +820,19 @@ class SQLiteRepository:
                 """,
                 (key, text, utc_now().isoformat()),
             )
+            if key.startswith("raw:"):
+                document_id = key.removeprefix("raw:")
+                connection.execute(
+                    "DELETE FROM raw_content_fts WHERE document_id = ?",
+                    (document_id,),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO raw_content_fts (document_id, text)
+                    VALUES (?, ?)
+                    """,
+                    (document_id, text),
+                )
 
     def _get_text_sync(self, key: str) -> str:
         with self.database.connect() as connection:
@@ -838,25 +1184,581 @@ class SQLiteRepository:
                 (str(output.document_id), str(output.run_id), output.text),
             )
 
-    def _search_sync(self, query: str, limit: int) -> list[DocumentId]:
+    def _search_sync(
+        self,
+        query: str,
+        limit: int,
+        offset: int = 0,
+        classification_code: str | None = None,
+        document_status: DocumentStatus | None = None,
+        filename_contains: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        scope: SearchScope = "cleaned",
+        phrase: bool = False,
+    ) -> list[DocumentId]:
+        return [
+            result.document_id
+            for result in self._search_results_sync(
+                query,
+                limit,
+                offset,
+                classification_code,
+                document_status,
+                filename_contains,
+                created_after,
+                created_before,
+                scope,
+                phrase,
+            )
+        ]
+
+    def _search_count_sync(
+        self,
+        query: str,
+        classification_code: str | None = None,
+        document_status: DocumentStatus | None = None,
+        filename_contains: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        scope: SearchScope = "cleaned",
+        phrase: bool = False,
+    ) -> int:
+        if scope == "raw":
+            return self._raw_search_count_sync(
+                query,
+                classification_code,
+                document_status,
+                filename_contains,
+                created_after,
+                created_before,
+                phrase,
+            )
+        match_query = normalize_search_query(query, phrase=phrase)
+        filename_pattern = f"%{_escape_like(filename_contains)}%" if filename_contains else None
+        parameters: tuple[object, ...] = (
+            match_query,
+            RunStatus.SUCCEEDED.value,
+            classification_code,
+            classification_code,
+            document_status.value if document_status else None,
+            document_status.value if document_status else None,
+            filename_pattern,
+            filename_pattern,
+            created_after.isoformat() if created_after else None,
+            created_after.isoformat() if created_after else None,
+            created_before.isoformat() if created_before else None,
+            created_before.isoformat() if created_before else None,
+        )
+        with self.database.connect() as connection:
+            try:
+                row = connection.execute(
+                    """
+                    SELECT COUNT(DISTINCT cleaned_outputs_fts.document_id) AS count
+                    FROM cleaned_outputs_fts
+                    JOIN runs ON runs.id = cleaned_outputs_fts.run_id
+                    JOIN documents ON documents.id = cleaned_outputs_fts.document_id
+                    JOIN cleaned_outputs
+                      ON cleaned_outputs.document_id = cleaned_outputs_fts.document_id
+                     AND cleaned_outputs.run_id = cleaned_outputs_fts.run_id
+                    LEFT JOIN classifications
+                      ON classifications.document_id = cleaned_outputs_fts.document_id
+                    WHERE cleaned_outputs_fts MATCH ?
+                      AND runs.status = ?
+                      AND cleaned_outputs.created_at = (
+                        SELECT MAX(latest.created_at)
+                        FROM cleaned_outputs AS latest
+                        WHERE latest.document_id = cleaned_outputs.document_id
+                      )
+                      AND (? IS NULL OR classifications.code = ?)
+                      AND (? IS NULL OR documents.status = ?)
+                      AND (? IS NULL OR documents.filename LIKE ? ESCAPE '~')
+                      AND (? IS NULL OR documents.created_at >= ?)
+                      AND (? IS NULL OR documents.created_at <= ?)
+                    """,
+                    parameters,
+                ).fetchone()
+            except sqlite3.OperationalError as exc:
+                raise ValueError("Invalid search query") from exc
+        return int(row["count"]) if row else 0
+
+    def _search_results_sync(
+        self,
+        query: str,
+        limit: int,
+        offset: int = 0,
+        classification_code: str | None = None,
+        document_status: DocumentStatus | None = None,
+        filename_contains: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        scope: SearchScope = "cleaned",
+        phrase: bool = False,
+    ) -> list[SearchResult]:
         if limit < 1 or limit > 500:
             raise ValueError("limit must be between 1 and 500")
+        if offset < 0:
+            raise ValueError("offset must be greater than or equal to 0")
+        if scope == "raw":
+            return self._raw_search_results_sync(
+                query,
+                limit,
+                offset,
+                classification_code,
+                document_status,
+                filename_contains,
+                created_after,
+                created_before,
+                phrase,
+            )
+        match_query = normalize_search_query(query, phrase=phrase)
+        filename_pattern = f"%{_escape_like(filename_contains)}%" if filename_contains else None
+        parameters: tuple[object, ...] = (
+            match_query,
+            RunStatus.SUCCEEDED.value,
+            classification_code,
+            classification_code,
+            document_status.value if document_status else None,
+            document_status.value if document_status else None,
+            filename_pattern,
+            filename_pattern,
+            created_after.isoformat() if created_after else None,
+            created_after.isoformat() if created_after else None,
+            created_before.isoformat() if created_before else None,
+            created_before.isoformat() if created_before else None,
+            limit,
+            offset,
+        )
         with self.database.connect() as connection:
             try:
                 rows = connection.execute(
                     """
-                    SELECT DISTINCT cleaned_outputs_fts.document_id
+                    SELECT
+                      cleaned_outputs_fts.document_id,
+                      cleaned_outputs_fts.run_id,
+                      documents.filename,
+                      documents.status AS document_status,
+                      classifications.code AS classification_code,
+                      classifications.label AS classification_label,
+                      snippet(cleaned_outputs_fts, 2, '<mark>', '</mark>', '...', 16) AS snippet,
+                      bm25(cleaned_outputs_fts) AS score
                     FROM cleaned_outputs_fts
                     JOIN runs ON runs.id = cleaned_outputs_fts.run_id
+                    JOIN documents ON documents.id = cleaned_outputs_fts.document_id
+                    JOIN cleaned_outputs
+                      ON cleaned_outputs.document_id = cleaned_outputs_fts.document_id
+                     AND cleaned_outputs.run_id = cleaned_outputs_fts.run_id
+                    LEFT JOIN classifications
+                      ON classifications.document_id = cleaned_outputs_fts.document_id
                     WHERE cleaned_outputs_fts MATCH ?
                       AND runs.status = ?
-                    LIMIT ?
+                      AND cleaned_outputs.created_at = (
+                        SELECT MAX(latest.created_at)
+                        FROM cleaned_outputs AS latest
+                        WHERE latest.document_id = cleaned_outputs.document_id
+                      )
+                      AND (? IS NULL OR classifications.code = ?)
+                      AND (? IS NULL OR documents.status = ?)
+                      AND (? IS NULL OR documents.filename LIKE ? ESCAPE '~')
+                      AND (? IS NULL OR documents.created_at >= ?)
+                      AND (? IS NULL OR documents.created_at <= ?)
+                    ORDER BY score ASC
+                    LIMIT ? OFFSET ?
                     """,
-                    (query, RunStatus.SUCCEEDED.value, limit),
+                    parameters,
                 ).fetchall()
             except sqlite3.OperationalError as exc:
                 raise ValueError("Invalid search query") from exc
-        return [DocumentId(str(row["document_id"])) for row in rows]
+        return [
+            SearchResult(
+                document_id=DocumentId(str(row["document_id"])),
+                run_id=RunId(str(row["run_id"])),
+                source="cleaned",
+                filename=str(row["filename"]),
+                document_status=DocumentStatus(str(row["document_status"])),
+                snippet=str(row["snippet"]),
+                score=float(row["score"]),
+                classification_code=(
+                    str(row["classification_code"])
+                    if row["classification_code"] is not None
+                    else None
+                ),
+                classification_label=(
+                    str(row["classification_label"])
+                    if row["classification_label"] is not None
+                    else None
+                ),
+            )
+            for row in rows
+        ]
+
+    def _raw_search_count_sync(
+        self,
+        query: str,
+        classification_code: str | None,
+        document_status: DocumentStatus | None,
+        filename_contains: str | None,
+        created_after: datetime | None,
+        created_before: datetime | None,
+        phrase: bool = False,
+    ) -> int:
+        match_query = normalize_search_query(query, phrase=phrase)
+        filename_pattern = f"%{_escape_like(filename_contains)}%" if filename_contains else None
+        parameters: tuple[object, ...] = (
+            match_query,
+            classification_code,
+            classification_code,
+            document_status.value if document_status else None,
+            document_status.value if document_status else None,
+            filename_pattern,
+            filename_pattern,
+            created_after.isoformat() if created_after else None,
+            created_after.isoformat() if created_after else None,
+            created_before.isoformat() if created_before else None,
+            created_before.isoformat() if created_before else None,
+        )
+        with self.database.connect() as connection:
+            try:
+                row = connection.execute(
+                    """
+                    SELECT COUNT(DISTINCT raw_content_fts.document_id) AS count
+                    FROM raw_content_fts
+                    JOIN documents ON documents.id = raw_content_fts.document_id
+                    LEFT JOIN classifications
+                      ON classifications.document_id = raw_content_fts.document_id
+                    WHERE raw_content_fts MATCH ?
+                      AND (? IS NULL OR classifications.code = ?)
+                      AND (? IS NULL OR documents.status = ?)
+                      AND (? IS NULL OR documents.filename LIKE ? ESCAPE '~')
+                      AND (? IS NULL OR documents.created_at >= ?)
+                      AND (? IS NULL OR documents.created_at <= ?)
+                    """,
+                    parameters,
+                ).fetchone()
+            except sqlite3.OperationalError as exc:
+                raise ValueError("Invalid search query") from exc
+        return int(row["count"]) if row else 0
+
+    def _raw_search_results_sync(
+        self,
+        query: str,
+        limit: int,
+        offset: int,
+        classification_code: str | None,
+        document_status: DocumentStatus | None,
+        filename_contains: str | None,
+        created_after: datetime | None,
+        created_before: datetime | None,
+        phrase: bool = False,
+    ) -> list[SearchResult]:
+        match_query = normalize_search_query(query, phrase=phrase)
+        filename_pattern = f"%{_escape_like(filename_contains)}%" if filename_contains else None
+        parameters: tuple[object, ...] = (
+            match_query,
+            classification_code,
+            classification_code,
+            document_status.value if document_status else None,
+            document_status.value if document_status else None,
+            filename_pattern,
+            filename_pattern,
+            created_after.isoformat() if created_after else None,
+            created_after.isoformat() if created_after else None,
+            created_before.isoformat() if created_before else None,
+            created_before.isoformat() if created_before else None,
+            limit,
+            offset,
+        )
+        with self.database.connect() as connection:
+            try:
+                rows = connection.execute(
+                    """
+                    SELECT
+                      raw_content_fts.document_id,
+                      documents.filename,
+                      documents.status AS document_status,
+                      classifications.code AS classification_code,
+                      classifications.label AS classification_label,
+                      snippet(raw_content_fts, 1, '<mark>', '</mark>', '...', 16) AS snippet,
+                      bm25(raw_content_fts) AS score
+                    FROM raw_content_fts
+                    JOIN documents ON documents.id = raw_content_fts.document_id
+                    LEFT JOIN classifications
+                      ON classifications.document_id = raw_content_fts.document_id
+                    WHERE raw_content_fts MATCH ?
+                      AND (? IS NULL OR classifications.code = ?)
+                      AND (? IS NULL OR documents.status = ?)
+                      AND (? IS NULL OR documents.filename LIKE ? ESCAPE '~')
+                      AND (? IS NULL OR documents.created_at >= ?)
+                      AND (? IS NULL OR documents.created_at <= ?)
+                    ORDER BY score ASC
+                    LIMIT ? OFFSET ?
+                    """,
+                    parameters,
+                ).fetchall()
+            except sqlite3.OperationalError as exc:
+                raise ValueError("Invalid search query") from exc
+        return [
+            SearchResult(
+                document_id=DocumentId(str(row["document_id"])),
+                run_id=None,
+                source="raw",
+                filename=str(row["filename"]),
+                document_status=DocumentStatus(str(row["document_status"])),
+                snippet=str(row["snippet"]),
+                score=float(row["score"]),
+                classification_code=(
+                    str(row["classification_code"])
+                    if row["classification_code"] is not None
+                    else None
+                ),
+                classification_label=(
+                    str(row["classification_label"])
+                    if row["classification_label"] is not None
+                    else None
+                ),
+            )
+            for row in rows
+        ]
+
+    def _search_facets_sync(
+        self,
+        query: str,
+        classification_code: str | None,
+        document_status: DocumentStatus | None,
+        filename_contains: str | None,
+        created_after: datetime | None,
+        created_before: datetime | None,
+        scope: SearchScope,
+        phrase: bool = False,
+    ) -> SearchFacets:
+        if scope == "raw":
+            return self._raw_search_facets_sync(
+                query,
+                classification_code,
+                document_status,
+                filename_contains,
+                created_after,
+                created_before,
+                phrase,
+            )
+        match_query = normalize_search_query(query, phrase=phrase)
+        filename_pattern = f"%{_escape_like(filename_contains)}%" if filename_contains else None
+        filter_parameters: tuple[object, ...] = (
+            match_query,
+            RunStatus.SUCCEEDED.value,
+            classification_code,
+            classification_code,
+            document_status.value if document_status else None,
+            document_status.value if document_status else None,
+            filename_pattern,
+            filename_pattern,
+            created_after.isoformat() if created_after else None,
+            created_after.isoformat() if created_after else None,
+            created_before.isoformat() if created_before else None,
+            created_before.isoformat() if created_before else None,
+        )
+        with self.database.connect() as connection:
+            try:
+                classification_rows = connection.execute(
+                    """
+                    SELECT classifications.code, classifications.label,
+                           COUNT(DISTINCT cleaned_outputs_fts.document_id) AS count
+                    FROM cleaned_outputs_fts
+                    JOIN runs ON runs.id = cleaned_outputs_fts.run_id
+                    JOIN documents ON documents.id = cleaned_outputs_fts.document_id
+                    JOIN cleaned_outputs
+                      ON cleaned_outputs.document_id = cleaned_outputs_fts.document_id
+                     AND cleaned_outputs.run_id = cleaned_outputs_fts.run_id
+                    LEFT JOIN classifications
+                      ON classifications.document_id = cleaned_outputs_fts.document_id
+                    WHERE cleaned_outputs_fts MATCH ?
+                      AND runs.status = ?
+                      AND cleaned_outputs.created_at = (
+                        SELECT MAX(latest.created_at)
+                        FROM cleaned_outputs AS latest
+                        WHERE latest.document_id = cleaned_outputs.document_id
+                      )
+                      AND (? IS NULL OR classifications.code = ?)
+                      AND (? IS NULL OR documents.status = ?)
+                      AND (? IS NULL OR documents.filename LIKE ? ESCAPE '~')
+                      AND (? IS NULL OR documents.created_at >= ?)
+                      AND (? IS NULL OR documents.created_at <= ?)
+                    GROUP BY classifications.code, classifications.label
+                    ORDER BY count DESC, classifications.code ASC
+                    """,
+                    filter_parameters,
+                ).fetchall()
+                status_rows = connection.execute(
+                    """
+                    SELECT documents.status,
+                           COUNT(DISTINCT cleaned_outputs_fts.document_id) AS count
+                    FROM cleaned_outputs_fts
+                    JOIN runs ON runs.id = cleaned_outputs_fts.run_id
+                    JOIN documents ON documents.id = cleaned_outputs_fts.document_id
+                    JOIN cleaned_outputs
+                      ON cleaned_outputs.document_id = cleaned_outputs_fts.document_id
+                     AND cleaned_outputs.run_id = cleaned_outputs_fts.run_id
+                    LEFT JOIN classifications
+                      ON classifications.document_id = cleaned_outputs_fts.document_id
+                    WHERE cleaned_outputs_fts MATCH ?
+                      AND runs.status = ?
+                      AND cleaned_outputs.created_at = (
+                        SELECT MAX(latest.created_at)
+                        FROM cleaned_outputs AS latest
+                        WHERE latest.document_id = cleaned_outputs.document_id
+                      )
+                      AND (? IS NULL OR classifications.code = ?)
+                      AND (? IS NULL OR documents.status = ?)
+                      AND (? IS NULL OR documents.filename LIKE ? ESCAPE '~')
+                      AND (? IS NULL OR documents.created_at >= ?)
+                      AND (? IS NULL OR documents.created_at <= ?)
+                    GROUP BY documents.status
+                    ORDER BY count DESC, documents.status ASC
+                    """,
+                    filter_parameters,
+                ).fetchall()
+                filename_rows = connection.execute(
+                    """
+                    SELECT documents.filename,
+                           COUNT(DISTINCT cleaned_outputs_fts.document_id) AS count
+                    FROM cleaned_outputs_fts
+                    JOIN runs ON runs.id = cleaned_outputs_fts.run_id
+                    JOIN documents ON documents.id = cleaned_outputs_fts.document_id
+                    JOIN cleaned_outputs
+                      ON cleaned_outputs.document_id = cleaned_outputs_fts.document_id
+                     AND cleaned_outputs.run_id = cleaned_outputs_fts.run_id
+                    LEFT JOIN classifications
+                      ON classifications.document_id = cleaned_outputs_fts.document_id
+                    WHERE cleaned_outputs_fts MATCH ?
+                      AND runs.status = ?
+                      AND cleaned_outputs.created_at = (
+                        SELECT MAX(latest.created_at)
+                        FROM cleaned_outputs AS latest
+                        WHERE latest.document_id = cleaned_outputs.document_id
+                      )
+                      AND (? IS NULL OR classifications.code = ?)
+                      AND (? IS NULL OR documents.status = ?)
+                      AND (? IS NULL OR documents.filename LIKE ? ESCAPE '~')
+                      AND (? IS NULL OR documents.created_at >= ?)
+                      AND (? IS NULL OR documents.created_at <= ?)
+                    GROUP BY documents.filename
+                    ORDER BY count DESC, documents.filename ASC
+                    """,
+                    filter_parameters,
+                ).fetchall()
+            except sqlite3.OperationalError as exc:
+                raise ValueError("Invalid search query") from exc
+        total = sum(int(row["count"]) for row in filename_rows)
+        return SearchFacets(
+            classifications=_classification_facets(classification_rows),
+            statuses=tuple(
+                SearchFacetValue(value=str(row["status"]), count=int(row["count"]))
+                for row in status_rows
+            ),
+            sources=(SearchFacetValue(value="cleaned", count=total),),
+            filenames=tuple(
+                SearchFacetValue(value=str(row["filename"]), count=int(row["count"]))
+                for row in filename_rows
+            ),
+        )
+
+    def _raw_search_facets_sync(
+        self,
+        query: str,
+        classification_code: str | None,
+        document_status: DocumentStatus | None,
+        filename_contains: str | None,
+        created_after: datetime | None,
+        created_before: datetime | None,
+        phrase: bool = False,
+    ) -> SearchFacets:
+        match_query = normalize_search_query(query, phrase=phrase)
+        filename_pattern = f"%{_escape_like(filename_contains)}%" if filename_contains else None
+        filter_parameters: tuple[object, ...] = (
+            match_query,
+            classification_code,
+            classification_code,
+            document_status.value if document_status else None,
+            document_status.value if document_status else None,
+            filename_pattern,
+            filename_pattern,
+            created_after.isoformat() if created_after else None,
+            created_after.isoformat() if created_after else None,
+            created_before.isoformat() if created_before else None,
+            created_before.isoformat() if created_before else None,
+        )
+        with self.database.connect() as connection:
+            try:
+                classification_rows = connection.execute(
+                    """
+                    SELECT classifications.code, classifications.label,
+                           COUNT(DISTINCT raw_content_fts.document_id) AS count
+                    FROM raw_content_fts
+                    JOIN documents ON documents.id = raw_content_fts.document_id
+                    LEFT JOIN classifications
+                      ON classifications.document_id = raw_content_fts.document_id
+                    WHERE raw_content_fts MATCH ?
+                      AND (? IS NULL OR classifications.code = ?)
+                      AND (? IS NULL OR documents.status = ?)
+                      AND (? IS NULL OR documents.filename LIKE ? ESCAPE '~')
+                      AND (? IS NULL OR documents.created_at >= ?)
+                      AND (? IS NULL OR documents.created_at <= ?)
+                    GROUP BY classifications.code, classifications.label
+                    ORDER BY count DESC, classifications.code ASC
+                    """,
+                    filter_parameters,
+                ).fetchall()
+                status_rows = connection.execute(
+                    """
+                    SELECT documents.status, COUNT(DISTINCT raw_content_fts.document_id) AS count
+                    FROM raw_content_fts
+                    JOIN documents ON documents.id = raw_content_fts.document_id
+                    LEFT JOIN classifications
+                      ON classifications.document_id = raw_content_fts.document_id
+                    WHERE raw_content_fts MATCH ?
+                      AND (? IS NULL OR classifications.code = ?)
+                      AND (? IS NULL OR documents.status = ?)
+                      AND (? IS NULL OR documents.filename LIKE ? ESCAPE '~')
+                      AND (? IS NULL OR documents.created_at >= ?)
+                      AND (? IS NULL OR documents.created_at <= ?)
+                    GROUP BY documents.status
+                    ORDER BY count DESC, documents.status ASC
+                    """,
+                    filter_parameters,
+                ).fetchall()
+                filename_rows = connection.execute(
+                    """
+                    SELECT documents.filename, COUNT(DISTINCT raw_content_fts.document_id) AS count
+                    FROM raw_content_fts
+                    JOIN documents ON documents.id = raw_content_fts.document_id
+                    LEFT JOIN classifications
+                      ON classifications.document_id = raw_content_fts.document_id
+                    WHERE raw_content_fts MATCH ?
+                      AND (? IS NULL OR classifications.code = ?)
+                      AND (? IS NULL OR documents.status = ?)
+                      AND (? IS NULL OR documents.filename LIKE ? ESCAPE '~')
+                      AND (? IS NULL OR documents.created_at >= ?)
+                      AND (? IS NULL OR documents.created_at <= ?)
+                    GROUP BY documents.filename
+                    ORDER BY count DESC, documents.filename ASC
+                    """,
+                    filter_parameters,
+                ).fetchall()
+            except sqlite3.OperationalError as exc:
+                raise ValueError("Invalid search query") from exc
+        total = sum(int(row["count"]) for row in filename_rows)
+        return SearchFacets(
+            classifications=_classification_facets(classification_rows),
+            statuses=tuple(
+                SearchFacetValue(value=str(row["status"]), count=int(row["count"]))
+                for row in status_rows
+            ),
+            sources=(SearchFacetValue(value="raw", count=total),),
+            filenames=tuple(
+                SearchFacetValue(value=str(row["filename"]), count=int(row["count"]))
+                for row in filename_rows
+            ),
+        )
 
     def _emit_sync(self, run_id: RunId, stage: RunStage, message: str) -> None:
         with self.database.connect() as connection:
@@ -868,13 +1770,99 @@ class SQLiteRepository:
                 (str(run_id), stage.value, message, utc_now().isoformat()),
             )
 
-    def _list_events_sync(self, run_id: RunId) -> list[str]:
+    def _list_events_sync(self, run_id: RunId, limit: int, offset: int) -> list[str]:
+        _validate_event_page(limit=limit, offset=offset)
         with self.database.connect() as connection:
             rows = connection.execute(
-                "SELECT stage, message FROM run_events WHERE run_id = ? ORDER BY id ASC",
-                (str(run_id),),
+                """
+                SELECT stage, message
+                FROM run_events
+                WHERE run_id = ?
+                ORDER BY id ASC
+                LIMIT ? OFFSET ?
+                """,
+                (str(run_id), limit, offset),
             ).fetchall()
         return [f"{row['stage']}: {row['message']}" for row in rows]
+
+    def _list_event_records_sync(self, run_id: RunId, limit: int, offset: int) -> list[RunEvent]:
+        _validate_event_page(limit=limit, offset=offset)
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, run_id, stage, message, created_at
+                FROM run_events
+                WHERE run_id = ?
+                ORDER BY id ASC
+                LIMIT ? OFFSET ?
+                """,
+                (str(run_id), limit, offset),
+            ).fetchall()
+        return [
+            RunEvent(
+                run_id=RunId(str(row["run_id"])),
+                stage=RunStage(str(row["stage"])),
+                message=str(row["message"]),
+                created_at=datetime.fromisoformat(str(row["created_at"])),
+                sequence=int(row["id"]),
+            )
+            for row in rows
+        ]
+
+
+def _validate_event_page(*, limit: int, offset: int) -> None:
+    if limit < 1 or limit > _MAX_EVENT_PAGE_SIZE:
+        raise ValueError(f"limit must be between 1 and {_MAX_EVENT_PAGE_SIZE}")
+    if offset < 0:
+        raise ValueError("offset must be greater than or equal to 0")
+
+
+def normalize_search_query(query: str, *, phrase: bool = False) -> str:
+    """Return a safe FTS query for punctuation-heavy user input."""
+    if len(query) > _MAX_SEARCH_QUERY_CHARS:
+        raise ValueError(
+            f"Search query exceeds configured limit of {_MAX_SEARCH_QUERY_CHARS} characters"
+        )
+    if phrase:
+        normalized_phrase = _normalize_search_phrase(query)
+        if not normalized_phrase:
+            raise ValueError("Invalid search query")
+        return f'"{normalized_phrase}"'
+    parts: list[str] = []
+    unquoted: list[str] = []
+    in_quote = False
+    quoted: list[str] = []
+    for char in query:
+        if char == '"':
+            if in_quote:
+                quoted_phrase = _normalize_search_phrase("".join(quoted))
+                if quoted_phrase:
+                    parts.append(f'"{quoted_phrase}"')
+                quoted = []
+                in_quote = False
+            else:
+                in_quote = True
+            continue
+        if in_quote:
+            quoted.append(char)
+        else:
+            unquoted.append(char)
+    if in_quote and not unquoted:
+        raise ValueError("Invalid search query")
+    if in_quote:
+        unquoted.extend(quoted)
+    parts.extend(_SEARCH_TOKEN_RE.findall("".join(unquoted).casefold()))
+    if not parts:
+        raise ValueError("Invalid search query")
+    return " ".join(parts)
+
+
+def _normalize_search_phrase(value: str) -> str:
+    return " ".join(_SEARCH_TOKEN_RE.findall(value.casefold()))
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("~", "~~").replace("%", "~%").replace("_", "~_")
 
 
 class SQLiteRunQueue:
@@ -914,9 +1902,9 @@ class SQLiteRunQueue:
         """Mark a queued run canceled."""
         await asyncio.to_thread(self._cancel_sync, run_id, error)
 
-    async def list(self, *, limit: int = 100) -> tuple[QueuedRun, ...]:
+    async def list(self, *, limit: int = 100, offset: int = 0) -> tuple[QueuedRun, ...]:
         """List queued run state."""
-        return await asyncio.to_thread(self._list_sync, limit)
+        return await asyncio.to_thread(self._list_sync, limit, offset)
 
     def _enqueue_sync(self, run_id: RunId) -> None:
         now = utc_now().isoformat()
@@ -1095,18 +2083,20 @@ class SQLiteRunQueue:
                 ),
             )
 
-    def _list_sync(self, limit: int) -> tuple[QueuedRun, ...]:
+    def _list_sync(self, limit: int, offset: int) -> tuple[QueuedRun, ...]:
         if limit < 1 or limit > 500:
             raise ValueError("limit must be between 1 and 500")
+        if offset < 0:
+            raise ValueError("offset must be greater than or equal to 0")
         with self.database.connect() as connection:
             rows = connection.execute(
                 """
                 SELECT *
                 FROM run_queue
                 ORDER BY updated_at DESC
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """,
-                (limit,),
+                (limit, offset),
             ).fetchall()
         return tuple(_queued_run_from_row(row) for row in rows)
 
@@ -1175,6 +2165,17 @@ def _classification_from_row(row: sqlite3.Row) -> Classification:
         summary=str(row["summary"]),
         taxonomy=str(row["taxonomy"]),
         confidence=float(confidence) if confidence is not None else None,
+    )
+
+
+def _classification_facets(rows: Sequence[sqlite3.Row]) -> tuple[SearchFacetValue, ...]:
+    return tuple(
+        SearchFacetValue(
+            value=str(row["code"]) if row["code"] is not None else "",
+            label=str(row["label"]) if row["label"] is not None else None,
+            count=int(row["count"]),
+        )
+        for row in rows
     )
 
 

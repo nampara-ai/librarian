@@ -11,6 +11,7 @@ from librarian.ingest.extractors import (
     CompositeExtractor,
     ImageOcrExtractor,
     MarkItDownExtractor,
+    OcrTextResult,
     PdfExtractor,
     TextFamilyExtractor,
 )
@@ -23,6 +24,24 @@ async def test_text_family_extractor_reads_markdown(tmp_path: Path) -> None:
     path.write_text("# Notes\n\nTranscript text", encoding="utf-8")
 
     text = await TextFamilyExtractor().extract(path)
+
+    assert "Transcript text" in text
+
+
+@pytest.mark.asyncio
+async def test_text_family_extractor_uses_bounded_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "notes.md"
+    path.write_text("# Notes\n\nTranscript text", encoding="utf-8")
+
+    def fail_read_text(self: Path, *args: Any, **kwargs: Any) -> str:
+        del args, kwargs
+        raise AssertionError(f"unbounded read_text called for {self}")
+
+    monkeypatch.setattr(Path, "read_text", fail_read_text)
+
+    text = await TextFamilyExtractor(max_input_bytes=100).extract(path)
 
     assert "Transcript text" in text
 
@@ -80,7 +99,7 @@ async def test_composite_extractor_rejects_zip_archives(tmp_path: Path) -> None:
     path = tmp_path / "archive.zip"
     path.write_bytes(b"PK")
 
-    with pytest.raises(ValueError, match="Unsupported file extension"):
+    with pytest.raises(ValueError, match="Archive inputs are not supported"):
         await CompositeExtractor().extract(path)
 
 
@@ -311,6 +330,245 @@ async def test_pdf_extractor_ocr_handles_mixed_text_and_scanned_pages(
 
 
 @pytest.mark.asyncio
+async def test_pdf_extractor_writes_and_reuses_page_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "fixture.pdf"
+    manifest = tmp_path / "fixture.md.pages.json"
+    path.write_bytes(b"%PDF stable")
+
+    class FakePage:
+        def __init__(self, text: str | None) -> None:
+            self._text = text
+
+        def extract_text(self) -> str | None:
+            return self._text
+
+    class FakePdf:
+        pages = [FakePage("Text page 1"), FakePage(None)]
+
+        def __enter__(self) -> "FakePdf":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(path: Path) -> FakePdf:
+            del path
+            return FakePdf()
+
+    def fake_import_module(name: str) -> object:
+        if name == "pdfplumber":
+            return FakePdfPlumber
+        return __import__(name)
+
+    calls = 0
+
+    def fake_ocr_pdf_page(*args: object, **kwargs: object) -> str:
+        del args, kwargs
+        nonlocal calls
+        calls += 1
+        return "OCR page 2"
+
+    monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", fake_ocr_pdf_page)
+    first = PdfExtractor(ocr_correction_mode="never")
+    first.set_page_manifest_path(manifest)
+
+    text = await first.extract(path)
+
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert calls == 1
+    assert payload["artifact_type"] == "pdf-page-extraction-manifest"
+    assert payload["pages"][1]["text"] == "OCR page 2"
+    assert payload["pages"][1]["raw_text"] == "OCR page 2"
+    assert payload["pages"][1]["corrected_text"] is None
+    assert "OCR page 2" in text
+
+    def fail_ocr_pdf_page(*args: object, **kwargs: object) -> str:
+        del args, kwargs
+        raise AssertionError("manifest should avoid replaying OCR")
+
+    monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", fail_ocr_pdf_page)
+    second = PdfExtractor(ocr_correction_mode="never")
+    second.set_page_manifest_path(manifest)
+
+    resumed = await second.extract(path)
+
+    assert "OCR page 2" in resumed
+
+
+@pytest.mark.asyncio
+async def test_pdf_extractor_page_manifest_tracks_pending_failed_and_retry_attempts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "fixture.pdf"
+    manifest = tmp_path / "fixture.md.pages.json"
+    path.write_bytes(b"%PDF retry")
+
+    class FakePage:
+        def __init__(self, text: str | None) -> None:
+            self._text = text
+
+        def extract_text(self) -> str | None:
+            return self._text
+
+    class FakePdf:
+        pages = [FakePage("Text page 1"), FakePage(None)]
+
+        def __enter__(self) -> "FakePdf":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(path: Path) -> FakePdf:
+            del path
+            return FakePdf()
+
+    def fake_import_module(name: str) -> object:
+        if name == "pdfplumber":
+            return FakePdfPlumber
+        return __import__(name)
+
+    calls = 0
+
+    def flaky_ocr_pdf_page(*args: object, **kwargs: object) -> str:
+        del args, kwargs
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            pending_payload = json.loads(manifest.read_text(encoding="utf-8"))
+            assert pending_payload["pages"][1]["source"] == "pending"
+            assert pending_payload["pages"][1]["status"] == "pending"
+            assert pending_payload["pages"][1]["attempts"] == 0
+            raise RuntimeError("temporary tesseract failure")
+        return "OCR page 2 after retry"
+
+    monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", flaky_ocr_pdf_page)
+    first = PdfExtractor(ocr_correction_mode="never")
+    first.set_page_manifest_path(manifest)
+
+    with pytest.raises(RuntimeError, match="Unable to OCR scanned PDF page 2"):
+        await first.extract(path)
+
+    failed_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert failed_payload["pages"][1]["status"] == "failed"
+    assert failed_payload["pages"][1]["attempts"] == 1
+    assert isinstance(failed_payload["pages"][1]["duration_ms"], float)
+
+    second = PdfExtractor(ocr_correction_mode="never")
+    second.set_page_manifest_path(manifest)
+
+    text = await second.extract(path)
+
+    retried_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert calls == 2
+    assert "OCR page 2 after retry" in text
+    assert retried_payload["pages"][1]["status"] == "succeeded"
+    assert retried_payload["pages"][1]["attempts"] == 2
+    assert retried_payload["pages"][1]["text"] == "OCR page 2 after retry"
+
+
+@pytest.mark.asyncio
+async def test_pdf_extractor_rejects_symlink_page_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "fixture.pdf"
+    path.write_bytes(b"%PDF")
+    outside = tmp_path / "outside-pages.json"
+    outside.write_text("keep", encoding="utf-8")
+    manifest = tmp_path / "fixture.md.pages.json"
+    manifest.symlink_to(outside)
+
+    class FakePage:
+        @staticmethod
+        def extract_text() -> str:
+            return "Text page 1"
+
+    class FakePdf:
+        pages = [FakePage()]
+
+        def __enter__(self) -> "FakePdf":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(path: Path) -> FakePdf:
+            del path
+            return FakePdf()
+
+    def fake_import_module(name: str) -> object:
+        if name == "pdfplumber":
+            return FakePdfPlumber
+        return __import__(name)
+
+    monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
+    extractor = PdfExtractor(ocr_correction_mode="never")
+    extractor.set_page_manifest_path(manifest)
+
+    with pytest.raises(ValueError, match="manifest path must not be a symlink"):
+        await extractor.extract(path)
+
+    assert outside.read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.asyncio
+async def test_pdf_page_manifest_resume_rejects_oversized_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "fixture.pdf"
+    path.write_bytes(b"%PDF")
+    manifest = tmp_path / "fixture.md.pages.json"
+    manifest.write_text('{"pages":[]}', encoding="utf-8")
+
+    class FakePage:
+        @staticmethod
+        def extract_text() -> str:
+            return "Text page 1"
+
+    class FakePdf:
+        pages = [FakePage()]
+
+        def __enter__(self) -> "FakePdf":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(path: Path) -> FakePdf:
+            del path
+            return FakePdf()
+
+    def fake_import_module(name: str) -> object:
+        if name == "pdfplumber":
+            return FakePdfPlumber
+        return __import__(name)
+
+    monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(extractors, "_MAX_PDF_PAGE_MANIFEST_BYTES", 4)
+    extractor = PdfExtractor(ocr_correction_mode="never")
+    extractor.set_page_manifest_path(manifest)
+
+    with pytest.raises(ValueError, match="PDF page manifest exceeds"):
+        await extractor.extract(path)
+
+
+@pytest.mark.asyncio
 async def test_pdf_extractor_fails_when_mixed_page_ocr_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -497,6 +755,310 @@ async def test_pdf_extractor_llm_corrects_ocr_pages(
     pages = extractor.last_metadata["pages"]
     assert isinstance(pages, list)
     assert pages[0]["corrected"] is True
+
+
+@pytest.mark.asyncio
+async def test_pdf_page_manifest_preserves_raw_and_corrected_ocr_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "fixture.pdf"
+    manifest = tmp_path / "fixture.md.pages.json"
+    path.write_bytes(b"%PDF")
+
+    class FakeProvider:
+        name = "fake"
+
+        async def complete(self, **kwargs: object) -> str:
+            assert "Sadd1e" in str(kwargs["user_prompt"])
+            return "Saddle fit and canter transitions."
+
+    class FakePage:
+        @staticmethod
+        def extract_text() -> None:
+            return None
+
+    class FakePdf:
+        pages = [FakePage()]
+
+        def __enter__(self) -> "FakePdf":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(path: Path) -> FakePdf:
+            del path
+            return FakePdf()
+
+    def fake_import_module(name: str) -> object:
+        if name == "pdfplumber":
+            return FakePdfPlumber
+        return __import__(name)
+
+    def fake_ocr_pdf_page(*args: object, **kwargs: object) -> OcrTextResult:
+        del args, kwargs
+        return OcrTextResult(text="Sadd1e fit and canter transit10ns.", confidence=42.0)
+
+    monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", fake_ocr_pdf_page)
+    extractor = PdfExtractor(ocr_correction_provider=FakeProvider())
+    extractor.set_page_manifest_path(manifest)
+
+    await extractor.extract(path)
+
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    page = payload["pages"][0]
+    assert page["raw_text"] == "Sadd1e fit and canter transit10ns."
+    assert page["corrected_text"] == "Saddle fit and canter transitions."
+    assert page["text"] == "Saddle fit and canter transitions."
+    assert page["raw_chars"] == len("Sadd1e fit and canter transit10ns.")
+
+
+@pytest.mark.asyncio
+async def test_pdf_extractor_rejects_oversized_ocr_correction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "fixture.pdf"
+    path.write_bytes(b"%PDF")
+
+    class FakeProvider:
+        name = "fake"
+
+        async def complete(self, **kwargs: object) -> str:
+            del kwargs
+            return "x" * 11
+
+    class FakePage:
+        @staticmethod
+        def extract_text() -> None:
+            return None
+
+    class FakePdf:
+        pages = [FakePage()]
+
+        def __enter__(self) -> "FakePdf":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(path: Path) -> FakePdf:
+            del path
+            return FakePdf()
+
+    def fake_import_module(name: str) -> object:
+        if name == "pdfplumber":
+            return FakePdfPlumber
+        return __import__(name)
+
+    def fake_ocr_pdf_page(*args: object, **kwargs: object) -> OcrTextResult:
+        del args, kwargs
+        return OcrTextResult(text="OCR raw", confidence=42.0)
+
+    monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", fake_ocr_pdf_page)
+    extractor = PdfExtractor(
+        ocr_correction_provider=FakeProvider(),
+        ocr_max_correction_response_chars=10,
+    )
+
+    with pytest.raises(RuntimeError, match="exceeding configured limit 10"):
+        await extractor.extract(path)
+
+
+@pytest.mark.asyncio
+async def test_pdf_extractor_low_confidence_correction_uses_tesseract_confidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "fixture.pdf"
+    path.write_bytes(b"%PDF")
+    calls = 0
+
+    class FakeProvider:
+        name = "fake"
+
+        async def complete(self, **kwargs: object) -> str:
+            del kwargs
+            nonlocal calls
+            calls += 1
+            return "OCR corrected"
+
+    class FakePage:
+        @staticmethod
+        def extract_text() -> None:
+            return None
+
+    class FakePdf:
+        pages = [FakePage()]
+
+        def __enter__(self) -> "FakePdf":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(path: Path) -> FakePdf:
+            del path
+            return FakePdf()
+
+    def fake_import_module(name: str) -> object:
+        if name == "pdfplumber":
+            return FakePdfPlumber
+        return __import__(name)
+
+    def fake_ocr_pdf_page(*args: object, **kwargs: object) -> OcrTextResult:
+        del args, kwargs
+        return OcrTextResult(text="OCR raw", confidence=62.5)
+
+    monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", fake_ocr_pdf_page)
+
+    extractor = PdfExtractor(
+        ocr_correction_provider=FakeProvider(),
+        ocr_correction_mode="low-confidence",
+        ocr_low_confidence_threshold=85,
+    )
+    text = await extractor.extract(path)
+
+    assert calls == 1
+    assert "OCR corrected" in text
+    assert extractor.last_metadata is not None
+    pages = extractor.last_metadata["pages"]
+    assert isinstance(pages, list)
+    assert pages[0]["confidence"] == 62.5
+    assert pages[0]["corrected"] is True
+    assert pages[0]["warnings"] == ["low-ocr-confidence"]
+
+
+@pytest.mark.asyncio
+async def test_pdf_page_manifest_records_missing_confidence_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "fixture.pdf"
+    manifest = tmp_path / "fixture.md.pages.json"
+    path.write_bytes(b"%PDF")
+
+    class FakePage:
+        @staticmethod
+        def extract_text() -> None:
+            return None
+
+    class FakePdf:
+        pages = [FakePage()]
+
+        def __enter__(self) -> "FakePdf":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(path: Path) -> FakePdf:
+            del path
+            return FakePdf()
+
+    def fake_import_module(name: str) -> object:
+        if name == "pdfplumber":
+            return FakePdfPlumber
+        return __import__(name)
+
+    def fake_ocr_pdf_page(*args: object, **kwargs: object) -> OcrTextResult:
+        del args, kwargs
+        return OcrTextResult(text="OCR raw", confidence=None)
+
+    monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", fake_ocr_pdf_page)
+    extractor = PdfExtractor(ocr_correction_mode="never")
+    extractor.set_page_manifest_path(manifest)
+
+    await extractor.extract(path)
+
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    page = payload["pages"][0]
+    assert page["confidence"] is None
+    assert page["warnings"] == ["missing-ocr-confidence"]
+
+
+@pytest.mark.asyncio
+async def test_pdf_extractor_low_confidence_skips_high_confidence_pages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "fixture.pdf"
+    path.write_bytes(b"%PDF")
+
+    class FakeProvider:
+        name = "fake"
+
+        async def complete(self, **kwargs: object) -> str:
+            del kwargs
+            raise AssertionError("high-confidence OCR should not be corrected")
+
+    class FakePage:
+        @staticmethod
+        def extract_text() -> None:
+            return None
+
+    class FakePdf:
+        pages = [FakePage()]
+
+        def __enter__(self) -> "FakePdf":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(path: Path) -> FakePdf:
+            del path
+            return FakePdf()
+
+    def fake_import_module(name: str) -> object:
+        if name == "pdfplumber":
+            return FakePdfPlumber
+        return __import__(name)
+
+    def fake_ocr_pdf_page(*args: object, **kwargs: object) -> OcrTextResult:
+        del args, kwargs
+        return OcrTextResult(text="OCR raw", confidence=96.0)
+
+    monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", fake_ocr_pdf_page)
+
+    extractor = PdfExtractor(
+        ocr_correction_provider=FakeProvider(),
+        ocr_correction_mode="low-confidence",
+        ocr_low_confidence_threshold=85,
+    )
+    text = await extractor.extract(path)
+
+    assert "OCR raw" in text
+    assert "corrected: false" in text
+
+
+def test_parse_tesseract_tsv_confidence_averages_word_confidence() -> None:
+    tsv = "\n".join(
+        [
+            "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tconf\ttext",
+            "5\t1\t1\t1\t1\t1\t80.5\tAlpha",
+            "5\t1\t1\t1\t1\t2\t-1\t",
+            "5\t1\t1\t1\t1\t3\t90.5\tBeta",
+        ]
+    )
+
+    assert extractors.parse_tesseract_tsv_confidence(tsv) == 85.5
 
 
 @pytest.mark.asyncio

@@ -44,6 +44,7 @@ Local conversion and import paths enforce configurable input limits before expen
 `librarian import` combines conversion, ingestion, and optional processing:
 
 ```bash
+librarian import ./large.md --format md --process
 librarian import ./input --format md
 librarian import ./input --recursive --format md --process
 librarian import ./input --format txt --queue
@@ -60,8 +61,10 @@ Processing modes:
 The command prints converted path, document ID, run ID, and any per-file error.
 
 Import manifests and reports are JSON. Manifests are updated after each file so interrupted imports
-can be resumed with `--resume`. Librarian marks these JSON files as generated metadata so recursive
-imports do not ingest their own manifests or reports.
+can be resumed with `--resume`. Manifest paths must end in `.json`; existing manifest files must be
+Librarian import reports, which prevents accidental overwrite of unrelated JSON. Librarian marks
+these JSON files as generated metadata so recursive imports do not ingest their own manifests or
+reports. Manifest and report output paths must not be symlinks or cross symlinked parents.
 
 ## Format Coverage
 
@@ -77,7 +80,9 @@ Optional broad conversion through MarkItDown:
 - Install with `pip install -e ".[universal]"`.
 - Broad conversion rejects inputs larger than `LIBRARIAN_UNIVERSAL_MAX_INPUT_BYTES`
   and stops work after `LIBRARIAN_UNIVERSAL_TIMEOUT_SECONDS`. Archive formats such
-  as `.zip` are intentionally not enabled by default.
+  as `.zip`, `.tar`, `.7z`, and `.rar` are intentionally rejected by default.
+  Unpack archives outside Librarian after scanning them with your organization-approved
+  malware tooling, then import the extracted files from a controlled directory.
 
 OCR support:
 
@@ -85,20 +90,56 @@ OCR support:
 - Install system tools:
   - macOS: `brew install tesseract poppler`
   - Ubuntu/Debian: `sudo apt-get install tesseract-ocr poppler-utils`
+- Run `librarian doctor --strict` before large conversions to verify optional Python packages and
+  OCR/rasterization executables are available. CI runs the same strict check after installing
+  `tesseract-ocr` and `poppler-utils`.
 - Configure language with `LIBRARIAN_OCR_LANGUAGE`, for example `eng` or `eng+spa`.
 - Bound OCR work with `LIBRARIAN_OCR_TIMEOUT_SECONDS`, `LIBRARIAN_OCR_PDF_DPI`, and
   `LIBRARIAN_OCR_PDF_MAX_PAGES`.
+
+## Output Quality Warnings
+
+Cleaned chunk records include non-fatal warnings when output quality checks find likely rendering
+regressions, including collapsed paragraphs, missing Markdown headings/lists/tables, missing
+citation markers, malformed Markdown tables, orphan list markers, context-marker leaks, and
+assistant artifacts. These warnings are persisted with cleaned chunks so eval suites and operators
+can investigate suspicious outputs without blocking successful runs.
 - Tune scanned-PDF throughput with `LIBRARIAN_OCR_PAGE_CONCURRENCY`.
 - Control LLM OCR correction with `LIBRARIAN_OCR_LLM_CORRECTION=always|never|low-confidence`
-  and optionally override the correction model with `LIBRARIAN_OCR_LLM_MODEL`. `low-confidence`
-  is reserved for extractors that surface confidence scores; current PDF OCR uses `always` or
-  `never`.
+  and optionally override the correction model with `LIBRARIAN_OCR_LLM_MODEL`.
+  `low-confidence` uses Tesseract TSV word confidence for PDF OCR and only corrects pages below
+  `LIBRARIAN_OCR_LOW_CONFIDENCE_THRESHOLD`, which defaults to `85`.
 
 PDF extraction is page-aware. Librarian reads embedded text from pages that have it and OCRs only
 pages where embedded extraction is empty. This avoids the old all-or-nothing scanned-PDF fallback
 where mixed PDFs could silently lose scanned pages. PDFs over `LIBRARIAN_PDF_MAX_PAGES` are
 rejected before page extraction. Scanned-page OCR is separately bounded by
 `LIBRARIAN_OCR_PDF_MAX_PAGES`, which defaults to `1000`.
+
+When sidecars are enabled, PDF conversion also writes a durable
+`<output>.pages.json` manifest during extraction. The manifest is keyed by source SHA-256,
+page count, and OCR configuration, and stores per-page status plus extracted text. OCR pages retain
+`raw_text`, final `text`, and `corrected_text` when LLM correction changed the page, so maintainers
+can audit raw-vs-corrected output after long runs. If conversion is retried with the same source and
+OCR settings, completed pages are reused instead of OCRed again. Recursive conversion/import treats
+these manifests as Librarian metadata and skips them. Existing page manifests are capped at 256 MiB
+when read for resume or inspection.
+Scanned pages are written as `pending` before OCR begins; failed pages retain the error, warning
+codes, elapsed OCR duration, and retry `attempts`. Resumed extraction increments attempts while
+replaying only unfinished or failed OCR pages.
+
+Inspect a manifest without dumping raw page text:
+
+```bash
+librarian page-manifest ./out/report.md.pages.json --failures-only
+librarian page-manifest ./out/report.md.pages.json --json --failures-only
+```
+
+The JSON view includes counts, confidence summary, retry attempts, OCR duration, and page
+diagnostics without printing raw or corrected page text, so it is safe to use in CI logs and
+operator tickets.
+Manifest page records also include structured `warnings` codes such as `low-ocr-confidence`,
+`missing-ocr-confidence`, and `ocr-page-failed`.
 
 Markdown PDF output includes stable page boundaries:
 
@@ -123,11 +164,17 @@ page_count: 3
 Tesseract is used as the raw OCR engine. For PDF pages that require OCR,
 `LIBRARIAN_OCR_LLM_CORRECTION=always` sends each page through the configured OpenAI-compatible
 provider before the document enters the normal cleaning/classification/indexing pipeline. Set
-`LIBRARIAN_OCR_LLM_CORRECTION=never` for fully deterministic OCR-only conversion.
+`LIBRARIAN_OCR_LLM_CORRECTION=never` for fully deterministic OCR-only conversion. Set
+`LIBRARIAN_OCR_LLM_CORRECTION=low-confidence` to correct only pages whose average word confidence
+is below `LIBRARIAN_OCR_LOW_CONFIDENCE_THRESHOLD`; pages without confidence diagnostics are left
+uncorrected in this mode.
 
 Batch conversion sidecars include extraction metadata for page count, per-page source
 (`embedded`, `ocr`, or `failed`), correction status, and OCR confidence when the extractor can
-surface it. Recursive conversion/import skips Librarian-generated sidecars and converted outputs.
+surface it. The larger page manifest contains the per-page raw/corrected OCR text artifacts.
+Conversion outputs, sidecars, and PDF page manifests are written through atomic same-directory
+replacements and reject output paths that are symlinks or cross symlinked parents. Recursive
+conversion/import skips Librarian-generated sidecars and converted outputs.
 
 ## Large-PDF Test Recipe
 

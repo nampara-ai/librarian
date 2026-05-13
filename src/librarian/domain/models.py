@@ -126,3 +126,48 @@ class ProcessingRun:
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
     error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RunEvent:
+    """One persisted event emitted during a processing run."""
+
+    run_id: RunId
+    stage: RunStage
+    message: str
+    created_at: datetime
+    sequence: int
+
+
+@dataclass(frozen=True, slots=True)
+class SearchResult:
+    """One ranked full-text search result."""
+
+    document_id: DocumentId
+    run_id: RunId | None
+    source: str
+    filename: str
+    document_status: DocumentStatus
+    snippet: str
+    score: float
+    classification_code: str | None = None
+    classification_label: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SearchFacetValue:
+    """One search facet bucket."""
+
+    value: str
+    count: int
+    label: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SearchFacets:
+    """Facet counts for a full-text query."""
+
+    classifications: tuple[SearchFacetValue, ...]
+    statuses: tuple[SearchFacetValue, ...]
+    sources: tuple[SearchFacetValue, ...]
+    filenames: tuple[SearchFacetValue, ...]

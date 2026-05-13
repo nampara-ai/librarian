@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
-from pathlib import Path
+import shutil
+import sys
+import tempfile
+import uuid
+import zipfile
+from datetime import datetime
+from pathlib import Path, PurePosixPath
 from typing import Annotated, cast
 
 import typer
@@ -23,6 +30,11 @@ from librarian.application.convert_document import (
     DocumentConverter,
     validate_directory_output,
 )
+from librarian.application.corpus_eval import (
+    corpus_eval_result_json,
+    load_corpus_eval_suite,
+    run_corpus_eval_suite,
+)
 from librarian.application.eval import eval_result_json, load_eval_suite, run_eval_suite
 from librarian.application.export_document import ExportedDocument, ExportFormat
 from librarian.application.factory import build_container, build_ingest_container
@@ -32,23 +44,52 @@ from librarian.application.import_library import (
     write_import_report,
 )
 from librarian.application.jobs import QueueWorker
+from librarian.application.synthetic_corpus import generate_synthetic_corpus
 from librarian.config import Settings
 from librarian.domain.ids import DocumentId, RunId, digest_text
-from librarian.domain.models import RunStage, RunStatus
+from librarian.domain.models import DocumentStatus, RunStage, RunStatus
 from librarian.ingest.extractors import CompositeExtractor
 from librarian.llm import LazyLLMProvider
 from librarian.pipeline.chunking import ChunkingPolicy, chunk_text
-from librarian.storage.sqlite import SQLiteDatabase, SQLiteRunQueue
+from librarian.storage.sqlite import SearchScope, SQLiteDatabase, SQLiteRunQueue
 from librarian.version import __version__
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
+_DEFAULT_WORKSPACE_RESTORE_MAX_EXPANDED_BYTES = 10 * 1024 * 1024 * 1024
+_MAX_WORKSPACE_BACKUP_MANIFEST_BYTES = 64 * 1024
+_MAX_WORKSPACE_BACKUP_MEMBERS = 100_000
+_MAX_PAGE_MANIFEST_READ_BYTES = 256 * 1024 * 1024
 
 
 @app.command()
 def version() -> None:
     """Print the Librarian version."""
     console.print(__version__)
+
+
+@app.command()
+def doctor(
+    strict: Annotated[
+        bool,
+        typer.Option(help="Exit non-zero when optional conversion dependencies are missing."),
+    ] = False,
+) -> None:
+    """Check local runtime dependencies and conversion tools."""
+    settings = Settings()
+    checks = [
+        ("Python", sys.version.split()[0], "ok", sys.executable),
+        ("Data directory", "configured", "ok", str(settings.data_dir)),
+        ("SQLite database", "configured", "ok", str(settings.database_path)),
+        *_doctor_module_checks(),
+        *_doctor_tool_checks(),
+    ]
+    table = Table("Check", "Capability", "Status", "Detail")
+    for name, capability, status, detail in checks:
+        table.add_row(name, capability, status, detail)
+    console.print(table)
+    if strict and any(status == "missing" for _, _, status, _ in checks):
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -62,7 +103,8 @@ def init(
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "content").mkdir(exist_ok=True)
     config_path = data_dir / "config.json"
-    config_path.write_text(
+    _write_cli_output_atomic(
+        config_path,
         json.dumps(
             {
                 "database_path": str(root / settings.database_path),
@@ -72,7 +114,6 @@ def init(
             },
             indent=2,
         ),
-        encoding="utf-8",
     )
     asyncio.run(SQLiteDatabase(root / settings.database_path).initialize())
     console.print(f"Initialized Librarian workspace at {data_dir}")
@@ -84,6 +125,200 @@ def migrate() -> None:
     settings = Settings()
     asyncio.run(SQLiteDatabase(settings.database_path).initialize())
     console.print(f"Applied migrations to {settings.database_path}")
+
+
+@app.command("db-maintain")
+def db_maintain(
+    vacuum: Annotated[
+        bool,
+        typer.Option(help="Also run VACUUM after checkpoint/optimize."),
+    ] = False,
+) -> None:
+    """Run SQLite optimize, WAL checkpoint, and optional vacuum maintenance."""
+    settings = Settings()
+
+    async def run() -> None:
+        database = SQLiteDatabase(settings.database_path)
+        await database.initialize()
+        result = await database.maintain(vacuum=vacuum)
+        console.print(
+            "SQLite maintenance complete: "
+            f"busy={result.checkpoint_busy}, "
+            f"log_frames={result.checkpoint_log_frames}, "
+            f"checkpointed={result.checkpoint_checkpointed_frames}, "
+            f"vacuumed={result.vacuumed}"
+        )
+
+    asyncio.run(run())
+
+
+@app.command("db-check")
+def db_check() -> None:
+    """Verify SQLite integrity, foreign keys, and migrations."""
+    settings = Settings()
+
+    async def run() -> None:
+        database = SQLiteDatabase(settings.database_path)
+        try:
+            result = await database.verify()
+        except FileNotFoundError as exc:
+            console.print(str(exc))
+            raise typer.Exit(1) from exc
+        console.print(
+            "SQLite verification complete: "
+            f"integrity_ok={result.integrity_ok}, "
+            f"foreign_key_violations={result.foreign_key_violations}, "
+            f"applied_migrations={result.applied_migrations}"
+        )
+        if not result.ok:
+            raise typer.Exit(1)
+
+    asyncio.run(run())
+
+
+@app.command("db-backup")
+def db_backup(
+    output: Annotated[Path, typer.Argument(help="Destination SQLite backup path.")],
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Overwrite an existing backup file."),
+    ] = False,
+) -> None:
+    """Create a consistent online SQLite database backup."""
+    settings = Settings()
+
+    async def run() -> None:
+        database = SQLiteDatabase(settings.database_path)
+        try:
+            result = await database.backup(output, overwrite=overwrite)
+        except (FileExistsError, FileNotFoundError, ValueError) as exc:
+            console.print(str(exc))
+            raise typer.Exit(1) from exc
+        console.print(
+            "SQLite backup complete: "
+            f"{result.source_path} -> {result.destination_path} "
+            f"({result.byte_size} bytes)"
+        )
+
+    asyncio.run(run())
+
+
+@app.command("db-restore")
+def db_restore(
+    backup: Annotated[Path, typer.Argument(help="Source SQLite backup path.")],
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", help="Confirm replacing the configured database."),
+    ] = False,
+) -> None:
+    """Restore the configured SQLite database from a verified backup."""
+    if not yes:
+        console.print("Refusing to restore without --yes; this replaces the configured database.")
+        raise typer.Exit(1)
+    settings = Settings()
+
+    async def run() -> None:
+        database = SQLiteDatabase(settings.database_path)
+        try:
+            result = await database.restore(backup)
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            console.print(str(exc))
+            raise typer.Exit(1) from exc
+        console.print(
+            "SQLite restore complete: "
+            f"{result.source_path} -> {result.destination_path} "
+            f"({result.byte_size} bytes)"
+        )
+
+    asyncio.run(run())
+
+
+@app.command("workspace-backup")
+def workspace_backup(
+    output: Annotated[Path, typer.Argument(help="Destination workspace .zip path.")],
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Overwrite an existing workspace archive."),
+    ] = False,
+) -> None:
+    """Create a workspace archive with data files and a consistent SQLite backup."""
+    settings = Settings()
+    expanded_output = output.expanduser()
+    _reject_symlinked_cli_output_path(expanded_output)
+    output_path = expanded_output.resolve()
+    if output_path.exists() and not overwrite:
+        console.print(f"Workspace backup destination already exists: {output_path}")
+        raise typer.Exit(1)
+
+    async def run() -> None:
+        database = SQLiteDatabase(settings.database_path)
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                db_backup_path = Path(tmp_dir) / "librarian.sqlite"
+                db_backup = await database.backup(db_backup_path, overwrite=True)
+                file_count = _write_workspace_backup_archive(
+                    output_path,
+                    settings=settings,
+                    db_backup_path=db_backup.destination_path,
+                )
+        except (FileExistsError, FileNotFoundError, RuntimeError, ValueError) as exc:
+            console.print(str(exc))
+            raise typer.Exit(1) from exc
+        console.print(
+            "Workspace backup complete: "
+            f"{output_path} ({file_count} file(s), {output_path.stat().st_size} bytes)"
+        )
+
+    asyncio.run(run())
+
+
+@app.command("workspace-restore")
+def workspace_restore(
+    archive: Annotated[Path, typer.Argument(help="Source workspace .zip archive.")],
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", help="Confirm replacing workspace data and database files."),
+    ] = False,
+    max_expanded_bytes: Annotated[
+        int,
+        typer.Option(help="Maximum total uncompressed archive bytes to restore."),
+    ] = _DEFAULT_WORKSPACE_RESTORE_MAX_EXPANDED_BYTES,
+) -> None:
+    """Restore data files and SQLite database from a workspace archive."""
+    if not yes:
+        console.print("Refusing to restore workspace without --yes; this replaces local data.")
+        raise typer.Exit(1)
+    if max_expanded_bytes <= 0:
+        raise typer.BadParameter("max-expanded-bytes must be greater than 0")
+    settings = Settings()
+
+    async def run() -> None:
+        database = SQLiteDatabase(settings.database_path)
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                archive_path = archive.expanduser().resolve()
+                db_restore_source, database_archive_path = _extract_workspace_database_snapshot(
+                    archive.expanduser().resolve(),
+                    temporary_dir=Path(tmp_dir),
+                    max_expanded_bytes=max_expanded_bytes,
+                )
+                result = await database.restore(db_restore_source)
+                _restore_workspace_data_files(
+                    archive_path,
+                    settings=settings,
+                    database_archive_path=database_archive_path,
+                    max_expanded_bytes=max_expanded_bytes,
+                )
+        except (FileNotFoundError, RuntimeError, ValueError, zipfile.BadZipFile) as exc:
+            console.print(str(exc))
+            raise typer.Exit(1) from exc
+        console.print(
+            "Workspace restore complete: "
+            f"{archive.expanduser().resolve()} -> {settings.data_dir.resolve()} "
+            f"({result.byte_size} database bytes)"
+        )
+
+    asyncio.run(run())
 
 
 @app.command()
@@ -209,7 +444,7 @@ def convert_dir(
 
 @app.command("import")
 def import_directory(
-    path: Annotated[Path, typer.Argument(exists=True, readable=True, file_okay=False)],
+    path: Annotated[Path, typer.Argument(exists=True, readable=True)],
     format: Annotated[str, typer.Option(help="Converted output format: md or txt.")] = "md",
     output_mode: Annotated[
         str,
@@ -241,13 +476,15 @@ def import_directory(
         typer.Option(help="Deprecated; batch import always writes provenance sidecars."),
     ] = False,
 ) -> None:
-    """Convert a directory, ingest outputs, and optionally process or enqueue."""
+    """Convert a file or directory, ingest outputs, and optionally process or enqueue."""
     if process and queue:
         raise typer.BadParameter("Choose only one of --process or --queue")
     conversion_format = _conversion_format(format)
     mode = _directory_output_mode(output_mode)
+    resolved_path = path.resolve()
+    source_dir = resolved_path if resolved_path.is_dir() else resolved_path.parent
     _validate_cli_directory_output(
-        path.resolve(),
+        source_dir,
         mode,
         output_dir.resolve() if output_dir else None,
     )
@@ -268,9 +505,10 @@ def import_directory(
             ingest=container.ingest_document,
             process=getattr(container, "process_document", None),
             queue_factory=lambda: SQLiteRunQueue(container.database),
+            manifest_max_bytes=container.settings.api_max_import_manifest_bytes,
         )
-        result = await importer.import_directory(
-            path.resolve(),
+        result = await importer.import_path(
+            resolved_path,
             format=conversion_format,
             output_mode=mode,
             processing_mode=processing_mode,
@@ -396,12 +634,13 @@ def retry_run(
 @app.command("queue")
 def inspect_queue(
     limit: Annotated[int, typer.Option(help="Maximum queue rows.", min=1, max=500)] = 100,
+    offset: Annotated[int, typer.Option(help="Queue rows to skip.", min=0)] = 0,
 ) -> None:
     """List durable queue items."""
 
     async def run() -> None:
         container = await build_ingest_container()
-        rows = await SQLiteRunQueue(container.database).list(limit=limit)
+        rows = await SQLiteRunQueue(container.database).list(limit=limit, offset=offset)
         table = Table("Run", "Status", "Attempts", "Available", "Locked By", "Error")
         for item in rows:
             table.add_row(
@@ -527,6 +766,14 @@ def show(
 @app.command()
 def status(
     run_id: Annotated[str, typer.Argument(help="Run ID to inspect.")],
+    event_limit: Annotated[
+        int,
+        typer.Option(help="Maximum run events to print.", min=1, max=1_000),
+    ] = 500,
+    event_offset: Annotated[
+        int,
+        typer.Option(help="Run events to skip.", min=0),
+    ] = 0,
 ) -> None:
     """Show processing run status and events."""
 
@@ -536,7 +783,11 @@ def status(
         if run_record is None:
             raise typer.BadParameter(f"Run not found: {run_id}")
         console.print(f"Run {run_record.id}: {run_record.status.value} ({run_record.stage.value})")
-        for event in await container.repository.list_events(run_record.id):
+        for event in await container.repository.list_events(
+            run_record.id,
+            limit=event_limit,
+            offset=event_offset,
+        ):
             console.print(event)
 
     asyncio.run(run())
@@ -546,16 +797,106 @@ def status(
 def search(
     query: Annotated[str, typer.Argument(help="Search query.")],
     limit: Annotated[int, typer.Option(help="Maximum results.", min=1, max=500)] = 20,
+    offset: Annotated[int, typer.Option(help="Results to skip.", min=0)] = 0,
+    details: Annotated[
+        bool,
+        typer.Option(help="Show ranked snippets instead of document IDs only."),
+    ] = False,
+    phrase: Annotated[
+        bool,
+        typer.Option(help="Treat the query as one exact adjacent phrase."),
+    ] = False,
+    classification_code: Annotated[
+        str | None,
+        typer.Option(help="Restrict results to one Dewey classification code."),
+    ] = None,
+    document_status: Annotated[
+        str | None,
+        typer.Option(help="Restrict results to one document status."),
+    ] = None,
+    filename_contains: Annotated[
+        str | None,
+        typer.Option(help="Restrict results to source filenames containing this text."),
+    ] = None,
+    created_after: Annotated[
+        str | None,
+        typer.Option(help="Restrict to documents created at or after this ISO timestamp."),
+    ] = None,
+    created_before: Annotated[
+        str | None,
+        typer.Option(help="Restrict to documents created at or before this ISO timestamp."),
+    ] = None,
+    scope: Annotated[
+        str,
+        typer.Option(help="Search cleaned outputs or raw extracted source text."),
+    ] = "cleaned",
 ) -> None:
     """Search cleaned outputs."""
 
     async def run() -> None:
         container = await build_ingest_container()
+        status_filter = _document_status_filter(document_status)
+        search_scope = _search_scope_filter(scope)
+        created_after_filter = _datetime_filter(created_after, option_name="created-after")
+        created_before_filter = _datetime_filter(created_before, option_name="created-before")
+        if details:
+            try:
+                results = await container.repository.search_results(
+                    query,
+                    limit=limit,
+                    offset=offset,
+                    classification_code=classification_code,
+                    document_status=status_filter,
+                    filename_contains=filename_contains,
+                    created_after=created_after_filter,
+                    created_before=created_before_filter,
+                    scope=search_scope,
+                    phrase=phrase,
+                )
+                total = await container.repository.search_count(
+                    query,
+                    classification_code=classification_code,
+                    document_status=status_filter,
+                    filename_contains=filename_contains,
+                    created_after=created_after_filter,
+                    created_before=created_before_filter,
+                    scope=search_scope,
+                    phrase=phrase,
+                )
+            except ValueError as exc:
+                raise typer.BadParameter(str(exc)) from exc
+            console.print(
+                f"Showing {len(results)} of {total} results (offset={offset}, limit={limit})"
+            )
+            table = Table("Document ID", "Source", "Run ID", "Status", "Class", "Score", "Snippet")
+            for result in results:
+                table.add_row(
+                    str(result.document_id),
+                    result.source,
+                    str(result.run_id) if result.run_id else "",
+                    result.document_status.value,
+                    result.classification_code or "",
+                    f"{result.score:.3f}",
+                    result.snippet,
+                )
+            console.print(table)
+            return
         try:
-            results = await container.repository.search(query, limit=limit)
+            ids = await container.repository.search(
+                query,
+                limit=limit,
+                offset=offset,
+                classification_code=classification_code,
+                document_status=status_filter,
+                filename_contains=filename_contains,
+                created_after=created_after_filter,
+                created_before=created_before_filter,
+                scope=search_scope,
+                phrase=phrase,
+            )
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
-        for document_id in results:
+        for document_id in ids:
             console.print(document_id)
 
     asyncio.run(run())
@@ -583,7 +924,7 @@ def export(
         classification = await container.repository.get_classification(DocumentId(document_id))
         rendered = ExportedDocument(document, cleaned, classification).render(export_format)
         if output:
-            await asyncio.to_thread(output.write_text, rendered, encoding="utf-8")
+            await asyncio.to_thread(_write_cli_output_atomic, output, rendered)
             console.print(f"Exported {document.id} to {output}")
         else:
             console.print(rendered)
@@ -593,13 +934,13 @@ def export(
 
 @app.command()
 def benchmark(
-    paragraphs: Annotated[int, typer.Option(help="Synthetic paragraph count.")] = 100,
-    paragraph_chars: Annotated[int, typer.Option(help="Characters per paragraph.")] = 1_000,
+    paragraphs: Annotated[int, typer.Option(help="Synthetic paragraph count.", min=1)] = 100,
+    paragraph_chars: Annotated[int, typer.Option(help="Characters per paragraph.", min=1)] = 1_000,
     input_path: Annotated[
         Path | None,
         typer.Option(help="Optional UTF-8 text file to benchmark instead of synthetic text."),
     ] = None,
-    repeats: Annotated[int, typer.Option(help="Number of repeated benchmark runs.")] = 1,
+    repeats: Annotated[int, typer.Option(help="Number of repeated benchmark runs.", min=1)] = 1,
     output: Annotated[Path | None, typer.Option(help="Optional JSON output path.")] = None,
 ) -> None:
     """Benchmark chunking and configured cleaning provider throughput."""
@@ -615,11 +956,11 @@ def benchmark(
                 paragraph_chars=paragraph_chars,
             ),
             policy=container.process_document.chunking_policy,
-            repeats=max(1, repeats),
+            repeats=repeats,
         )
         rendered = benchmark_result_json(result)
         if output:
-            await asyncio.to_thread(output.write_text, rendered, encoding="utf-8")
+            await asyncio.to_thread(_write_cli_output_atomic, output, rendered)
             console.print(f"Wrote benchmark results to {output}")
             return
         console.print(rendered)
@@ -639,7 +980,7 @@ def eval_suite(
         result = await run_eval_suite(container, load_eval_suite(path))
         rendered = eval_result_json(result)
         if output:
-            await asyncio.to_thread(output.write_text, rendered, encoding="utf-8")
+            await asyncio.to_thread(_write_cli_output_atomic, output, rendered)
             console.print(f"Wrote eval results to {output}")
         else:
             console.print(rendered)
@@ -647,6 +988,221 @@ def eval_suite(
             raise typer.Exit(code=1)
 
     asyncio.run(run())
+
+
+@app.command("corpus-eval")
+def corpus_eval(
+    path: Annotated[Path, typer.Argument(exists=True, readable=True, dir_okay=False)],
+    output_dir: Annotated[
+        Path,
+        typer.Option(help="Directory for converted eval artifacts."),
+    ] = Path(".librarian/corpus-eval"),
+    output: Annotated[Path | None, typer.Option(help="Optional JSON result path.")] = None,
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Overwrite existing converted eval artifacts."),
+    ] = False,
+) -> None:
+    """Run corpus-level conversion, processing, and search evaluation."""
+
+    async def run() -> None:
+        container = await build_container()
+        result = await run_corpus_eval_suite(
+            container,
+            load_corpus_eval_suite(path),
+            output_dir=output_dir,
+            overwrite=overwrite,
+        )
+        rendered = corpus_eval_result_json(result)
+        if output:
+            await asyncio.to_thread(_write_cli_output_atomic, output, rendered)
+            console.print(f"Wrote corpus eval results to {output}")
+        else:
+            console.print(rendered)
+        if not result.passed:
+            raise typer.Exit(code=1)
+
+    asyncio.run(run())
+
+
+@app.command("generate-corpus")
+def generate_corpus(
+    output_dir: Annotated[
+        Path,
+        typer.Option(help="Directory that will receive corpus/ and corpus_eval_cases.json."),
+    ] = Path(".librarian/synthetic-corpus"),
+    documents: Annotated[int, typer.Option(help="Number of source documents.", min=1)] = 3,
+    paragraphs: Annotated[
+        int,
+        typer.Option(help="Paragraphs per source document.", min=1),
+    ] = 200,
+    paragraph_sentences: Annotated[
+        int,
+        typer.Option(help="Sentences per paragraph.", min=1),
+    ] = 4,
+    include_docx: Annotated[
+        bool,
+        typer.Option(help="Also generate sanitized DOCX fixtures with tables/headers/footers."),
+    ] = False,
+    include_pdf: Annotated[
+        bool,
+        typer.Option(help="Also generate sanitized embedded-text PDF fixtures."),
+    ] = False,
+    overwrite: Annotated[bool, typer.Option(help="Overwrite existing generated files.")] = False,
+) -> None:
+    """Generate a deterministic sanitized corpus-eval fixture."""
+    try:
+        result = generate_synthetic_corpus(
+            corpus_dir=output_dir / "corpus",
+            suite_path=output_dir / "corpus_eval_cases.json",
+            documents=documents,
+            paragraphs_per_document=paragraphs,
+            sentences_per_paragraph=paragraph_sentences,
+            include_docx=include_docx,
+            include_pdf=include_pdf,
+            overwrite=overwrite,
+        )
+    except (FileExistsError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"Generated {len(result.files)} synthetic document(s)")
+    console.print(f"Corpus: {result.corpus_dir}")
+    console.print(f"Suite: {result.suite_path}")
+    console.print(f"Size: {result.total_bytes:,} bytes, {result.total_chars:,} characters")
+
+
+@app.command("page-manifest")
+def page_manifest(
+    path: Annotated[Path, typer.Argument(exists=True, readable=True, dir_okay=False)],
+    limit: Annotated[int, typer.Option(help="Maximum page rows to print.", min=1, max=1_000)] = 50,
+    offset: Annotated[int, typer.Option(help="Page rows to skip.", min=0)] = 0,
+    failures_only: Annotated[
+        bool,
+        typer.Option(help="Only print failed page rows."),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print a machine-readable summary."),
+    ] = False,
+) -> None:
+    """Inspect a PDF page extraction manifest."""
+    try:
+        payload, pages = _read_pdf_page_manifest(path.resolve())
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    visible_pages = [
+        page
+        for page in pages
+        if not failures_only or str(page.get("status") or "") == "failed"
+    ]
+    page_window = visible_pages[offset : offset + limit]
+    statuses = _count_manifest_values(pages, "status")
+    sources = _count_manifest_values(pages, "source")
+    warnings = _count_manifest_warnings(pages)
+    corrected = sum(1 for page in pages if page.get("corrected") is True)
+    confidences = [
+        float(confidence)
+        for page in pages
+        if isinstance((confidence := page.get("confidence")), int | float)
+    ]
+    attempts = sum(
+        int(attempt_count)
+        for page in pages
+        if isinstance((attempt_count := page.get("attempts")), int)
+    )
+    average_confidence = (
+        f"{sum(confidences) / len(confidences):.1f}" if confidences else "n/a"
+    )
+    if json_output:
+        summary = {
+            "manifest_path": str(path.resolve()),
+            "source_sha256": payload.get("source_sha256", ""),
+            "page_count": payload.get("page_count", len(pages)),
+            "statuses": statuses,
+            "sources": sources,
+            "warnings": warnings,
+            "corrected_pages": corrected,
+            "attempts": attempts,
+            "average_confidence": (
+                round(sum(confidences) / len(confidences), 1) if confidences else None
+            ),
+            "limit": limit,
+            "offset": offset,
+            "failures_only": failures_only,
+            "pages": [
+                {
+                    "page_number": page.get("page_number"),
+                    "source": page.get("source"),
+                    "status": page.get("status"),
+                    "chars": page.get("chars"),
+                    "confidence": page.get("confidence"),
+                    "corrected": page.get("corrected") is True,
+                    "attempts": page.get("attempts", 0),
+                    "duration_ms": page.get("duration_ms"),
+                    "warnings": _manifest_warning_list(page),
+                    "error": page.get("error"),
+                }
+                for page in page_window
+            ],
+        }
+        console.out(json.dumps(summary, indent=2, sort_keys=True))
+        return
+    console.print(f"Manifest: {path.resolve()}")
+    console.print(f"Source SHA-256: {payload.get('source_sha256', '')}")
+    console.print(
+        "Pages: "
+        f"{payload.get('page_count', len(pages))} "
+        f"(succeeded={statuses.get('succeeded', 0)}, "
+        f"failed={statuses.get('failed', 0)}, "
+        f"pending={statuses.get('pending', 0)})"
+    )
+    console.print(
+        "Sources: "
+        f"embedded={sources.get('embedded', 0)}, "
+        f"ocr={sources.get('ocr', 0)}, "
+        f"empty={sources.get('empty', 0)}, "
+        f"pending={sources.get('pending', 0)}; "
+        f"corrected={corrected}; attempts={attempts}; avg_confidence={average_confidence}"
+    )
+    if warnings:
+        warning_summary = ", ".join(
+            f"{warning}={count}" for warning, count in sorted(warnings.items())
+        )
+        console.print(f"Warnings: {warning_summary}")
+    failed_errors = [
+        f"page {page.get('page_number')}: {error}"
+        for page in page_window
+        if isinstance((error := page.get("error")), str) and error
+    ]
+    if failed_errors:
+        console.print(f"Errors: {'; '.join(failed_errors)}")
+    table = Table(
+        "Page",
+        "Source",
+        "Status",
+        "Chars",
+        "Confidence",
+        "Corrected",
+        "Attempts",
+        "Duration ms",
+        "Warnings",
+        "Error",
+    )
+    for page in page_window:
+        confidence = page.get("confidence")
+        duration_ms = page.get("duration_ms")
+        table.add_row(
+            str(page.get("page_number", "")),
+            str(page.get("source", "")),
+            str(page.get("status", "")),
+            str(page.get("chars", "")),
+            f"{float(confidence):.1f}" if isinstance(confidence, int | float) else "",
+            "yes" if page.get("corrected") is True else "",
+            str(page.get("attempts", "")),
+            f"{float(duration_ms):.1f}" if isinstance(duration_ms, int | float) else "",
+            ", ".join(_manifest_warning_list(page)),
+            str(page.get("error") or ""),
+        )
+    console.print(table)
 
 
 @app.command()
@@ -658,8 +1214,16 @@ def api(
     settings = Settings()
     bind_host = host or settings.api_host
     if bind_host in {"0.0.0.0", "::", "[::]"}:  # noqa: S104
-        if not settings.api_key:
-            raise typer.BadParameter("LIBRARIAN_API_KEY is required when binding publicly")
+        if not (
+            settings.api_key
+            or settings.api_keys
+            or settings.api_key_sha256
+            or settings.api_key_hashes
+        ):
+            raise typer.BadParameter(
+                "LIBRARIAN_API_KEY, LIBRARIAN_API_KEYS, LIBRARIAN_API_KEY_SHA256, "
+                "or LIBRARIAN_API_KEY_HASHES is required when binding publicly"
+            )
         if settings.api_import_root is None:
             raise typer.BadParameter("LIBRARIAN_API_IMPORT_ROOT is required when binding publicly")
     uvicorn.run(
@@ -703,6 +1267,391 @@ def _validate_cli_directory_output(
         raise typer.BadParameter(str(exc)) from exc
 
 
+def _document_status_filter(value: str | None) -> DocumentStatus | None:
+    if value is None:
+        return None
+    try:
+        return DocumentStatus(value)
+    except ValueError as exc:
+        raise typer.BadParameter(
+            "document-status must be one of: ingested, processing, ready, failed"
+        ) from exc
+
+
+def _search_scope_filter(value: str) -> SearchScope:
+    if value in {"cleaned", "raw"}:
+        return cast(SearchScope, value)
+    raise typer.BadParameter("scope must be one of: cleaned, raw")
+
+
+def _datetime_filter(value: str | None, *, option_name: str) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        normalized = value.removesuffix("Z") + "+00:00" if value.endswith("Z") else value
+        return datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise typer.BadParameter(f"{option_name} must be an ISO-8601 timestamp") from exc
+
+
+def _write_cli_output_atomic(path: Path, payload: str) -> None:
+    _reject_symlinked_cli_output_path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary_path.write_text(payload, encoding="utf-8")
+        temporary_path.replace(path)
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+
+def _reject_symlinked_cli_output_path(path: Path) -> None:
+    if path.is_symlink():
+        raise ValueError(f"Output path must not be a symlink: {path}")
+    for parent in reversed(path.parents):
+        if parent.is_absolute() and len(parent.parts) <= 2:
+            continue
+        if parent.exists() and parent.is_symlink():
+            raise ValueError(f"Output path crosses symlinked parent: {path}")
+
+
+def _doctor_module_checks() -> list[tuple[str, str, str, str]]:
+    modules = [
+        ("pdfplumber", "embedded PDF extraction", "pip install -e '.[pdf]'"),
+        ("pdf2image", "scanned PDF rasterization", "pip install -e '.[ocr]'"),
+        ("pytesseract", "OCR confidence diagnostics", "pip install -e '.[ocr]'"),
+        ("markitdown", "broad-format conversion", "pip install -e '.[universal]'"),
+    ]
+    return [
+        (
+            module_name,
+            capability,
+            "ok" if _module_available(module_name) else "missing",
+            "installed" if _module_available(module_name) else hint,
+        )
+        for module_name, capability, hint in modules
+    ]
+
+
+def _doctor_tool_checks() -> list[tuple[str, str, str, str]]:
+    tools = [
+        ("tesseract", "image/PDF OCR", "brew install tesseract"),
+        ("pdftoppm", "PDF page rasterization", "brew install poppler"),
+    ]
+    rows: list[tuple[str, str, str, str]] = []
+    for tool_name, capability, hint in tools:
+        tool_path = shutil.which(tool_name)
+        rows.append(
+            (
+                tool_name,
+                capability,
+                "ok" if tool_path else "missing",
+                tool_path or hint,
+            )
+        )
+    return rows
+
+
+def _module_available(name: str) -> bool:
+    return importlib.util.find_spec(name) is not None
+
+
+def _read_pdf_page_manifest(path: Path) -> tuple[dict[str, object], list[dict[str, object]]]:
+    if path.is_symlink():
+        raise ValueError(f"PDF page manifest path must not be a symlink: {path}")
+    if path.stat().st_size > _MAX_PAGE_MANIFEST_READ_BYTES:
+        raise ValueError(
+            "PDF page manifest exceeds read limit of "
+            f"{_MAX_PAGE_MANIFEST_READ_BYTES} bytes: {path}"
+        )
+    try:
+        payload_obj: object = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError("PDF page manifest is invalid JSON") from exc
+    if not isinstance(payload_obj, dict):
+        raise ValueError("PDF page manifest must be a JSON object")
+    payload = cast(dict[str, object], payload_obj)
+    if payload.get("artifact_type") != "pdf-page-extraction-manifest":
+        raise ValueError("PDF page manifest has unexpected artifact_type")
+    pages_obj = payload.get("pages")
+    if not isinstance(pages_obj, list):
+        raise ValueError("PDF page manifest is missing pages")
+    pages: list[dict[str, object]] = []
+    for page in cast(list[object], pages_obj):
+        if not isinstance(page, dict):
+            raise ValueError("PDF page manifest contains an invalid page record")
+        pages.append(cast(dict[str, object], page))
+    return payload, pages
+
+
+def _count_manifest_values(pages: list[dict[str, object]], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for page in pages:
+        value = page.get(key)
+        if isinstance(value, str) and value:
+            counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+def _count_manifest_warnings(pages: list[dict[str, object]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for page in pages:
+        for warning in _manifest_warning_list(page):
+            counts[warning] = counts.get(warning, 0) + 1
+    return counts
+
+
+def _manifest_warning_list(page: dict[str, object]) -> list[str]:
+    value = page.get("warnings")
+    if not isinstance(value, list):
+        return []
+    warnings: list[str] = []
+    for warning in cast(list[object], value):
+        if isinstance(warning, str):
+            warnings.append(warning)
+    return warnings
+
+
+def _write_workspace_backup_archive(
+    output_path: Path,
+    *,
+    settings: Settings,
+    db_backup_path: Path,
+) -> int:
+    data_dir = settings.data_dir.expanduser().resolve()
+    database_path = settings.database_path.expanduser().resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_archive = output_path.with_name(f".{output_path.name}.tmp")
+    temporary_archive.unlink(missing_ok=True)
+    database_archive_path = _workspace_database_archive_path(
+        data_dir=data_dir,
+        database_path=database_path,
+    )
+    file_count = 0
+    try:
+        with zipfile.ZipFile(
+            temporary_archive,
+            mode="w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as archive:
+            archive.writestr(
+                "workspace-backup.json",
+                json.dumps(
+                    {
+                        "artifact_type": "librarian-workspace-backup",
+                        "created_at": datetime.now().astimezone().isoformat(),
+                        "data_dir": str(data_dir),
+                        "database_path": str(database_path),
+                        "database_archive_path": database_archive_path,
+                    },
+                    indent=2,
+                ),
+            )
+            file_count += 1
+            archive.write(db_backup_path, database_archive_path)
+            file_count += 1
+            if data_dir.exists():
+                excluded = _workspace_backup_exclusions(
+                    data_dir=data_dir,
+                    database_path=database_path,
+                    output_path=output_path,
+                    temporary_archive=temporary_archive,
+                )
+                for path in sorted(data_dir.rglob("*")):
+                    if not path.is_file() or path.is_symlink():
+                        continue
+                    resolved = path.resolve()
+                    if not _is_relative_to(resolved, data_dir):
+                        continue
+                    if resolved in excluded:
+                        continue
+                    archive.write(path, f"data/{path.relative_to(data_dir).as_posix()}")
+                    file_count += 1
+        temporary_archive.replace(output_path)
+    except Exception:
+        temporary_archive.unlink(missing_ok=True)
+        raise
+    return file_count
+
+
+def _extract_workspace_database_snapshot(
+    archive_path: Path,
+    *,
+    temporary_dir: Path,
+    max_expanded_bytes: int,
+) -> tuple[Path, str]:
+    if not archive_path.exists():
+        raise FileNotFoundError(f"Workspace backup archive does not exist: {archive_path}")
+    with zipfile.ZipFile(archive_path) as archive:
+        manifest = _read_workspace_backup_manifest(archive)
+        database_archive_path = str(manifest["database_archive_path"])
+        _validate_workspace_archive_members(
+            archive,
+            database_archive_path=database_archive_path,
+            max_expanded_bytes=max_expanded_bytes,
+        )
+        db_restore_source = temporary_dir / "workspace-restore.sqlite"
+        with archive.open(database_archive_path) as source, db_restore_source.open("wb") as target:
+            shutil.copyfileobj(source, target)
+    return db_restore_source, database_archive_path
+
+
+def _restore_workspace_data_files(
+    archive_path: Path,
+    *,
+    settings: Settings,
+    database_archive_path: str,
+    max_expanded_bytes: int,
+) -> None:
+    expanded_data_dir = settings.data_dir.expanduser()
+    if _path_crosses_symlink(expanded_data_dir):
+        raise ValueError(f"Workspace restore data_dir crosses symlink: {expanded_data_dir}")
+    data_dir = expanded_data_dir.resolve()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive_path) as archive:
+        _validate_workspace_archive_members(
+            archive,
+            database_archive_path=database_archive_path,
+            max_expanded_bytes=max_expanded_bytes,
+        )
+        for member in archive.infolist():
+            if member.is_dir() or member.filename in {
+                "workspace-backup.json",
+                database_archive_path,
+            }:
+                continue
+            if not member.filename.startswith("data/"):
+                continue
+            relative_path = Path(member.filename.removeprefix("data/"))
+            destination = (data_dir / relative_path).resolve()
+            if not _is_relative_to(destination, data_dir):
+                raise ValueError(f"Workspace archive path escapes data dir: {member.filename}")
+            _reject_symlinked_workspace_restore_path(data_dir / relative_path, data_dir=data_dir)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            _reject_symlinked_workspace_restore_path(data_dir / relative_path, data_dir=data_dir)
+            with archive.open(member) as source, destination.open("wb") as target:
+                shutil.copyfileobj(source, target)
+
+
+def _read_workspace_backup_manifest(archive: zipfile.ZipFile) -> dict[str, object]:
+    try:
+        manifest_info = archive.getinfo("workspace-backup.json")
+        if manifest_info.file_size > _MAX_WORKSPACE_BACKUP_MANIFEST_BYTES:
+            raise ValueError(
+                "Workspace archive manifest expands to more than "
+                f"{_MAX_WORKSPACE_BACKUP_MANIFEST_BYTES} bytes"
+            )
+        with archive.open(manifest_info) as manifest_file:
+            payload_obj: object = json.loads(manifest_file.read().decode("utf-8"))
+    except KeyError as exc:
+        raise ValueError("Workspace archive is missing workspace-backup.json") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError("Workspace archive manifest is invalid JSON") from exc
+    if not isinstance(payload_obj, dict):
+        raise ValueError("Workspace archive manifest must be a JSON object")
+    payload = cast(dict[str, object], payload_obj)
+    if payload.get("artifact_type") != "librarian-workspace-backup":
+        raise ValueError("Workspace archive manifest has unexpected artifact_type")
+    database_archive_path = payload.get("database_archive_path")
+    if not isinstance(database_archive_path, str) or not database_archive_path:
+        raise ValueError("Workspace archive manifest is missing database_archive_path")
+    _validate_workspace_archive_path(database_archive_path)
+    return payload
+
+
+def _validate_workspace_archive_members(
+    archive: zipfile.ZipFile,
+    *,
+    database_archive_path: str,
+    max_expanded_bytes: int,
+) -> None:
+    members = archive.infolist()
+    if len(members) > _MAX_WORKSPACE_BACKUP_MEMBERS:
+        raise ValueError(
+            "Workspace archive contains more than "
+            f"{_MAX_WORKSPACE_BACKUP_MEMBERS} members"
+        )
+    seen_names: set[str] = set()
+    expanded_bytes = 0
+    has_database_snapshot = False
+    for member in members:
+        name = member.filename
+        if name in seen_names:
+            raise ValueError(f"Workspace archive contains duplicate path: {name}")
+        seen_names.add(name)
+        _validate_workspace_archive_path(name)
+        if name == database_archive_path:
+            has_database_snapshot = True
+        if member.is_dir():
+            continue
+        expanded_bytes += member.file_size
+        if expanded_bytes > max_expanded_bytes:
+            raise ValueError(
+                f"Workspace archive expands to more than {max_expanded_bytes} bytes"
+            )
+    if not has_database_snapshot:
+        raise ValueError("Workspace archive is missing its database snapshot")
+
+
+def _validate_workspace_archive_path(name: str) -> None:
+    if "\\" in name:
+        raise ValueError(f"Workspace archive contains unsafe path: {name}")
+    parts = PurePosixPath(name).parts
+    if name.startswith("/") or ".." in parts:
+        raise ValueError(f"Workspace archive contains unsafe path: {name}")
+
+
+def _reject_symlinked_workspace_restore_path(path: Path, *, data_dir: Path) -> None:
+    relative_path = path.relative_to(data_dir)
+    current = data_dir
+    for part in relative_path.parts:
+        current = current / part
+        if current.exists() and current.is_symlink():
+            raise ValueError(f"Workspace restore path crosses symlink: {path}")
+
+
+def _path_crosses_symlink(path: Path) -> bool:
+    for current in (*reversed(path.parents), path):
+        if current.is_absolute() and len(current.parts) <= 2:
+            continue
+        if current.exists() and current.is_symlink():
+            return True
+    return False
+
+
+def _workspace_database_archive_path(*, data_dir: Path, database_path: Path) -> str:
+    try:
+        return f"data/{database_path.relative_to(data_dir).as_posix()}"
+    except ValueError:
+        return f"database/{database_path.name}"
+
+
+def _workspace_backup_exclusions(
+    *,
+    data_dir: Path,
+    database_path: Path,
+    output_path: Path,
+    temporary_archive: Path,
+) -> set[Path]:
+    candidates = {
+        database_path,
+        Path(f"{database_path}-wal"),
+        Path(f"{database_path}-shm"),
+        output_path,
+        temporary_archive,
+    }
+    return {path.resolve() for path in candidates if _is_relative_to(path.resolve(), data_dir)}
+
+
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
 def _build_extractor(settings: Settings) -> CompositeExtractor:
     return CompositeExtractor(
         ocr_language=settings.ocr_language,
@@ -712,6 +1661,8 @@ def _build_extractor(settings: Settings) -> CompositeExtractor:
         ocr_correction_provider=LazyLLMProvider(settings),
         ocr_correction_mode=settings.ocr_llm_correction,
         ocr_correction_model=settings.ocr_llm_model or settings.llm_model,
+        ocr_low_confidence_threshold=settings.ocr_low_confidence_threshold,
+        ocr_max_correction_response_chars=settings.llm_max_response_chars,
         ocr_page_concurrency=settings.ocr_page_concurrency,
         ocr_fail_on_page_error=settings.ocr_fail_on_page_error,
         text_max_input_bytes=settings.text_max_input_bytes,

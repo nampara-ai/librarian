@@ -5,43 +5,160 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  build:
+  secret-scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    needs: secret-scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
     permissions:
       contents: write
       packages: write
       id-token: write
+      attestations: write
+      security-events: write
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: "pip"
+      - name: Install system OCR tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends poppler-utils tesseract-ocr
       - name: Install
         run: python -m pip install -e ".[dev,all]"
+      - name: Verify release tag matches package version
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+
+          from librarian.version import __version__
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          expected = f"v{__version__}"
+          if tag != expected:
+              print(f"release tag {tag!r} does not match package version {expected!r}")
+              sys.exit(1)
+          PY
+      - name: Verify changelog is ready for release
+        run: python .github/scripts/check_changelog_ready.py --version "$GITHUB_REF_NAME"
+      - name: Doctor
+        run: librarian doctor --strict
       - name: Check
         run: |
           ruff check .
           pyright
           pytest
+      - name: Dependency audit
+        run: pip-audit --progress-spinner off --skip-editable
+      - name: Synthetic corpus eval
+        run: |
+          mkdir -p release-evidence
+          librarian corpus-eval examples/synthetic-corpus/corpus_eval_cases.json \
+            --output-dir "$(mktemp -d)" \
+            --output release-evidence/corpus-eval-mock.json \
+            --overwrite
+      - name: Prompt eval
+        run: librarian eval examples/eval_cases.json --output release-evidence/eval-mock.json
+      - name: Benchmark
+        run: |
+          librarian benchmark --input-path examples/benchmark_text.txt --repeats 1 \
+            --output release-evidence/benchmark-mock.json
+      - name: Verify release evidence
+        run: |
+          python .github/scripts/verify_release_evidence.py \
+            --eval release-evidence/eval-mock.json \
+            --corpus-eval release-evidence/corpus-eval-mock.json \
+            --benchmark release-evidence/benchmark-mock.json \
+            --version "$GITHUB_REF_NAME" \
+            --min-corpus-cases 8 \
+            --min-corpus-search-recall 1.0 \
+            --min-corpus-output-ratio 0.05 \
+            --min-benchmark-cps 1000 \
+            --min-benchmark-runs 1
       - name: Build distributions
-        run: python -m build
+        run: |
+          rm -rf dist
+          python -m build
+      - name: Smoke install wheel
+        run: |
+          python -m venv "$RUNNER_TEMP/librarian-wheel-smoke"
+          "$RUNNER_TEMP/librarian-wheel-smoke/bin/python" -m pip install dist/*.whl
+          "$RUNNER_TEMP/librarian-wheel-smoke/bin/librarian" version
+      - name: Attest distributions
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: "dist/*"
       - name: Generate SBOM
         run: cyclonedx-py environment --output-format JSON --output-file sbom.json
+      - name: Export dependency constraints
+        run: python .github/scripts/export_constraints.py --output constraints.txt
+      - name: Generate checksums
+        run: sha256sum dist/* sbom.json constraints.txt release-evidence/*.json > SHA256SUMS.txt
+      - name: Verify checksums
+        run: sha256sum --check SHA256SUMS.txt
+      - name: Attest release metadata
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: |
+            sbom.json
+            constraints.txt
+            SHA256SUMS.txt
+            release-evidence/*.json
       - name: Upload distributions
         uses: actions/upload-artifact@v7
         with:
-          name: dist
+          name: release-${{ github.ref_name }}
+          retention-days: 30
           path: |
             dist/*
             sbom.json
+            constraints.txt
+            SHA256SUMS.txt
+            release-evidence/*.json
       - name: Login to GHCR
         run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
       - name: Build image
         run: |
           IMAGE="ghcr.io/${{ github.repository }}"
           docker build -t "$IMAGE:${{ github.ref_name }}" .
+      - name: Scan image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: "ghcr.io/${{ github.repository }}:${{ github.ref_name }}"
+          format: "sarif"
+          output: "trivy-image.sarif"
+          severity: "HIGH,CRITICAL"
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Upload image scan
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: "trivy-image.sarif"
       - name: Push image
         run: |
           IMAGE="ghcr.io/${{ github.repository }}"
@@ -53,6 +170,21 @@ jobs:
               docker push "$IMAGE:latest"
               ;;
           esac
+      - name: Resolve image digest
+        id: image-digest
+        run: |
+          IMAGE="ghcr.io/${{ github.repository }}"
+          DIGEST="$(docker buildx imagetools inspect "$IMAGE:${{ github.ref_name }}" \
+            --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+      - name: Attest image
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: "ghcr.io/${{ github.repository }}"
+          subject-digest: "${{ steps.image-digest.outputs.digest }}"
+          push-to-registry: true
+      - name: Extract release notes
+        run: python .github/scripts/release_notes.py --version "${{ github.ref_name }}" --output release-notes.md
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -62,8 +194,9 @@ jobs:
           case "$REF_NAME" in
             *a*|*b*|*rc*) PRERELEASE_FLAG="--prerelease" ;;
           esac
-          gh release create "${{ github.ref_name }}" dist/* sbom.json \
+          gh release create "${{ github.ref_name }}" dist/* sbom.json constraints.txt SHA256SUMS.txt release-evidence/*.json \
             --repo "${{ github.repository }}" \
             --title "${{ github.ref_name }}" \
-            --notes-file CHANGELOG.md \
+            --notes-file release-notes.md \
+            --verify-tag \
             $PRERELEASE_FLAG

@@ -15,6 +15,32 @@ services:
       - "8080:8080"
     volumes:
       - librarian-data:/data
+    restart: unless-stopped
+    stop_grace_period: 30s
+    init: true
+    pids_limit: 512
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready', timeout=3).read()"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   worker:
     build: .
@@ -27,8 +53,25 @@ services:
       LIBRARIAN_LOG_FORMAT: json
     volumes:
       - librarian-data:/data
+    restart: unless-stopped
+    stop_grace_period: 5m
+    init: true
+    pids_limit: 512
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   librarian-data:

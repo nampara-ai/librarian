@@ -34,6 +34,7 @@ class ClassifyDocument:
     taxonomy: TaxonomyProvider
     max_tokens: int = 500
     temperature: float = 0.0
+    max_response_chars: int = 2 * 1024 * 1024
 
     async def execute(self, document_id: DocumentId, text: str) -> Classification:
         prompt = self.prompt_catalog.get("classification", self.prompt_version)
@@ -48,6 +49,11 @@ class ClassifyDocument:
             max_tokens=self.max_tokens,
             temperature=self.temperature,
         )
+        if len(raw) > self.max_response_chars:
+            raise ValueError(
+                "classification provider response exceeded configured character limit "
+                f"({len(raw)} > {self.max_response_chars})"
+            )
         try:
             payload = _parse_payload(raw)
         except ValueError:

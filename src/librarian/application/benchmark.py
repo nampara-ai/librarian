@@ -5,11 +5,15 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from librarian.application.clean_chunks import CleanChunks
 from librarian.domain.ids import DocumentId
 from librarian.pipeline.chunking import ChunkingPolicy, chunk_text
+from librarian.version import __version__
+
+_MAX_BENCHMARK_INPUT_BYTES = 100 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +37,9 @@ class BenchmarkSuiteResult:
     """Repeated benchmark measurements."""
 
     runs: tuple[BenchmarkResult, ...]
+    generated_at: datetime
+    librarian_version: str
+    cleaning_prompt_version: str
 
     @property
     def average_chars_per_second(self) -> float:
@@ -86,6 +93,8 @@ async def run_benchmark_suite(
     repeats: int,
 ) -> BenchmarkSuiteResult:
     """Run repeated benchmark measurements."""
+    if repeats < 1:
+        raise ValueError("repeats must be at least 1")
     runs: list[BenchmarkResult] = []
     for index in range(repeats):
         runs.append(
@@ -96,15 +105,24 @@ async def run_benchmark_suite(
                 policy=policy,
             )
         )
-    return BenchmarkSuiteResult(runs=tuple(runs))
+    return BenchmarkSuiteResult(
+        runs=tuple(runs),
+        generated_at=datetime.now(UTC),
+        librarian_version=__version__,
+        cleaning_prompt_version=cleaner.prompt_version,
+    )
 
 
 def benchmark_result_json(result: BenchmarkSuiteResult) -> str:
     """Render benchmark results as JSON."""
     return json.dumps(
         {
+            "generated_at": result.generated_at.isoformat(),
+            "librarian_version": result.librarian_version,
+            "cleaning_prompt_version": result.cleaning_prompt_version,
             "average_chars_per_second": result.average_chars_per_second,
             "fastest_chars_per_second": result.fastest_chars_per_second,
+            "summary": _benchmark_summary(result),
             "runs": [
                 {
                     "provider": item.provider,
@@ -125,15 +143,38 @@ def benchmark_result_json(result: BenchmarkSuiteResult) -> str:
     )
 
 
+def _benchmark_summary(result: BenchmarkSuiteResult) -> dict[str, object]:
+    return {
+        "run_count": len(result.runs),
+        "average_chars_per_second": result.average_chars_per_second,
+        "fastest_chars_per_second": result.fastest_chars_per_second,
+        "total_input_chars": sum(item.input_chars for item in result.runs),
+        "total_chunks": sum(item.chunks for item in result.runs),
+        "total_seconds": sum(item.total_seconds for item in result.runs),
+    }
+
+
 def load_benchmark_text(path: Path | None, *, paragraphs: int, paragraph_chars: int) -> str:
     """Load benchmark text from disk or generate deterministic synthetic text."""
     if path is not None:
-        return path.read_text(encoding="utf-8")
+        return _read_limited_text_file(path, max_bytes=_MAX_BENCHMARK_INPUT_BYTES)
     return synthetic_text(paragraphs=paragraphs, paragraph_chars=paragraph_chars)
+
+
+def _read_limited_text_file(path: Path, *, max_bytes: int) -> str:
+    with path.open("rb") as handle:
+        payload = handle.read(max_bytes + 1)
+    if len(payload) > max_bytes:
+        raise ValueError(f"Benchmark input exceeds configured limit of {max_bytes} bytes: {path}")
+    return payload.decode("utf-8")
 
 
 def synthetic_text(*, paragraphs: int, paragraph_chars: int) -> str:
     """Generate deterministic benchmark text."""
+    if paragraphs < 1:
+        raise ValueError("paragraphs must be at least 1")
+    if paragraph_chars < 1:
+        raise ValueError("paragraph_chars must be at least 1")
     seed = (
         "This is a rough transcript paragraph about library processing, "
         "classification, chunking, and cleaning. "

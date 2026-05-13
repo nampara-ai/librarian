@@ -3,11 +3,35 @@
 Current release safeguards:
 
 - GitHub Actions CI runs lint, tests, type checking, and Docker build.
+- CI verifies prompt-eval, synthetic corpus-eval, and benchmark JSON evidence before building
+  distributions or Docker images.
+- CI and tag release workflows run `pip-audit --skip-editable` against the resolved Python
+  environment. The local editable package is skipped because it is not a PyPI dependency; resolved
+  third-party packages are still audited.
+- Pull requests run GitHub dependency review and fail dependency changes that introduce high or
+  critical severity advisories.
+- CI uses read-only repository token permissions, and workflows disable checkout credential
+  persistence unless a later step explicitly receives a token.
+- CI, release, CodeQL, dependency review, and secret-scanning jobs use explicit timeouts to avoid
+  unbounded hangs.
 - Dependabot monitors Python and GitHub Actions dependencies.
 - CodeQL runs on pushes to the default branch.
+- Secret scanning runs Gitleaks on pushes, pull requests, weekly schedule, and manual dispatch.
 - Release workflow builds wheels/sdist from tags.
+- Release workflow serializes runs per tag and creates releases with `gh release create
+  --verify-tag`.
+- Release workflow smoke-installs the built wheel and runs the installed CLI before publishing.
+- Release workflow verifies optional OCR/PDF dependencies with `librarian doctor --strict`.
 - Release workflow publishes Docker images to GitHub Container Registry.
 - Release workflow generates a CycloneDX SBOM artifact.
+- Release workflow exports `constraints.txt` exact third-party dependency pins from `uv.lock`.
+- Release workflow publishes `SHA256SUMS.txt` for the wheel, source distribution, SBOM,
+  constraints, and sanitized mock evidence.
+- Release workflow verifies `SHA256SUMS.txt` before uploading release artifacts.
+- Release workflow stores the intermediate Actions artifact under the release tag name for 30 days.
+- Release workflow generates GitHub artifact attestations for distributions, release
+  metadata/evidence assets, and container images.
+- Release workflow scans release container images for high/critical vulnerabilities before publish.
 
 ## Alpha Dependency Policy
 
@@ -19,10 +43,51 @@ Stable releases should not use this policy. Before a stable tag, release builds 
 dependency graph or publish constraints alongside the wheel, source distribution, SBOM, and
 container image.
 
+Alpha release artifacts include `constraints.txt` generated from `uv.lock` so users can reproduce
+the tested dependency set while the package metadata itself remains lower-bound based.
+
 Planned hardening before a stable release:
 
-- Artifact attestations for distributions and images.
 - Signed release artifacts.
 - Published package index ownership and trusted publishing.
-- Container image vulnerability scanning.
 - Reproducible build notes.
+
+## Secret Scanning
+
+Do not commit API keys, provider logs, private documents, `.env` files, or generated eval outputs
+that contain private text. CI runs Gitleaks with full git history checkout so both new pull requests
+and scheduled scans can detect committed credentials.
+
+Run a local scan before release candidates or after handling credentials:
+
+```bash
+gitleaks detect --source . --redact --verbose
+```
+
+If a real secret is committed, rotate it before rewriting history or adding an allowlist entry.
+Only allowlist deterministic test fixtures or documented false positives.
+
+## Artifact Verification
+
+Download release artifacts from GitHub Releases, then verify local files before installing:
+
+```bash
+sha256sum --check SHA256SUMS.txt
+```
+
+Verify GitHub provenance attestations for downloaded distributions and release metadata:
+
+```bash
+gh attestation verify dist/nampara_librarian-*.whl --repo nampara-ai/librarian
+gh attestation verify dist/nampara_librarian-*.tar.gz --repo nampara-ai/librarian
+gh attestation verify sbom.json --repo nampara-ai/librarian
+gh attestation verify constraints.txt --repo nampara-ai/librarian
+gh attestation verify SHA256SUMS.txt --repo nampara-ai/librarian
+```
+
+For container images, pin deployments to the digest published by GHCR and verify the registry
+attestation for that digest:
+
+```bash
+gh attestation verify oci://ghcr.io/nampara-ai/librarian@sha256:<digest> --repo nampara-ai/librarian
+```

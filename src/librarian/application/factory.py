@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from librarian.application.classify_document import ClassifyDocument
 from librarian.application.clean_chunks import CleanChunks
 from librarian.application.ingest_document import IngestDocument
-from librarian.application.ports import LLMProvider
+from librarian.application.ports import ApplicationMetrics, LLMProvider
 from librarian.application.process_document import ProcessDocument
 from librarian.config import Settings
 from librarian.ingest.extractors import CompositeExtractor
 from librarian.llm import LazyLLMProvider, build_provider
+from librarian.observability import NoOpMetricsRecorder
 from librarian.pipeline.chunking import ChunkingPolicy
 from librarian.prompts import PromptCatalog
 from librarian.storage.sqlite import SQLiteDatabase, SQLiteRepository
@@ -35,7 +37,11 @@ class ApplicationContainer(IngestContainer):
     process_document: ProcessDocument
 
 
-async def build_ingest_container(settings: Settings | None = None) -> IngestContainer:
+async def build_ingest_container(
+    settings: Settings | None = None,
+    *,
+    metrics: ApplicationMetrics | None = None,
+) -> IngestContainer:
     """Build concrete application services that do not require an LLM provider."""
     resolved_settings = settings or Settings()
     database = SQLiteDatabase(resolved_settings.database_path)
@@ -46,9 +52,11 @@ async def build_ingest_container(settings: Settings | None = None) -> IngestCont
         ocr_timeout_seconds=resolved_settings.ocr_timeout_seconds,
         ocr_pdf_dpi=resolved_settings.ocr_pdf_dpi,
         ocr_pdf_max_pages=resolved_settings.ocr_pdf_max_pages,
-        ocr_correction_provider=LazyLLMProvider(resolved_settings),
+        ocr_correction_provider=LazyLLMProvider(resolved_settings, metrics=metrics),
         ocr_correction_mode=resolved_settings.ocr_llm_correction,
         ocr_correction_model=resolved_settings.ocr_llm_model or resolved_settings.llm_model,
+        ocr_low_confidence_threshold=resolved_settings.ocr_low_confidence_threshold,
+        ocr_max_correction_response_chars=resolved_settings.llm_max_response_chars,
         ocr_page_concurrency=resolved_settings.ocr_page_concurrency,
         ocr_fail_on_page_error=resolved_settings.ocr_fail_on_page_error,
         text_max_input_bytes=resolved_settings.text_max_input_bytes,
@@ -57,6 +65,7 @@ async def build_ingest_container(settings: Settings | None = None) -> IngestCont
         pdf_max_pages=resolved_settings.pdf_max_pages,
         universal_max_input_bytes=resolved_settings.universal_max_input_bytes,
         universal_timeout_seconds=resolved_settings.universal_timeout_seconds,
+        metrics=metrics,
     )
     ingest = IngestDocument(
         documents=repository,
@@ -72,12 +81,17 @@ async def build_ingest_container(settings: Settings | None = None) -> IngestCont
     )
 
 
-async def build_container(settings: Settings | None = None) -> ApplicationContainer:
+async def build_container(
+    settings: Settings | None = None,
+    *,
+    metrics: ApplicationMetrics | None = None,
+    tracer: Any | None = None,
+) -> ApplicationContainer:
     """Build concrete application services."""
-    ingest_container = await build_ingest_container(settings)
+    ingest_container = await build_ingest_container(settings, metrics=metrics)
     resolved_settings = ingest_container.settings
     repository = ingest_container.repository
-    provider = _build_provider(resolved_settings)
+    provider = _build_provider(resolved_settings, metrics=metrics)
     cleaner = CleanChunks(
         provider=provider,
         prompt_catalog=PromptCatalog(),
@@ -85,6 +99,7 @@ async def build_container(settings: Settings | None = None) -> ApplicationContai
         model=resolved_settings.llm_model,
         coherence_mode=resolved_settings.coherence_mode,
         max_parallel_chunks=resolved_settings.llm_max_concurrency,
+        max_response_chars=resolved_settings.llm_max_response_chars,
     )
     taxonomy = DeweyTaxonomy()
     classifier = ClassifyDocument(
@@ -93,6 +108,7 @@ async def build_container(settings: Settings | None = None) -> ApplicationContai
         prompt_version=resolved_settings.classification_prompt_version,
         model=resolved_settings.llm_model,
         taxonomy=taxonomy,
+        max_response_chars=resolved_settings.llm_max_response_chars,
     )
     policy = ChunkingPolicy(
         target_chars=resolved_settings.chunk_target_chars,
@@ -108,6 +124,8 @@ async def build_container(settings: Settings | None = None) -> ApplicationContai
         cleaner=cleaner,
         classifier=classifier,
         chunking_policy=policy,
+        metrics=metrics or NoOpMetricsRecorder(),
+        tracer=tracer,
     )
     return ApplicationContainer(
         settings=resolved_settings,
@@ -118,5 +136,9 @@ async def build_container(settings: Settings | None = None) -> ApplicationContai
     )
 
 
-def _build_provider(settings: Settings) -> LLMProvider:
-    return build_provider(settings)
+def _build_provider(
+    settings: Settings,
+    *,
+    metrics: ApplicationMetrics | None = None,
+) -> LLMProvider:
+    return build_provider(settings, metrics=metrics)
