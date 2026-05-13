@@ -1404,6 +1404,40 @@ def test_cli_page_manifest_rejects_unexpected_artifact(tmp_path: Path) -> None:
     assert "unexpected artifact_type" in _strip_ansi(result.output)
 
 
+def test_cli_page_manifest_rejects_symlink_path(tmp_path: Path) -> None:
+    manifest = tmp_path / "fixture.md.pages.json"
+    manifest.write_text(
+        json.dumps({"artifact_type": "pdf-page-extraction-manifest", "pages": []}),
+        encoding="utf-8",
+    )
+    link = tmp_path / "manifest-link.json"
+    link.symlink_to(manifest)
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["page-manifest", str(link)])
+
+    assert result.exit_code != 0
+    assert "must not be a symlink" in _strip_ansi(result.output)
+
+
+def test_cli_page_manifest_rejects_symlink_parent(tmp_path: Path) -> None:
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    manifest = real_dir / "fixture.md.pages.json"
+    manifest.write_text(
+        json.dumps({"artifact_type": "pdf-page-extraction-manifest", "pages": []}),
+        encoding="utf-8",
+    )
+    linked_dir = tmp_path / "linked"
+    linked_dir.symlink_to(real_dir, target_is_directory=True)
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["page-manifest", str(linked_dir / manifest.name)])
+
+    assert result.exit_code != 0
+    assert "crosses symlinked parent" in _strip_ansi(result.output)
+
+
 def test_cli_api_public_bind_accepts_rotated_api_keys(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

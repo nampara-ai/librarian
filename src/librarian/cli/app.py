@@ -1226,8 +1226,8 @@ def page_manifest(
 ) -> None:
     """Inspect a PDF page extraction manifest."""
     try:
-        payload, pages = _read_pdf_page_manifest(path.resolve())
-    except ValueError as exc:
+        payload, pages = _read_pdf_page_manifest(path.expanduser())
+    except (OSError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
     visible_pages = [
         page
@@ -1500,6 +1500,8 @@ def _module_available(name: str) -> bool:
 def _read_pdf_page_manifest(path: Path) -> tuple[dict[str, object], list[dict[str, object]]]:
     if path.is_symlink():
         raise ValueError(f"PDF page manifest path must not be a symlink: {path}")
+    if _path_crosses_symlink(path):
+        raise ValueError(f"PDF page manifest path crosses symlinked parent: {path}")
     if path.stat().st_size > _MAX_PAGE_MANIFEST_READ_BYTES:
         raise ValueError(
             "PDF page manifest exceeds read limit of "
