@@ -1239,7 +1239,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> ImportStatusResponse:
         if settings.api_import_root is None:
             raise HTTPException(status_code=400, detail="API import root is not configured")
-        path = _resolve_api_path(Path(manifest_path), settings=settings)
+        path = _resolve_api_manifest_read_path(
+            Path(manifest_path),
+            settings=settings,
+            label="manifest_path",
+        )
         if not path.exists():
             raise HTTPException(status_code=404, detail="Import manifest not found")
         try:
@@ -1281,7 +1285,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> PdfPageManifestStatusResponse:
         if settings.api_import_root is None:
             raise HTTPException(status_code=400, detail="API import root is not configured")
-        path = _resolve_api_path(Path(manifest_path), settings=settings)
+        path = _resolve_api_manifest_read_path(
+            Path(manifest_path),
+            settings=settings,
+            label="manifest_path",
+        )
         if not path.exists():
             raise HTTPException(status_code=404, detail="PDF page manifest not found")
         try:
@@ -2413,6 +2421,15 @@ def _resolve_api_writable_path(path: Path, *, settings: Settings, label: str) ->
         detail = f"Path must be under import root: {root}"
         raise HTTPException(status_code=400, detail=detail) from exc
     return absolute
+
+
+def _resolve_api_manifest_read_path(path: Path, *, settings: Settings, label: str) -> Path:
+    expanded = path.expanduser()
+    if expanded.is_symlink():
+        raise HTTPException(status_code=400, detail=f"{label} must not be a symlink")
+    if _path_crosses_symlink(expanded):
+        raise HTTPException(status_code=400, detail=f"{label} must not cross a symlinked parent")
+    return _resolve_api_path(expanded, settings=settings)
 
 
 async def _execute_run(

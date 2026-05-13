@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Hardened API import status and PDF page-manifest reads to reject symlinked manifest paths before
+  opening JSON files.
+
 ## 0.1.0a5 - 2026-05-13
 
 - Added deterministic scanned and mixed embedded/scanned PDF fixtures to

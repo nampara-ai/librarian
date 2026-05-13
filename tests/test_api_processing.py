@@ -1720,6 +1720,40 @@ def test_api_import_page_manifest_rejects_outside_and_unexpected_json(tmp_path: 
     assert unexpected_response.json()["code"] == "invalid_manifest_path"
 
 
+def test_api_import_page_manifest_rejects_symlinked_manifest_path(tmp_path: Path) -> None:
+    import_root = tmp_path / "imports"
+    import_root.mkdir()
+    real_manifest = import_root / "real-pages.json"
+    real_manifest.write_text(
+        json.dumps(
+            {
+                "artifact_type": "pdf-page-extraction-manifest",
+                "source_sha256": "abc123",
+                "page_count": 0,
+                "pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    linked_manifest = import_root / "linked-pages.json"
+    linked_manifest.symlink_to(real_manifest)
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_import_root=import_root,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        response = client.get(
+            "/imports/page-manifest",
+            params={"manifest_path": str(linked_manifest)},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_manifest_path"
+    assert "manifest_path must not be a symlink" in response.json()["detail"]
+
+
 def test_api_import_rejects_manifest_over_unrelated_json(tmp_path: Path) -> None:
     import_root = tmp_path / "imports"
     source_dir = import_root / "input"
@@ -1829,6 +1863,26 @@ def test_api_import_status_rejects_manifest_outside_import_root(tmp_path: Path) 
 
     assert response.status_code == 400
     assert response.json()["code"] == "invalid_import_path"
+
+
+def test_api_import_status_rejects_symlinked_manifest_path(tmp_path: Path) -> None:
+    import_root = tmp_path / "imports"
+    import_root.mkdir()
+    real_manifest = import_root / "real-manifest.json"
+    real_manifest.write_text('{"summary":{},"items":[]}', encoding="utf-8")
+    linked_manifest = import_root / "manifest.json"
+    linked_manifest.symlink_to(real_manifest)
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_import_root=import_root,
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.get("/imports/status", params={"manifest_path": str(linked_manifest)})
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_manifest_path"
+    assert "manifest_path must not be a symlink" in response.json()["detail"]
 
 
 def test_api_import_status_rejects_oversized_manifest(tmp_path: Path) -> None:

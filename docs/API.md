@@ -62,7 +62,8 @@ validated before conversion starts and must not be symlinks or cross symlinked p
 - `GET /imports/page-manifest?manifest_path=...`: read a PDF page extraction manifest under
   `LIBRARIAN_API_IMPORT_ROOT` and return page-level OCR/conversion progress, including status/source
   counts, warning counts, attempts, average OCR confidence, corrected page count, optional
-  `image_path`, and a bounded page list. Use `failures_only=true` to inspect failed pages.
+  `image_path`, and a bounded page list. The manifest path must not be a symlink or cross symlinked
+  parents. Use `failures_only=true` to inspect failed pages.
 
 ## Runs
 
