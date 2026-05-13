@@ -1142,12 +1142,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail="source_dir must exist")
         source_dir = source_path if source_path.is_dir() else source_path.parent
         output_dir = (
-            _resolve_api_path(Path(request.output_dir), settings=settings)
+            _resolve_api_writable_path(
+                Path(request.output_dir),
+                settings=settings,
+                label="output_dir",
+            )
             if request.output_dir
             else None
         )
         manifest_path = (
-            _resolve_api_path(Path(request.manifest_path), settings=settings)
+            _resolve_api_writable_path(
+                Path(request.manifest_path),
+                settings=settings,
+                label="manifest_path",
+            )
             if request.manifest_path
             else None
         )
@@ -2386,6 +2394,25 @@ def _resolve_api_path(path: Path, *, settings: Settings) -> Path:
         detail = f"Path must be under import root: {root}"
         raise HTTPException(status_code=400, detail=detail) from exc
     return resolved
+
+
+def _resolve_api_writable_path(path: Path, *, settings: Settings, label: str) -> Path:
+    expanded = path.expanduser()
+    if expanded.is_symlink():
+        raise HTTPException(status_code=400, detail=f"{label} must not be a symlink")
+    if _path_crosses_symlink(expanded):
+        raise HTTPException(status_code=400, detail=f"{label} must not cross a symlinked parent")
+    absolute = expanded if expanded.is_absolute() else Path.cwd() / expanded
+    resolved = absolute.resolve()
+    if settings.api_import_root is None:
+        raise HTTPException(status_code=400, detail="API import root is not configured")
+    root = settings.api_import_root.expanduser().resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        detail = f"Path must be under import root: {root}"
+        raise HTTPException(status_code=400, detail=detail) from exc
+    return absolute
 
 
 async def _execute_run(

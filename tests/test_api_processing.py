@@ -1467,6 +1467,37 @@ def test_api_import_rejects_new_directory_at_or_above_source(tmp_path: Path) -> 
     assert "ancestor" in ancestor.json()["detail"]
 
 
+def test_api_import_rejects_symlinked_new_directory_output(tmp_path: Path) -> None:
+    import_root = tmp_path / "imports"
+    source_dir = import_root / "input"
+    source_dir.mkdir(parents=True)
+    (source_dir / "notes.txt").write_text("Horse import transcript", encoding="utf-8")
+    real_output = import_root / "real-output"
+    real_output.mkdir()
+    linked_output = import_root / "linked-output"
+    linked_output.symlink_to(real_output, target_is_directory=True)
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_import_root=import_root,
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/imports",
+            json={
+                "source_dir": str(source_dir),
+                "output_mode": "new-directory",
+                "output_dir": str(linked_output),
+                "processing_mode": "none",
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_output_dir"
+    assert "output_dir must not be a symlink" in response.json()["detail"]
+    assert list(real_output.iterdir()) == []
+
+
 def test_api_import_rejects_missing_source(tmp_path: Path) -> None:
     import_root = tmp_path / "imports"
     import_root.mkdir()
@@ -1714,6 +1745,36 @@ def test_api_import_rejects_manifest_over_unrelated_json(tmp_path: Path) -> None
     assert response.status_code == 400
     assert response.json()["code"] == "invalid_manifest_path"
     assert manifest.read_text(encoding="utf-8") == '{"keep": true}'
+
+
+def test_api_import_rejects_symlinked_manifest_path(tmp_path: Path) -> None:
+    import_root = tmp_path / "imports"
+    source_dir = import_root / "input"
+    source_dir.mkdir(parents=True)
+    (source_dir / "notes.txt").write_text("Horse import transcript", encoding="utf-8")
+    real_manifest = import_root / "real-manifest.json"
+    real_manifest.write_text("{}", encoding="utf-8")
+    linked_manifest = import_root / "manifest.json"
+    linked_manifest.symlink_to(real_manifest)
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_import_root=import_root,
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/imports",
+            json={
+                "source_dir": str(source_dir),
+                "processing_mode": "none",
+                "manifest_path": str(linked_manifest),
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_manifest_path"
+    assert "manifest_path must not be a symlink" in response.json()["detail"]
+    assert real_manifest.read_text(encoding="utf-8") == "{}"
 
 
 def test_api_import_rejects_oversized_existing_manifest(tmp_path: Path) -> None:

@@ -46,6 +46,8 @@
 - Hardened CLI PDF page-manifest inspection to reject symlinked paths before reading manifests.
 - Hardened CLI import and directory conversion path handling so manifest, report, and
   `new-directory` output paths keep symlink validation intact.
+- Hardened API import path handling so `manifest_path` and `new-directory` `output_dir` symlink
+  validation is preserved before conversion starts.
 
 ## 0.1.0a4 - 2026-05-13
 
