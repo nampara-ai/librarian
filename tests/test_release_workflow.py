@@ -120,10 +120,20 @@ def test_release_workflow_rejects_unprepared_changelog_before_build() -> None:
 def test_release_workflow_runs_dependency_audit_before_build() -> None:
     workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
 
+    assert 'python -m pip install --upgrade "pip>=26.1"' in workflow
+    assert workflow.index('python -m pip install --upgrade "pip>=26.1"') < workflow.index(
+        "pip-audit --progress-spinner off --skip-editable"
+    )
     assert "pip-audit --progress-spinner off --skip-editable" in workflow
     assert workflow.index("pip-audit --progress-spinner off --skip-editable") < workflow.index(
         "python -m build"
     )
+
+
+def test_release_workflow_uploads_trivy_sarif_only_when_present() -> None:
+    workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+
+    assert "hashFiles('trivy-image.sarif') != ''" in workflow
 
 
 def test_release_workflow_runs_synthetic_corpus_eval_before_build() -> None:
@@ -173,6 +183,10 @@ def test_release_docs_use_one_release_version_variable() -> None:
 def test_release_docs_include_manual_dependency_audit_gate() -> None:
     release_doc = Path("docs/RELEASE.md").read_text(encoding="utf-8")
 
+    assert 'python -m pip install --upgrade "pip>=26.1"' in release_doc
+    assert release_doc.index('python -m pip install --upgrade "pip>=26.1"') < (
+        release_doc.index("pip-audit --progress-spinner off --skip-editable")
+    )
     assert "pip-audit --progress-spinner off --skip-editable" in release_doc
     assert release_doc.index("pip-audit --progress-spinner off --skip-editable") < (
         release_doc.index("python -m build")

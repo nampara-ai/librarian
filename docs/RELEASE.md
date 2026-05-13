@@ -52,6 +52,7 @@ gitleaks detect --source . --redact --verbose
 ruff check .
 pyright
 pytest
+python -m pip install --upgrade "pip>=26.1"
 pip-audit --progress-spinner off --skip-editable
 librarian doctor --strict
 rm -rf dist
