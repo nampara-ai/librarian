@@ -12,6 +12,9 @@
 - Added `librarian db-stats` for operator-visible SQLite file/page, row-count,
   and stored-text sizing so large-corpus database growth can be measured from a
   real workspace.
+- Added final-assembly render-quality regression coverage for headings, page
+  markers, lists, tables, citations, paragraph boundaries, duplicate boundary
+  sentences, and assistant artifact removal.
 
 ## 0.1.0a4 - 2026-05-13
 

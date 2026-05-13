@@ -25,6 +25,50 @@ def test_assembly_removes_context_artifacts_and_duplicate_boundaries() -> None:
     assert "## Heading" in assembled
 
 
+def test_assembly_preserves_markdown_rendering_quality_at_chunk_boundaries() -> None:
+    chunks = [
+        _cleaned_chunk(
+            0,
+            "# Visit Notes\n\n"
+            "[Page 1]\n\n"
+            "Opening paragraph with citation [A12].\n\n"
+            "- First finding\n"
+            "- Second finding\n\n"
+            "| Field | Value |\n"
+            "|---|---|\n"
+            "| Gait | Canter |\n\n"
+            "Boundary sentence.",
+        ),
+        _cleaned_chunk(
+            1,
+            "[CONTEXT: This continues from: Boundary sentence.]\n\n"
+            "Boundary sentence. Follow-up paragraph remains separate.\n\n"
+            "1. Ordered action\n"
+            "2. Confirmed action\n\n"
+            "(Smith, 2024)\n"
+            "I have cleaned the transcript.",
+        ),
+    ]
+
+    assembled = assemble_cleaned_document(chunks)
+
+    assert assembled == (
+        "# Visit Notes\n\n"
+        "[Page 1]\n\n"
+        "Opening paragraph with citation [A12].\n\n"
+        "- First finding\n"
+        "- Second finding\n\n"
+        "| Field | Value |\n"
+        "|---|---|\n"
+        "| Gait | Canter |\n\n"
+        "Boundary sentence.\n\n"
+        "Follow-up paragraph remains separate.\n\n"
+        "1. Ordered action\n"
+        "2. Confirmed action\n\n"
+        "(Smith, 2024)"
+    )
+
+
 def _cleaned_chunk(ordinal: int, text: str) -> CleanedChunk:
     chunk = Chunk(
         id=ChunkId(f"chk_{ordinal}"),

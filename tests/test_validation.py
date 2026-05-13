@@ -8,7 +8,9 @@ from librarian.pipeline.validation import validate_cleaned_text
 
 def test_validation_filters_artifact_lines() -> None:
     result = validate_cleaned_text(
-        "Here is the cleaned transcript:\nActual cleaned content remains.",
+        "Here is the cleaned transcript:\n"
+        "Actual cleaned content remains.\n"
+        "I have cleaned the transcript.",
         input_size=100,
     )
 

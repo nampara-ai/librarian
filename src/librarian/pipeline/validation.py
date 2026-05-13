@@ -11,7 +11,7 @@ ARTIFACT_PATTERNS = [
     r"Please provide (?:the|your) (?:raw )?transcript",
     r"\[The assistant(?:'s response)? (?:would|will|is)",
     r"\[Omitted long matching line\]",
-    r"(?:Here is|I have) (?:the )?cleaned (?:text|transcript)",
+    r"(?:Here is|I have) (?:the )?cleaned (?:the )?(?:text|transcript)",
     r"As (?:an AI|a language model)",
     r"I don't have access to",
     r"I cannot (?:see|access|read)",
