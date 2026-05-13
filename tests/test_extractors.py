@@ -1,4 +1,5 @@
 import json
+import multiprocessing
 import shutil
 import subprocess
 from pathlib import Path
@@ -139,6 +140,29 @@ async def test_markitdown_extractor_times_out(tmp_path: Path) -> None:
 
     with pytest.raises(TimeoutError, match="timed out"):
         await MarkItDownExtractor(timeout_seconds=0).extract(path)
+
+
+def test_markitdown_worker_redacts_child_process_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "fixture.html"
+    path.write_text("<p>small but failing</p>", encoding="utf-8")
+
+    def fail_extract(path: Path) -> str:
+        del path
+        raise RuntimeError("markitdown failed api_key=abc123 sk-testSECRET123")
+
+    monkeypatch.setattr(extractors, "_extract_markitdown_sync", fail_extract)
+    queue: multiprocessing.Queue[tuple[str, str]] = multiprocessing.Queue(maxsize=1)
+
+    cast(Any, extractors)._markitdown_worker(str(path), 1024, queue)
+
+    status, payload = queue.get(timeout=1)
+    assert status == "error"
+    assert payload == "markitdown failed api_key=[REDACTED] [REDACTED]"
+    assert "abc123" not in payload
+    assert "sk-testSECRET123" not in payload
 
 
 @pytest.mark.asyncio

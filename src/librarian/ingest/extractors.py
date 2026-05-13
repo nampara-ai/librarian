@@ -1328,7 +1328,7 @@ def _markitdown_worker(
         _validate_markitdown_input_size(resolved_path, max_input_bytes)
         result_queue.put(("ok", _extract_markitdown_sync(resolved_path)))
     except Exception as exc:
-        result_queue.put(("error", str(exc)))
+        result_queue.put(("error", sanitize_error_message(exc)))
 
 
 def _extract_markitdown_sync(path: Path) -> str:
