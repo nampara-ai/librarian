@@ -226,6 +226,23 @@ def test_supply_chain_docs_include_reproducibility_notes() -> None:
     assert "docs/SUPPLY_CHAIN.md#reproducibility-notes" in release_doc
 
 
+def test_secret_scan_docs_use_pinned_container_command() -> None:
+    release_doc = Path("docs/RELEASE.md").read_text(encoding="utf-8")
+    supply_chain_doc = Path("docs/SUPPLY_CHAIN.md").read_text(encoding="utf-8")
+    threat_model_doc = Path("docs/THREAT_MODEL.md").read_text(encoding="utf-8")
+    readme = Path("README.md").read_text(encoding="utf-8")
+    stale_binary_command = "gitleaks detect --source . --redact --verbose"
+
+    assert "zricethezav/gitleaks:v8.30.1" in release_doc
+    assert "zricethezav/gitleaks:v8.30.1" in supply_chain_doc
+    assert "docs/SUPPLY_CHAIN.md" in threat_model_doc
+    assert "docs/SUPPLY_CHAIN.md" in readme
+    assert stale_binary_command not in release_doc
+    assert stale_binary_command not in supply_chain_doc
+    assert stale_binary_command not in threat_model_doc
+    assert stale_binary_command not in readme
+
+
 def test_changelog_unreleased_section_is_ready_for_development_or_release() -> None:
     changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
     unreleased = changelog.split("## Unreleased", maxsplit=1)[1].split("## ", maxsplit=1)[0]

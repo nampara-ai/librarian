@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a15 - 2026-05-13
+
+- Aligned README, release checklist, and threat model secret-scanning guidance with the pinned
+  Gitleaks container used by CI/release workflows, with regression coverage to prevent stale local
+  binary commands from returning.
+
 ## 0.1.0a14 - 2026-05-13
 
 - Replaced the Node-backed Gitleaks GitHub Action in CI/release secret scans with a pinned

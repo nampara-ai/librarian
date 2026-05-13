@@ -36,7 +36,8 @@ uv run python .github/scripts/verify_release_evidence.py \
 6. Run secret scanning:
 
 ```bash
-gitleaks detect --source . --redact --verbose
+docker run --rm -v "$PWD:/repo" -w /repo zricethezav/gitleaks:v8.30.1 \
+  detect --source . --no-banner --redact --verbose
 ```
 
 7. Confirm dependency policy:

@@ -58,8 +58,9 @@ instance, local SQLite storage, optional API exposure, and optional OpenAI-compa
   Mitigation: JSON and plain-text logging redact common API-key assignments, bearer tokens, and
   `sk-...` tokens.
 - Secrets committed to the repository.
-  Mitigation: CI runs Gitleaks on push, pull request, scheduled, and manual workflows. Maintainers
-  also run `gitleaks detect --source . --redact --verbose` before release candidates.
+  Mitigation: CI runs Gitleaks on push, pull request, scheduled, and manual workflows using the
+  pinned container documented in `docs/SUPPLY_CHAIN.md`. Maintainers run the same container command
+  before release candidates.
 - Private eval or provider output committed as benchmark evidence.
   Mitigation: benchmark artifacts must be sanitized before attaching to releases or committing.
   Local `docs/results/` outputs are ignored by Git and Docker build context by default.

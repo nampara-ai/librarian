@@ -6,7 +6,7 @@ This repository is the production rewrite of an earlier prototype. The architect
 
 ## Status
 
-`v0.1.0a14` is the latest public alpha. It includes local CLI workflows, a FastAPI service,
+`v0.1.0a15` is the latest public alpha. It includes local CLI workflows, a FastAPI service,
 file and directory conversion/import, durable SQLite-backed processing runs, page-aware OCR and
 broad-format extraction, the upgraded v2 prompt stack, search/export, release automation, and OSS
 governance files.
@@ -18,7 +18,7 @@ From a downloaded release wheel:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install "nampara_librarian-0.1.0a14-py3-none-any.whl[all]"
+pip install "nampara_librarian-0.1.0a15-py3-none-any.whl[all]"
 ```
 
 From a source checkout:
@@ -150,11 +150,11 @@ For direct image runs, also set an import root because the image binds publicly 
 docker run --rm -p 8080:8080 \
   -e LIBRARIAN_API_KEY=change-me \
   -e LIBRARIAN_API_IMPORT_ROOT=/data/imports \
-  ghcr.io/nampara-ai/librarian:v0.1.0a14
+  ghcr.io/nampara-ai/librarian:v0.1.0a15
 ```
 
 ## Privacy
 
-Librarian stores data locally by default. Text is only sent to a configured model provider when a processing run requires LLM work. API keys belong in environment variables or `.env`, never in Git. CI runs secret scanning, and maintainers should run `gitleaks detect --source . --redact --verbose` before release candidates.
+Librarian stores data locally by default. Text is only sent to a configured model provider when a processing run requires LLM work. API keys belong in environment variables or `.env`, never in Git. CI runs secret scanning, and maintainers should run the pinned Gitleaks container command from `docs/SUPPLY_CHAIN.md` before release candidates.
 Prometheus metrics are built in; OpenTelemetry request, run-stage, and queue tracing is available
 with the optional `otel` extra.
