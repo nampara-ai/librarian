@@ -101,8 +101,9 @@ For environments where plaintext API keys should not be present in process confi
 Clients still send the original key value in `x-api-key` or `Authorization: Bearer <key>`;
 Librarian hashes the supplied value before comparison.
 Authentication failures, scope denials, and rate-limit denials are emitted as `librarian.api`
-warning log events without API key material; retain those logs when exposing the API beyond
-localhost.
+warning log events without API key material and persisted to the local SQLite `api_audit_events`
+table with method, path, client host, credential-presence/scope metadata, retry-after seconds, and
+timestamp. Retain those logs and database backups when exposing the API beyond localhost.
 Set `LIBRARIAN_API_MAX_REQUEST_BYTES` to reject oversized HTTP requests by `Content-Length` or
 streamed body bytes before routing or multipart parsing completes.
 Set `LIBRARIAN_API_MAX_BATCH_FILES` and `LIBRARIAN_API_MAX_BATCH_BYTES` to cap multipart batch

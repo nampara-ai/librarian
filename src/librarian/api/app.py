@@ -14,7 +14,7 @@ import uuid
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal, cast
 from urllib.parse import unquote
@@ -713,6 +713,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     event="api_auth_failed",
                     credential_present=supplied is not None,
                 )
+                await _record_api_audit_event(
+                    settings,
+                    request,
+                    event="api_auth_failed",
+                    credential_present=supplied is not None,
+                )
                 return _with_security_headers(
                     JSONResponse(
                         status_code=401,
@@ -722,6 +728,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if not _api_credential_allows(credential, request):
                 _log_api_security_event(
                     logger,
+                    request,
+                    event="api_scope_denied",
+                    credential_scope=credential.scope,
+                )
+                await _record_api_audit_event(
+                    settings,
                     request,
                     event="api_scope_denied",
                     credential_scope=credential.scope,
@@ -751,6 +763,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not allowed:
             _log_api_security_event(
                 logger,
+                request,
+                event="api_rate_limited",
+                retry_after_seconds=retry_after_seconds,
+            )
+            await _record_api_audit_event(
+                settings,
                 request,
                 event="api_rate_limited",
                 retry_after_seconds=retry_after_seconds,
@@ -2254,6 +2272,61 @@ def _log_api_security_event(
             **extra,
         },
     )
+
+
+async def _record_api_audit_event(
+    settings: Settings,
+    request: Request,
+    *,
+    event: str,
+    credential_present: bool = False,
+    credential_scope: ApiKeyScope | None = None,
+    retry_after_seconds: int | None = None,
+) -> None:
+    await asyncio.to_thread(
+        _record_api_audit_event_sync,
+        settings,
+        request.method,
+        request.url.path,
+        _client_host(request),
+        event,
+        credential_present,
+        credential_scope,
+        retry_after_seconds,
+    )
+
+
+def _record_api_audit_event_sync(
+    settings: Settings,
+    method: str,
+    path: str,
+    client_host: str,
+    event: str,
+    credential_present: bool,
+    credential_scope: ApiKeyScope | None,
+    retry_after_seconds: int | None,
+) -> None:
+    database = SQLiteDatabase(settings.database_path)
+    with database.connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO api_audit_events (
+              event, method, path, client_host, credential_present,
+              credential_scope, retry_after_seconds, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event,
+                method,
+                path,
+                client_host,
+                1 if credential_present else 0,
+                credential_scope,
+                retry_after_seconds,
+                datetime.now(UTC).isoformat(),
+            ),
+        )
 
 
 def _rate_limit_identity(request: Request) -> str:

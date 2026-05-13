@@ -32,6 +32,8 @@
   page-level OCR progress and failures without shell access.
 - Changed the release workflow to smoke-install built wheels against the
   exported `constraints.txt` dependency pins before publishing artifacts.
+- Added durable SQLite API audit events for authentication failures, scope
+  denials, and rate-limit denials without storing credential material.
 
 ## 0.1.0a4 - 2026-05-13
 

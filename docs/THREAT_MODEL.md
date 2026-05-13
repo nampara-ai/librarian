@@ -40,8 +40,8 @@ instance, local SQLite storage, optional API exposure, and optional OpenAI-compa
   Mitigation: public API binds require `LIBRARIAN_API_KEY` or `LIBRARIAN_API_KEYS`, plus
   `LIBRARIAN_API_IMPORT_ROOT`; requests use constant-time API-key comparison, and deployments can
   keep multiple keys active during rotation. Authentication failures, scope denials, and rate-limit
-  denials are logged as security audit events without recording API key values. Multi-user auth and
-  tenant isolation are future hosted-mode work.
+  denials are logged and persisted as security audit events without recording API key values.
+  Multi-user auth and tenant isolation are future hosted-mode work.
 
 ## Data Leakage Threats
 

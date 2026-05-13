@@ -238,6 +238,10 @@ class SQLiteDatabase:
                 ),
                 "run_events": self._scalar_int(connection, "SELECT COUNT(*) FROM run_events"),
                 "run_queue": self._scalar_int(connection, "SELECT COUNT(*) FROM run_queue"),
+                "api_audit_events": self._scalar_int(
+                    connection,
+                    "SELECT COUNT(*) FROM api_audit_events",
+                ),
             }
             source_file_bytes = self._scalar_int(
                 connection,

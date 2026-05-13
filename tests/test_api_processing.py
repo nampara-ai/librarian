@@ -206,6 +206,22 @@ def test_api_key_auth(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     assert auth_events[0].__dict__["credential_present"] is True
     assert auth_events[0].__dict__["path"] == "/documents"
     assert "wrong-secret" not in caplog.text
+    with sqlite3.connect(settings.database_path) as connection:
+        row = connection.execute(
+            """
+            SELECT event, method, path, credential_present, credential_scope,
+                   retry_after_seconds
+            FROM api_audit_events
+            """
+        ).fetchone()
+    assert row == ("api_auth_failed", "GET", "/documents", 1, None, None)
+    with sqlite3.connect(settings.database_path) as connection:
+        persisted = "\n".join(
+            str(value)
+            for row in connection.execute("SELECT * FROM api_audit_events").fetchall()
+            for value in row
+        )
+    assert "wrong-secret" not in persisted
 
 
 def test_api_liveness_endpoints_remain_public_with_auth(tmp_path: Path) -> None:
@@ -299,6 +315,15 @@ def test_api_accepts_scoped_read_only_keys(
     assert scope_events[0].__dict__["credential_scope"] == "read"
     assert scope_events[0].__dict__["path"] == "/documents"
     assert "reader" not in caplog.text
+    with sqlite3.connect(settings.database_path) as connection:
+        row = connection.execute(
+            """
+            SELECT event, method, path, credential_present, credential_scope,
+                   retry_after_seconds
+            FROM api_audit_events
+            """
+        ).fetchone()
+    assert row == ("api_scope_denied", "POST", "/documents", 0, "read", None)
 
 
 def test_api_read_scoped_keys_cannot_read_operational_endpoints(tmp_path: Path) -> None:
@@ -377,6 +402,16 @@ def test_api_rate_limit_returns_429_with_retry_after(
     assert len(rate_events) == 1
     assert rate_events[0].__dict__["path"] == "/documents"
     assert int(rate_events[0].__dict__["retry_after_seconds"]) > 0
+    with sqlite3.connect(settings.database_path) as connection:
+        row = connection.execute(
+            """
+            SELECT event, method, path, credential_present, credential_scope,
+                   retry_after_seconds
+            FROM api_audit_events
+            """
+        ).fetchone()
+    assert row[:5] == ("api_rate_limited", "GET", "/documents", 0, None)
+    assert int(row[5]) > 0
 
 
 def test_api_liveness_endpoints_are_rate_limit_exempt(tmp_path: Path) -> None:

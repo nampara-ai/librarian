@@ -71,6 +71,7 @@ async def test_sqlite_initializes_schema(tmp_path: Path) -> None:
         "0002_run_queue.sql",
         "0003_document_scoped_chunks.sql",
         "0004_raw_content_fts.sql",
+        "0005_api_audit_events.sql",
     ]
     assert busy_timeout == 5000
     assert str(journal_mode).lower() == "wal"
@@ -194,6 +195,7 @@ async def test_sqlite_storage_stats_report_growth_inputs(tmp_path: Path) -> None
     assert stats.used_page_bytes > 0
     assert stats.table_counts["documents"] == 1
     assert stats.table_counts["content_blobs"] == 1
+    assert stats.table_counts["api_audit_events"] == 0
     assert stats.source_file_bytes == 19
     assert stats.content_blob_text_bytes == len("stable raw storage text")
 
