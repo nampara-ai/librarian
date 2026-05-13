@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a16 - 2026-05-13
+
+- Rejected malformed and oversized API search queries before storage access so `/search`,
+  `/search/results`, and `/search/facets` return stable `invalid_search_query` or
+  `search_query_too_large` responses without opening the SQLite-backed search container.
+
 ## 0.1.0a15 - 2026-05-13
 
 - Aligned README, release checklist, and threat model secret-scanning guidance with the pinned

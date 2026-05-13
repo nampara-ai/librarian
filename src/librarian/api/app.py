@@ -64,7 +64,7 @@ from librarian.observability import (
     sanitize_error_message,
     start_request_span,
 )
-from librarian.storage.sqlite import SQLiteDatabase, SQLiteRunQueue
+from librarian.storage.sqlite import SQLiteDatabase, SQLiteRunQueue, normalize_search_query
 from librarian.taxonomy.dewey import DeweyTaxonomy
 from librarian.version import __version__
 
@@ -1440,6 +1440,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         document_status = _parse_document_status(request.document_status)
         search_scope = _parse_search_scope(request.scope)
         _validate_search_date_window(request)
+        _validate_search_query(request)
         container = await build_ingest_container(settings)
         try:
             results = await container.search_library.search(
@@ -1478,6 +1479,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         document_status = _parse_document_status(request.document_status)
         search_scope = _parse_search_scope(request.scope)
         _validate_search_date_window(request)
+        _validate_search_query(request)
         container = await build_ingest_container(settings)
         try:
             results = await container.search_library.results(
@@ -1529,6 +1531,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         search_scope = _parse_search_scope(request.scope)
         document_status = _parse_document_status(request.document_status)
         _validate_search_date_window(request)
+        _validate_search_query(request)
         container = await build_ingest_container(settings)
         try:
             facets = await container.search_library.facets(
@@ -1727,6 +1730,13 @@ def _validate_search_date_window(request: SearchRequest) -> None:
         )
 
 
+def _validate_search_query(request: SearchRequest) -> None:
+    try:
+        normalize_search_query(request.query, phrase=request.phrase)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def _summary_int(summary: dict[str, object], key: str) -> int:
     value = summary.get(key, 0)
     if isinstance(value, int):
@@ -1889,6 +1899,10 @@ def _api_error_code(*, status_code: int, detail: object) -> str:
             return "invalid_document_status"
         if "search scope" in normalized:
             return "invalid_search_scope"
+        if "search query exceeds configured limit" in normalized:
+            return "search_query_too_large"
+        if "invalid search query" in normalized:
+            return "invalid_search_query"
         if "created_after" in normalized and "created_before" in normalized:
             return "invalid_search_window"
         if "archive inputs are not supported" in normalized:

@@ -2064,27 +2064,51 @@ def test_api_import_status_rejects_oversized_manifest(tmp_path: Path) -> None:
     assert response.json()["code"] == "import_manifest_too_large"
 
 
-def test_api_malformed_search_query_returns_400(tmp_path: Path) -> None:
+@pytest.mark.parametrize("path", ["/search", "/search/results", "/search/facets"])
+def test_api_malformed_search_query_returns_400_before_storage(
+    path: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",
         database_path=tmp_path / ".librarian" / "librarian.sqlite",
     )
+
+    async def fail_build_container(settings: Settings) -> None:
+        raise AssertionError("malformed search query should not build a container")
+
+    monkeypatch.setattr(api_app, "build_ingest_container", fail_build_container)
+
     with TestClient(create_app(settings)) as client:
-        response = client.post("/search", json={"query": '"'})
+        response = client.post(path, json={"query": '"'})
 
     assert response.status_code == 400
+    assert response.json() == {"detail": "Invalid search query", "code": "invalid_search_query"}
 
 
-def test_api_oversized_search_query_returns_400(tmp_path: Path) -> None:
+@pytest.mark.parametrize("path", ["/search", "/search/results", "/search/facets"])
+def test_api_oversized_search_query_returns_400_before_storage(
+    path: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",
         database_path=tmp_path / ".librarian" / "librarian.sqlite",
     )
+
+    async def fail_build_container(settings: Settings) -> None:
+        raise AssertionError("oversized search query should not build a container")
+
+    monkeypatch.setattr(api_app, "build_ingest_container", fail_build_container)
+
     with TestClient(create_app(settings)) as client:
-        response = client.post("/search", json={"query": "x" * 4097})
+        response = client.post(path, json={"query": "x" * 4097})
 
     assert response.status_code == 400
     assert "Search query exceeds configured limit" in response.json()["detail"]
+    assert response.json()["code"] == "search_query_too_large"
 
 
 def test_api_search_rejects_out_of_range_limits(tmp_path: Path) -> None:
