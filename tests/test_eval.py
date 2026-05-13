@@ -195,8 +195,20 @@ def test_shipped_eval_suite_covers_v2_prompt_risks() -> None:
     suite = load_eval_suite(EXAMPLES_DIR / "eval_cases.json")
     tags = {tag for case in suite.cases for tag in case.tags}
 
-    assert len(suite.cases) >= 5
-    assert {"classification", "no-summarization", "markdown", "structure"} <= tags
+    assert len(suite.cases) >= 6
+    assert {
+        "classification",
+        "no-summarization",
+        "markdown",
+        "structure",
+        "ocr-correction",
+    } <= tags
+    assert any(
+        case.forbidden_contains
+        and {"Sadd1e", "transit10ns", "cust0dy"} <= set(case.forbidden_contains)
+        for case in suite.cases
+        if "ocr-correction" in case.tags
+    )
     assert any(case.expected_classification_prefix == "636" for case in suite.cases)
     assert any(case.expected_classification_prefix == "610" for case in suite.cases)
     assert any(case.expected_classification_prefix == "800" for case in suite.cases)

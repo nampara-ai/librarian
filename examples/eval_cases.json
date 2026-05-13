@@ -53,6 +53,17 @@
       "min_output_chars": 70,
       "min_output_char_ratio": 0.7,
       "max_output_char_ratio": 1.8
+    },
+    {
+      "name": "correct noisy OCR without losing source facts",
+      "tags": ["cleaning", "ocr", "ocr-correction", "equestrian", "no-summarization"],
+      "input_text": "Scanned page OCR:\n\nSadd1e fit measurements were recorded at 14 in. The horse stayed relaxed during canter transit10ns, and chain-of-cust0dy initials KL were written beside Item 3A.",
+      "expected_contains": ["Saddle fit measurements", "14 in.", "canter transitions", "chain-of-custody initials KL", "Item 3A"],
+      "forbidden_contains": ["Sadd1e", "transit10ns", "cust0dy", "summary:", "in summary", "[context:"],
+      "expected_classification_prefix": "636",
+      "min_output_chars": 130,
+      "min_output_char_ratio": 0.75,
+      "max_output_char_ratio": 1.8
     }
   ]
 }

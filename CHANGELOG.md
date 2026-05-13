@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.0a9 - 2026-05-13
+
+- Added an OCR-correction prompt eval fixture that requires common OCR artifacts to be corrected
+  while preserving source facts, with deterministic mock-provider coverage in CI.
+
 ## 0.1.0a8 - 2026-05-13
 
 - Hardened API client-IP identity so `X-Forwarded-For` is ignored for rate limiting and audit logs

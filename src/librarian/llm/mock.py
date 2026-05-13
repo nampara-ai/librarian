@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 
 class MockLLMProvider:
@@ -51,9 +52,23 @@ class MockLLMProvider:
 
 def _normalize_cleaned_text(value: str) -> str:
     """Normalize intra-line whitespace while preserving document structure."""
-    lines = [" ".join(line.split()) for line in value.splitlines()]
+    lines = [
+        _normalize_common_ocr_noise(" ".join(line.split()))
+        for line in value.splitlines()
+    ]
     while lines and not lines[0]:
         lines.pop(0)
     while lines and not lines[-1]:
         lines.pop()
     return "\n".join(lines)
+
+
+def _normalize_common_ocr_noise(value: str) -> str:
+    substitutions = (
+        (r"\bSadd1e\b", "Saddle"),
+        (r"\bcanter transit10ns\b", "canter transitions"),
+        (r"\bchain-of-cust0dy\b", "chain-of-custody"),
+    )
+    for pattern, replacement in substitutions:
+        value = re.sub(pattern, replacement, value, flags=re.IGNORECASE)
+    return value

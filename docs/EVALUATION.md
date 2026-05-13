@@ -96,7 +96,8 @@ text. Keep raw JSON results with the commit or release candidate being tuned.
 
 Use sanitized text only. Do not commit private transcripts, customer documents, API responses, or
 provider logs. Eval suites must contain at least one case, and each case must have a non-empty
-`name`, non-empty `input_text`, and positive `min_output_chars`.
+`name`, non-empty `input_text`, and positive `min_output_chars`. The shipped prompt suite covers
+classification, no-summarization, Markdown structure preservation, and OCR correction risks.
 
 Eval cases fail on unexpected cleaned-output quality warnings by default. Warnings cover likely
 rendering regressions such as lost Markdown headings/lists/tables, missing citation markers,
