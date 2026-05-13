@@ -6,6 +6,9 @@
   `generate-corpus` and the shipped synthetic corpus eval suite, covering OCR
   extraction, OCR page metrics, search recall, and classification without
   private documents.
+- Added a SQLite durable queue contention regression that verifies concurrent
+  workers claim each run exactly once while repository reads and writes continue
+  through the same database.
 
 ## 0.1.0a4 - 2026-05-13
 

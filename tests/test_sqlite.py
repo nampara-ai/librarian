@@ -601,6 +601,78 @@ async def test_sqlite_run_queue_claims_and_completes_run(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
+async def test_sqlite_run_queue_claims_once_under_api_worker_contention(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    container = await build_container(settings)
+    queue = SQLiteRunQueue(container.database)
+    run_ids: list[RunId] = []
+
+    for index in range(12):
+        source = tmp_path / f"notes-{index}.txt"
+        source.write_text(
+            f"Horse transcript {index} with contention and queue notes.",
+            encoding="utf-8",
+        )
+        ingested = await container.ingest_document.execute(source)
+        run = await container.process_document.start(ingested.document.id)
+        await queue.enqueue(run.id)
+        run_ids.append(run.id)
+
+    async def worker(worker_index: int) -> list[RunId]:
+        worker_id = f"contention-worker-{worker_index}"
+        worker_queue = SQLiteRunQueue(container.database)
+        claimed: list[RunId] = []
+        while True:
+            item = await worker_queue.claim(worker_id=worker_id, lease_seconds=60)
+            if item is None:
+                return claimed
+            claimed.append(item.run_id)
+            await asyncio.sleep(0)
+            await worker_queue.complete(item.run_id, worker_id=worker_id)
+
+    async def api_like_repository_traffic() -> None:
+        for index in range(24):
+            await container.repository.list(limit=10, offset=0)
+            await container.repository.search_count("contention")
+            sidecar = Document(
+                id=DocumentId(f"doc_api_contention_{index}"),
+                source=SourceFile(
+                    path=tmp_path / f"api-contention-{index}.txt",
+                    filename=f"api-contention-{index}.txt",
+                    media_type="text/plain",
+                    byte_size=10,
+                    sha256=f"api-contention-sha-{index}",
+                ),
+                status=DocumentStatus.INGESTED,
+            )
+            await container.repository.save_document(sidecar)
+            await asyncio.sleep(0)
+
+    worker_results, _ = await asyncio.gather(
+        asyncio.gather(*(worker(index) for index in range(4))),
+        api_like_repository_traffic(),
+    )
+    claimed_ids = [run_id for worker_claims in worker_results for run_id in worker_claims]
+
+    assert sorted(str(run_id) for run_id in claimed_ids) == sorted(
+        str(run_id) for run_id in run_ids
+    )
+    assert len({str(run_id) for run_id in claimed_ids}) == len(run_ids)
+    rows = await queue.list(limit=100, offset=0)
+    queued_rows = {row.run_id: row for row in rows if row.run_id in set(run_ids)}
+    assert set(queued_rows) == set(run_ids)
+    assert {row.status for row in queued_rows.values()} == {QueueStatus.SUCCEEDED}
+    assert {row.attempts for row in queued_rows.values()} == {1}
+
+
+@pytest.mark.asyncio
 async def test_sqlite_run_queue_reclaims_expired_running_lease(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",
