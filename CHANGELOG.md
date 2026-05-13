@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.0a20 - 2026-05-13
+
+- Redacted CLI `run-retry --queue` enqueue failures before printing command errors or persisting
+  retry-run failure text, matching the API/import queue-submission hardening.
+
 ## 0.1.0a19 - 2026-05-13
 
 - Redacted conversion, import, and corpus-eval report failure details before writing or returning

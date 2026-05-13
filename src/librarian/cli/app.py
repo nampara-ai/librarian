@@ -51,6 +51,7 @@ from librarian.domain.ids import DocumentId, RunId, digest_text
 from librarian.domain.models import DocumentStatus, RunStage, RunStatus
 from librarian.ingest.extractors import CompositeExtractor
 from librarian.llm import LazyLLMProvider
+from librarian.observability import sanitize_error_message
 from librarian.pipeline.chunking import ChunkingPolicy, chunk_text
 from librarian.storage.sqlite import SQLiteDatabase, SQLiteRunQueue
 from librarian.version import __version__
@@ -750,14 +751,15 @@ def retry_run(
             try:
                 await SQLiteRunQueue(container.database).enqueue(new_run.id)
             except Exception as exc:
+                error = sanitize_error_message(exc)
                 await container.repository.update_status(
                     new_run.id,
                     status=RunStatus.FAILED,
                     stage=RunStage.COMPLETE,
-                    error=f"submission failed: {exc}",
+                    error=f"submission failed: {error}",
                 )
                 raise typer.BadParameter(
-                    f"Failed to enqueue retry {new_run.id}: {exc}"
+                    f"Failed to enqueue retry {new_run.id}: {error}"
                 ) from exc
             console.print(f"Queued retry {new_run.id}")
             return

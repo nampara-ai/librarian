@@ -1587,7 +1587,7 @@ def test_cli_retry_queue_failure_marks_retry_failed(
 
     async def fail_enqueue(self: object, retry_id: object) -> None:
         del self, retry_id
-        raise RuntimeError("queue down")
+        raise RuntimeError("queue down api_key=abc123 sk-testSECRET123")
 
     monkeypatch.setattr(SQLiteRunQueue, "enqueue", fail_enqueue)
     runner = CliRunner()
@@ -1599,7 +1599,13 @@ def test_cli_retry_queue_failure_marks_retry_failed(
     result = runner.invoke(app, ["run-retry", run_id, "--queue"], env=env)
 
     assert result.exit_code != 0
-    assert "Failed to enqueue retry" in _strip_ansi(result.output)
+    output = _strip_ansi(result.output)
+    assert "Failed to enqueue retry" in output
+    assert "queue down" in output
+    assert "api_key=[REDACTED]" in output
+    assert "[REDACTED]" in output
+    assert "abc123" not in output
+    assert "sk-testSECRET123" not in output
 
     async def inspect() -> list[str | None]:
         settings = Settings(
@@ -1610,7 +1616,9 @@ def test_cli_retry_queue_failure_marks_retry_failed(
         return [run.error for run in await container.repository.list_runs(limit=10)]
 
     errors = asyncio.run(inspect())
-    assert "submission failed: queue down" in errors
+    assert "submission failed: queue down api_key=[REDACTED] [REDACTED]" in errors
+    assert all(error is None or "abc123" not in error for error in errors)
+    assert all(error is None or "sk-testSECRET123" not in error for error in errors)
 
 
 def _strip_ansi(value: str) -> str:
