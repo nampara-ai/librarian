@@ -36,6 +36,8 @@
   denials, and rate-limit denials without storing credential material.
 - Added `librarian api-audit` for paginated operator inspection of durable API
   security audit events.
+- Added configurable API audit-event retention so long-lived deployments can
+  prune old denial records automatically.
 
 ## 0.1.0a4 - 2026-05-13
 

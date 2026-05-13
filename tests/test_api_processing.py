@@ -414,6 +414,49 @@ def test_api_rate_limit_returns_429_with_retry_after(
     assert int(row[5]) > 0
 
 
+def test_api_audit_events_prune_expired_rows(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_key="secret",
+        api_audit_retention_days=1,
+    )
+    with TestClient(create_app(settings)) as client:
+        assert client.get("/health").status_code == 200
+    with sqlite3.connect(settings.database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO api_audit_events (
+              event, method, path, client_host, credential_present,
+              credential_scope, retry_after_seconds, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "api_auth_failed",
+                "GET",
+                "/documents",
+                "127.0.0.1",
+                1,
+                None,
+                None,
+                "2000-01-01T00:00:00+00:00",
+            ),
+        )
+
+    with TestClient(create_app(settings)) as client:
+        rejected = client.get("/documents", headers={"x-api-key": "wrong-secret"})
+
+    assert rejected.status_code == 401
+    with sqlite3.connect(settings.database_path) as connection:
+        rows = connection.execute(
+            "SELECT event, created_at FROM api_audit_events ORDER BY id"
+        ).fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == "api_auth_failed"
+    assert rows[0][1] != "2000-01-01T00:00:00+00:00"
+
+
 def test_api_liveness_endpoints_are_rate_limit_exempt(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",
@@ -912,6 +955,7 @@ def test_api_config_exposes_operational_controls(tmp_path: Path) -> None:
         api_max_import_manifest_bytes=3210,
         api_max_content_chars=123,
         api_rate_limit_per_minute=60,
+        api_audit_retention_days=14,
         llm_max_prompt_chars=87654,
         llm_max_response_chars=98765,
         ocr_language="eng",
@@ -935,6 +979,7 @@ def test_api_config_exposes_operational_controls(tmp_path: Path) -> None:
     assert payload["api_max_import_manifest_bytes"] == 3210
     assert payload["api_max_content_chars"] == 123
     assert payload["api_rate_limit_per_minute"] == 60
+    assert payload["api_audit_retention_days"] == 14
     assert payload["llm_max_prompt_chars"] == 87654
     assert payload["llm_max_response_chars"] == 98765
     assert payload["ocr_language"] == "eng"

@@ -14,7 +14,7 @@ import uuid
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Literal, cast
 from urllib.parse import unquote
@@ -378,6 +378,7 @@ class ConfigResponse(BaseModel):
     api_max_import_manifest_bytes: int
     api_max_content_chars: int
     api_rate_limit_per_minute: int
+    api_audit_retention_days: int
     api_auth_keys_configured: int
     coherence_mode: str
     chunk_target_chars: int
@@ -1540,6 +1541,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             api_max_import_manifest_bytes=settings.api_max_import_manifest_bytes,
             api_max_content_chars=settings.api_max_content_chars,
             api_rate_limit_per_minute=settings.api_rate_limit_per_minute,
+            api_audit_retention_days=settings.api_audit_retention_days,
             api_auth_keys_configured=len(_configured_api_credentials(settings)),
             coherence_mode=settings.coherence_mode,
             chunk_target_chars=settings.chunk_target_chars,
@@ -2308,6 +2310,12 @@ def _record_api_audit_event_sync(
 ) -> None:
     database = SQLiteDatabase(settings.database_path)
     with database.connect() as connection:
+        if settings.api_audit_retention_days > 0:
+            cutoff = datetime.now(UTC) - timedelta(days=settings.api_audit_retention_days)
+            connection.execute(
+                "DELETE FROM api_audit_events WHERE created_at < ?",
+                (cutoff.isoformat(),),
+            )
         connection.execute(
             """
             INSERT INTO api_audit_events (

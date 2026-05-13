@@ -103,8 +103,10 @@ Librarian hashes the supplied value before comparison.
 Authentication failures, scope denials, and rate-limit denials are emitted as `librarian.api`
 warning log events without API key material and persisted to the local SQLite `api_audit_events`
 table with method, path, client host, credential-presence/scope metadata, retry-after seconds, and
-timestamp. Use `librarian api-audit --json` for a paginated operator view. Retain those logs and
-database backups when exposing the API beyond localhost.
+timestamp. Audit rows older than `LIBRARIAN_API_AUDIT_RETENTION_DAYS=90` are pruned when new audit
+events are written; set it to `0` to keep rows indefinitely. Use `librarian api-audit --json` for a
+paginated operator view. Retain those logs and database backups when exposing the API beyond
+localhost.
 Set `LIBRARIAN_API_MAX_REQUEST_BYTES` to reject oversized HTTP requests by `Content-Length` or
 streamed body bytes before routing or multipart parsing completes.
 Set `LIBRARIAN_API_MAX_BATCH_FILES` and `LIBRARIAN_API_MAX_BATCH_BYTES` to cap multipart batch

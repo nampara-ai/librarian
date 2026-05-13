@@ -88,6 +88,7 @@ class Settings(BaseSettings):
     api_max_import_manifest_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
     api_max_content_chars: int = Field(default=2 * 1024 * 1024, gt=0)
     api_rate_limit_per_minute: int = Field(default=0, ge=0)
+    api_audit_retention_days: int = Field(default=90, ge=0)
     log_level: LogLevelSetting = Field(default="INFO")
     log_format: LogFormatSetting = Field(default="json")
     metrics_enabled: bool = Field(default=True)
