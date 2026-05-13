@@ -38,7 +38,7 @@ import root:
 docker run --rm -p 8080:8080 \
   -e LIBRARIAN_API_KEY=change-me \
   -e LIBRARIAN_API_IMPORT_ROOT=/data/imports \
-  ghcr.io/nampara-ai/librarian:v0.1.0a10
+  ghcr.io/nampara-ai/librarian:v0.1.0a11
 ```
 
 ## Environment
@@ -121,10 +121,11 @@ Set `LIBRARIAN_API_MAX_CONTENT_CHARS` to cap each JSON `/documents/{id}/content`
 Set `LIBRARIAN_API_RATE_LIMIT_PER_MINUTE` to a positive value to enable a per-process fixed-window
 request limit. Authenticated requests are keyed by the supplied API key or bearer token;
 unauthenticated requests are keyed by client IP. `0` disables rate limiting, which is the default
-for local CLI-adjacent deployments. `X-Forwarded-For` is ignored unless
-`LIBRARIAN_API_TRUSTED_PROXY_CIDRS` is set to a comma-separated list of proxy IPs or CIDRs. Only
-requests from those proxy networks can supply forwarded client IPs for rate-limit and audit
-identity.
+for local CLI-adjacent deployments. Expired per-identity windows are pruned during request handling
+so high-churn client traffic does not retain old limiter buckets indefinitely. `X-Forwarded-For` is
+ignored unless `LIBRARIAN_API_TRUSTED_PROXY_CIDRS` is set to a comma-separated list of proxy IPs or
+CIDRs. Only requests from those proxy networks can supply forwarded client IPs for rate-limit and
+audit identity.
 
 ## Health And Metrics
 

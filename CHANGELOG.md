@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.0a11 - 2026-05-13
+
+- Bounded API rate-limiter memory growth by pruning expired per-identity buckets even when traffic
+  comes from a high churn of unique clients.
+
 ## 0.1.0a10 - 2026-05-13
 
 - Added sanitized `Content-Disposition` filenames to API document exports so download clients get

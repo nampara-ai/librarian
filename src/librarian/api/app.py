@@ -422,11 +422,14 @@ class FixedWindowRateLimiter:
         self.limit_per_minute = limit_per_minute
         self.window_seconds = window_seconds
         self._buckets: dict[str, tuple[float, int]] = {}
+        self._last_pruned_at = 0.0
 
     def allow(self, identity: str, *, now: float) -> tuple[bool, int]:
         """Return whether the request is allowed and the Retry-After seconds."""
         if self.limit_per_minute <= 0:
             return True, 0
+        if now - self._last_pruned_at >= self.window_seconds:
+            self._prune(now)
         window_started, count = self._buckets.get(identity, (now, 0))
         elapsed = now - window_started
         if elapsed >= self.window_seconds:
@@ -439,6 +442,11 @@ class FixedWindowRateLimiter:
         self._buckets[identity] = (window_started, count + 1)
         return True, 0
 
+    @property
+    def active_bucket_count(self) -> int:
+        """Return the number of active identity buckets."""
+        return len(self._buckets)
+
     def _prune(self, now: float) -> None:
         expired_before = now - self.window_seconds
         self._buckets = {
@@ -446,6 +454,7 @@ class FixedWindowRateLimiter:
             for identity, bucket in self._buckets.items()
             if bucket[0] > expired_before
         }
+        self._last_pruned_at = now
 
 
 class RequestBodyLimitMiddleware:

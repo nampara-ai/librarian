@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import librarian.api.app as api_app
-from librarian.api.app import create_app
+from librarian.api.app import FixedWindowRateLimiter, create_app
 from librarian.application.factory import build_container
 from librarian.application.ingest_document import raw_text_key
 from librarian.application.jobs import QueueWorker
@@ -459,6 +459,17 @@ def test_api_rate_limit_returns_429_with_retry_after(
         ).fetchone()
     assert row[:5] == ("api_rate_limited", "GET", "/documents", 0, None)
     assert int(row[5]) > 0
+
+
+def test_api_rate_limiter_prunes_expired_unique_identities() -> None:
+    limiter = FixedWindowRateLimiter(limit_per_minute=10, window_seconds=60)
+
+    for index in range(100):
+        allowed, retry_after = limiter.allow(f"client-{index}", now=float(index))
+        assert allowed
+        assert retry_after == 0
+
+    assert limiter.active_bucket_count < 100
 
 
 def test_api_rate_limit_ignores_untrusted_x_forwarded_for(tmp_path: Path) -> None:
