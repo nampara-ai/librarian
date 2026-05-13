@@ -48,7 +48,12 @@ from librarian.domain.models import (
     RunStage,
     RunStatus,
 )
-from librarian.ingest.extractors import ARCHIVE_EXTENSIONS, CompositeExtractor
+from librarian.ingest.extractors import (
+    ARCHIVE_EXTENSIONS,
+    ZIP_CONTAINER_EXTENSIONS,
+    CompositeExtractor,
+    archive_signature_label,
+)
 from librarian.llm import LazyLLMProvider
 from librarian.observability import (
     MetricsRecorder,
@@ -73,20 +78,6 @@ _SECURITY_HEADERS = {
 _MAX_UPLOAD_FILENAME_BYTES = 255
 _READ_SCOPE_RESTRICTED_PATHS = frozenset({"/config", "/metrics", "/metrics/prometheus"})
 _OPENAPI_ERROR_STATUS_CODES = ("400", "401", "403", "404", "413", "422", "429", "500", "503")
-_ARCHIVE_SIGNATURES = (
-    b"PK\x03\x04",
-    b"PK\x05\x06",
-    b"PK\x07\x08",
-    b"\x1f\x8b",
-    b"BZh",
-    b"\xfd7zXZ\x00",
-    b"7z\xbc\xaf\x27\x1c",
-    b"Rar!\x1a\x07\x00",
-    b"Rar!\x1a\x07\x01\x00",
-)
-_TAR_USTAR_OFFSET = 257
-
-
 @dataclass(frozen=True, slots=True)
 class ApiCredential:
     """One configured API credential and its effective scope."""
@@ -1665,7 +1656,12 @@ async def _ingest_upload(
     container = await build_ingest_container(settings, metrics=metrics)
     upload_dir = await asyncio.to_thread(_ensure_upload_root, settings)
     destination = upload_dir / _unique_upload_filename(filename)
-    await _write_limited_upload(file, destination, max_bytes=settings.api_max_upload_bytes)
+    await _write_limited_upload(
+        file,
+        destination,
+        filename=filename,
+        max_bytes=settings.api_max_upload_bytes,
+    )
     try:
         ingested = await container.ingest_document.execute(destination)
     except Exception as exc:
@@ -1930,25 +1926,34 @@ def _reject_disallowed_upload_filename(filename: str) -> None:
         )
 
 
-def _reject_disallowed_upload_signature(chunk: bytes) -> None:
-    if any(chunk.startswith(signature) for signature in _ARCHIVE_SIGNATURES):
-        raise HTTPException(
-            status_code=400,
-            detail="Archive inputs are not supported by default: archive signature detected",
-        )
-    tar_signature_end = _TAR_USTAR_OFFSET + len(b"ustar")
-    if len(chunk) >= tar_signature_end and chunk[_TAR_USTAR_OFFSET:tar_signature_end] == b"ustar":
+def _reject_disallowed_upload_signature(filename: str, chunk: bytes) -> None:
+    label = archive_signature_label(chunk)
+    if label is None:
+        return
+    if label == "zip" and Path(filename).suffix.lower() in ZIP_CONTAINER_EXTENSIONS:
+        return
+    if label == "tar":
         raise HTTPException(
             status_code=400,
             detail="Archive inputs are not supported by default: tar signature detected",
         )
+    raise HTTPException(
+        status_code=400,
+        detail="Archive inputs are not supported by default: archive signature detected",
+    )
 
 
 def _unique_upload_filename(filename: str) -> str:
     return str(Path(uuid.uuid4().hex) / _safe_filename(filename))
 
 
-async def _write_limited_upload(file: UploadFile, destination: Path, *, max_bytes: int) -> None:
+async def _write_limited_upload(
+    file: UploadFile,
+    destination: Path,
+    *,
+    filename: str,
+    max_bytes: int,
+) -> None:
     await asyncio.to_thread(destination.parent.mkdir, parents=True, exist_ok=True)
     total = 0
     first_chunk = True
@@ -1956,7 +1961,7 @@ async def _write_limited_upload(file: UploadFile, destination: Path, *, max_byte
         with destination.open("wb") as handle:
             while chunk := await file.read(1024 * 1024):
                 if first_chunk:
-                    _reject_disallowed_upload_signature(chunk)
+                    _reject_disallowed_upload_signature(filename, chunk)
                     first_chunk = False
                 total += len(chunk)
                 if total > max_bytes:

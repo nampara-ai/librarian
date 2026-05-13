@@ -28,6 +28,7 @@ from librarian.application.jobs import RunQueue
 from librarian.application.process_document import ProcessDocument
 from librarian.domain.ids import DocumentId, RunId
 from librarian.domain.models import RunStage, RunStatus
+from librarian.ingest.extractors import reject_disallowed_archive_signature
 
 _ARCHIVE_EXTENSIONS = frozenset({".zip", ".tar", ".tgz", ".gz", ".bz2", ".xz", ".7z", ".rar"})
 _DEFAULT_IMPORT_MANIFEST_MAX_BYTES = 10 * 1024 * 1024
@@ -196,6 +197,7 @@ class ImportLibrary:
             raise ValueError(f"Archive inputs are not supported by default: {extension}")
         if extension not in self.converter.extractor.supported_extensions:
             raise ValueError(f"Unsupported file extension: {source_path.suffix}")
+        await asyncio.to_thread(reject_disallowed_archive_signature, source_path)
         source_dir = source_path.parent
         validate_directory_output(
             source_dir=source_dir,

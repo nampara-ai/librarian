@@ -273,6 +273,30 @@ async def test_import_file_rejects_archives_with_explicit_policy(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_import_file_rejects_renamed_archive_signature(tmp_path: Path) -> None:
+    source = tmp_path / "renamed.txt"
+    source.write_bytes(b"PK\x03\x04renamed zip archive")
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    container = await build_container(settings)
+    importer = ImportLibrary(
+        converter=DocumentConverter(CompositeExtractor()),
+        ingest=container.ingest_document,
+        process=None,
+    )
+
+    with pytest.raises(ValueError, match="Archive inputs are not supported"):
+        await importer.import_file(
+            source,
+            format=ConversionFormat.MARKDOWN,
+            output_mode=DirectoryOutputMode.SUBDIRECTORY,
+            processing_mode=ImportProcessingMode.NONE,
+        )
+
+
+@pytest.mark.asyncio
 async def test_import_directory_converts_and_ingests(tmp_path: Path) -> None:
     source_dir = tmp_path / "input"
     source_dir.mkdir()

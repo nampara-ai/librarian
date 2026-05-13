@@ -20,6 +20,20 @@ from typing import Any, Literal, Protocol, cast
 
 IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"})
 ARCHIVE_EXTENSIONS = frozenset({".zip", ".tar", ".tgz", ".gz", ".bz2", ".xz", ".7z", ".rar"})
+ZIP_CONTAINER_EXTENSIONS = frozenset({".docx", ".epub", ".pptx", ".xlsx"})
+ARCHIVE_SIGNATURES = (
+    (b"PK\x03\x04", "zip"),
+    (b"PK\x05\x06", "zip"),
+    (b"PK\x07\x08", "zip"),
+    (b"\x1f\x8b", "gzip"),
+    (b"BZh", "bzip2"),
+    (b"\xfd7zXZ\x00", "xz"),
+    (b"7z\xbc\xaf\x27\x1c", "7z"),
+    (b"Rar!\x1a\x07\x00", "rar"),
+    (b"Rar!\x1a\x07\x01\x00", "rar"),
+)
+TAR_USTAR_OFFSET = 257
+_ARCHIVE_SIGNATURE_SAMPLE_BYTES = 4096
 _MAX_PDF_PAGE_MANIFEST_BYTES = 256 * 1024 * 1024
 OcrCorrectionMode = Literal["always", "never", "low-confidence"]
 OcrPreprocessMode = Literal["none", "grayscale", "threshold", "deskew"]
@@ -625,6 +639,7 @@ class MarkItDownExtractor:
 
     def _validate_input_size(self, path: Path) -> None:
         _validate_markitdown_input_size(path, self.max_input_bytes)
+        reject_disallowed_archive_signature(path)
 
 
 class CompositeExtractor:
@@ -1349,9 +1364,39 @@ def _read_limited_text_file(path: Path, *, max_bytes: int, label: str) -> str:
 
 def _validate_text_like(path: Path) -> None:
     with path.open("rb") as handle:
-        sample = handle.read(4096)
+        sample = handle.read(_ARCHIVE_SIGNATURE_SAMPLE_BYTES)
+    _reject_disallowed_archive_signature(path, sample)
     if b"\x00" in sample:
         raise ValueError(f"Text extraction input appears to be binary: {path}")
+
+
+def reject_disallowed_archive_signature(path: Path) -> None:
+    """Reject archive/container bytes for paths that are not supported container docs."""
+    with path.open("rb") as handle:
+        sample = handle.read(_ARCHIVE_SIGNATURE_SAMPLE_BYTES)
+    _reject_disallowed_archive_signature(path, sample)
+
+
+def archive_signature_label(payload: bytes) -> str | None:
+    for signature, label in ARCHIVE_SIGNATURES:
+        if payload.startswith(signature):
+            return label
+    tar_signature_end = TAR_USTAR_OFFSET + len(b"ustar")
+    if (
+        len(payload) >= tar_signature_end
+        and payload[TAR_USTAR_OFFSET:tar_signature_end] == b"ustar"
+    ):
+        return "tar"
+    return None
+
+
+def _reject_disallowed_archive_signature(path: Path, payload: bytes) -> None:
+    label = archive_signature_label(payload)
+    if label is None:
+        return
+    if label == "zip" and path.suffix.lower() in ZIP_CONTAINER_EXTENSIONS:
+        return
+    raise ValueError(f"Archive inputs are not supported by default: {label} signature detected")
 
 
 def _paragraph_text(paragraph: Any) -> str:

@@ -82,6 +82,8 @@ Optional broad conversion through MarkItDown:
 - Broad conversion rejects inputs larger than `LIBRARIAN_UNIVERSAL_MAX_INPUT_BYTES`
   and stops work after `LIBRARIAN_UNIVERSAL_TIMEOUT_SECONDS`. Archive formats such
   as `.zip`, `.tar`, `.7z`, and `.rar` are intentionally rejected by default.
+  Renamed archive signatures are rejected for text and broad-format inputs that are
+  not supported ZIP-container document types.
   Unpack archives outside Librarian after scanning them with your organization-approved
   malware tooling, then import the extracted files from a controlled directory.
 

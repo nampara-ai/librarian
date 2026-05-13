@@ -86,6 +86,15 @@ async def test_text_family_extractor_rejects_binary_content(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_text_family_extractor_rejects_renamed_zip_archive(tmp_path: Path) -> None:
+    path = tmp_path / "renamed.txt"
+    path.write_bytes(b"PK\x03\x04renamed zip archive")
+
+    with pytest.raises(ValueError, match="Archive inputs are not supported"):
+        await TextFamilyExtractor().extract(path)
+
+
+@pytest.mark.asyncio
 async def test_composite_extractor_rejects_unknown_extension(tmp_path: Path) -> None:
     path = tmp_path / "notes.bin"
     path.write_bytes(b"binary")
@@ -110,6 +119,17 @@ async def test_markitdown_extractor_rejects_large_inputs_before_import(tmp_path:
 
     with pytest.raises(ValueError, match="exceeds"):
         await MarkItDownExtractor(max_input_bytes=4).extract(path)
+
+
+@pytest.mark.asyncio
+async def test_markitdown_extractor_rejects_renamed_zip_archive_before_import(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "fixture.html"
+    path.write_bytes(b"PK\x03\x04renamed zip archive")
+
+    with pytest.raises(ValueError, match="Archive inputs are not supported"):
+        await MarkItDownExtractor().extract(path)
 
 
 @pytest.mark.asyncio

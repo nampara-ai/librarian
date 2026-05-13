@@ -891,6 +891,34 @@ def test_api_upload_rejects_renamed_archive_signature_before_persisting(
     assert not list((tmp_path / ".librarian" / "uploads").glob("*/*"))
 
 
+def test_api_upload_allows_supported_zip_container_documents(tmp_path: Path) -> None:
+    from docx import Document
+
+    source = tmp_path / "fixture.docx"
+    document = Document()
+    document.add_paragraph("DOCX upload fixture text")
+    document.save(str(source))
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/documents",
+            files={
+                "file": (
+                    "fixture.docx",
+                    source.read_bytes(),
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["filename"] == "fixture.docx"
+
+
 def test_api_upload_ingest_does_not_require_llm_credentials(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

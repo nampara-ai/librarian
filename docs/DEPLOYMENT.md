@@ -38,7 +38,7 @@ import root:
 docker run --rm -p 8080:8080 \
   -e LIBRARIAN_API_KEY=change-me \
   -e LIBRARIAN_API_IMPORT_ROOT=/data/imports \
-  ghcr.io/nampara-ai/librarian:v0.1.0a6
+  ghcr.io/nampara-ai/librarian:v0.1.0a7
 ```
 
 ## Environment
@@ -219,6 +219,8 @@ be symlinks or cross symlinked parents.
 Librarian accepts individual supported document files. Archive/container formats such as `.zip`,
 `.tar`, `.7z`, and `.rar` are rejected by default rather than recursively unpacked. Scan and unpack
 archives outside Librarian using your approved malware tooling, then import the extracted files from
-`LIBRARIAN_API_IMPORT_ROOT`.
+`LIBRARIAN_API_IMPORT_ROOT`. Common archive signatures are also rejected when they appear under
+non-container document extensions, while supported ZIP-container document types such as `.docx`,
+`.pptx`, `.xlsx`, and `.epub` remain accepted by extension.
 
 See `docs/THREAT_MODEL.md` for API import trust boundaries and residual hosted-mode risks.

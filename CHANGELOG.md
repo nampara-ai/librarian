@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.0a7 - 2026-05-13
+
+- Hardened CLI/import text and broad-format conversion to reject renamed archives by signature while
+  preserving supported ZIP-container document uploads such as `.docx`.
+
 ## 0.1.0a6 - 2026-05-13
 
 - Hardened API import status and PDF page-manifest reads to reject symlinked manifest paths before
