@@ -538,7 +538,7 @@ def convert_dir(
     _validate_cli_directory_output(
         path.resolve(),
         mode,
-        output_dir.resolve() if output_dir else None,
+        output_dir.expanduser() if output_dir else None,
     )
 
     async def run() -> None:
@@ -548,7 +548,7 @@ def convert_dir(
             path.resolve(),
             format=conversion_format,
             output_mode=mode,
-            output_dir=output_dir.resolve() if output_dir else None,
+            output_dir=output_dir.expanduser() if output_dir else None,
             subdirectory_name=subdirectory_name,
             recursive=recursive,
             overwrite=overwrite,
@@ -616,7 +616,7 @@ def import_directory(
     _validate_cli_directory_output(
         source_dir,
         mode,
-        output_dir.resolve() if output_dir else None,
+        output_dir.expanduser() if output_dir else None,
     )
     processing_mode = ImportProcessingMode.NONE
     if process:
@@ -637,21 +637,27 @@ def import_directory(
             queue_factory=lambda: SQLiteRunQueue(container.database),
             manifest_max_bytes=container.settings.api_max_import_manifest_bytes,
         )
-        result = await importer.import_path(
-            resolved_path,
-            format=conversion_format,
-            output_mode=mode,
-            processing_mode=processing_mode,
-            output_dir=output_dir.resolve() if output_dir else None,
-            subdirectory_name=subdirectory_name,
-            recursive=recursive,
-            overwrite=overwrite,
-            manifest_path=manifest.resolve() if manifest else None,
-            resume=resume,
-            write_sidecar=sidecar_metadata,
-        )
+        try:
+            result = await importer.import_path(
+                resolved_path,
+                format=conversion_format,
+                output_mode=mode,
+                processing_mode=processing_mode,
+                output_dir=output_dir.expanduser() if output_dir else None,
+                subdirectory_name=subdirectory_name,
+                recursive=recursive,
+                overwrite=overwrite,
+                manifest_path=manifest.expanduser() if manifest else None,
+                resume=resume,
+                write_sidecar=sidecar_metadata,
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
         if report:
-            await write_import_report(report.resolve(), result)
+            try:
+                await write_import_report(report.expanduser(), result)
+            except ValueError as exc:
+                raise typer.BadParameter(str(exc)) from exc
         table = Table("Status", "Source", "Converted", "Document", "Run", "Error")
         for item in result.items:
             table.add_row(
@@ -1403,6 +1409,8 @@ def _validate_cli_directory_output(
             output_mode=output_mode,
             output_dir=output_dir,
         )
+        if output_mode == DirectoryOutputMode.NEW_DIRECTORY and output_dir is not None:
+            _reject_symlinked_cli_output_path(output_dir / ".librarian-output-probe")
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 

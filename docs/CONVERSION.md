@@ -64,7 +64,8 @@ Import manifests and reports are JSON. Manifests are updated after each file so 
 can be resumed with `--resume`. Manifest paths must end in `.json`; existing manifest files must be
 Librarian import reports, which prevents accidental overwrite of unrelated JSON. Librarian marks
 these JSON files as generated metadata so recursive imports do not ingest their own manifests or
-reports. Manifest and report output paths must not be symlinks or cross symlinked parents.
+reports. Manifest paths, report output paths, and `new-directory` output paths must not be symlinks
+or cross symlinked parents.
 
 ## Format Coverage
 

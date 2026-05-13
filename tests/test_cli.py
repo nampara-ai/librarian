@@ -758,6 +758,73 @@ def test_cli_import_accepts_single_file(tmp_path: Path) -> None:
     assert (tmp_path / "librarian-converted" / "large.md").exists()
 
 
+def test_cli_convert_dir_rejects_symlink_output_dir(tmp_path: Path) -> None:
+    runner = CliRunner()
+    source_dir = tmp_path / "input"
+    source_dir.mkdir()
+    (source_dir / "a.txt").write_text("Alpha", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    output_dir = tmp_path / "linked-output"
+    output_dir.symlink_to(outside, target_is_directory=True)
+
+    result = runner.invoke(
+        app,
+        [
+            "convert-dir",
+            str(source_dir),
+            "--output-mode",
+            "new-directory",
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "crosses symlinked parent" in _strip_ansi(result.output)
+    assert list(outside.iterdir()) == []
+
+
+def test_cli_import_rejects_symlink_manifest_path(tmp_path: Path) -> None:
+    runner = CliRunner()
+    source = tmp_path / "large.md"
+    source.write_text("# Transcript\n\nHorse import transcript", encoding="utf-8")
+    outside = tmp_path / "outside.json"
+    outside.write_text("{}", encoding="utf-8")
+    manifest = tmp_path / "manifest.json"
+    manifest.symlink_to(outside)
+    env = {
+        "LIBRARIAN_DATA_DIR": str(tmp_path / ".librarian"),
+        "LIBRARIAN_DATABASE_PATH": str(tmp_path / ".librarian" / "librarian.sqlite"),
+    }
+
+    result = runner.invoke(app, ["import", str(source), "--manifest", str(manifest)], env=env)
+
+    assert result.exit_code != 0
+    assert "manifest_path must not be a symlink" in _strip_ansi(result.output)
+    assert outside.read_text(encoding="utf-8") == "{}"
+
+
+def test_cli_import_rejects_symlink_report_path(tmp_path: Path) -> None:
+    runner = CliRunner()
+    source = tmp_path / "large.md"
+    source.write_text("# Transcript\n\nHorse import transcript", encoding="utf-8")
+    outside = tmp_path / "outside.json"
+    outside.write_text("keep", encoding="utf-8")
+    report = tmp_path / "report.json"
+    report.symlink_to(outside)
+    env = {
+        "LIBRARIAN_DATA_DIR": str(tmp_path / ".librarian"),
+        "LIBRARIAN_DATABASE_PATH": str(tmp_path / ".librarian" / "librarian.sqlite"),
+    }
+
+    result = runner.invoke(app, ["import", str(source), "--report", str(report)], env=env)
+
+    assert result.exit_code != 0
+    assert "must not be a symlink" in _strip_ansi(result.output)
+    assert outside.read_text(encoding="utf-8") == "keep"
+
+
 def test_cli_import_single_file_processes_immediately(tmp_path: Path) -> None:
     runner = CliRunner()
     source = tmp_path / "large.md"
