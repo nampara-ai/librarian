@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from importlib.resources import files
 from pathlib import Path
-from typing import Literal
+from typing import Literal, LiteralString
 
 from librarian.application.clean_chunks import CleanedChunk
 from librarian.application.jobs import QueuedRun, QueueStatus
@@ -49,6 +49,10 @@ def _path_crosses_symlink(path: Path) -> bool:
     return False
 
 
+def _path_size(path: Path) -> int:
+    return path.stat().st_size if path.exists() else 0
+
+
 @dataclass(frozen=True, slots=True)
 class SQLiteMaintenanceResult:
     """Result from an operator-triggered SQLite maintenance run."""
@@ -57,6 +61,29 @@ class SQLiteMaintenanceResult:
     checkpoint_log_frames: int
     checkpoint_checkpointed_frames: int
     vacuumed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SQLiteStorageStats:
+    """Sizing summary for an operator-inspected SQLite database."""
+
+    database_path: Path
+    database_file_bytes: int
+    wal_file_bytes: int
+    shm_file_bytes: int
+    total_sqlite_bytes: int
+    page_size_bytes: int
+    page_count: int
+    freelist_count: int
+    used_page_bytes: int
+    free_page_bytes: int
+    table_counts: dict[str, int]
+    source_file_bytes: int
+    content_blob_text_bytes: int
+    chunk_text_bytes: int
+    cleaned_chunk_text_bytes: int
+    cleaned_cache_text_bytes: int
+    cleaned_output_text_bytes: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +131,10 @@ class SQLiteDatabase:
     async def maintain(self, *, vacuum: bool = False) -> SQLiteMaintenanceResult:
         """Run lightweight SQLite maintenance for long-lived local databases."""
         return await asyncio.to_thread(self._maintain_sync, vacuum)
+
+    async def stats(self) -> SQLiteStorageStats:
+        """Return SQLite file, page, row, and stored-text sizing statistics."""
+        return await asyncio.to_thread(self._stats_sync)
 
     async def backup(self, destination: Path, *, overwrite: bool = False) -> SQLiteBackupResult:
         """Create a consistent online SQLite backup."""
@@ -173,6 +204,87 @@ class SQLiteDatabase:
             checkpoint_log_frames=int(row[1]),
             checkpoint_checkpointed_frames=int(row[2]),
             vacuumed=vacuum,
+        )
+
+    def _stats_sync(self) -> SQLiteStorageStats:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.connect() as connection:
+            page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
+            page_count = int(connection.execute("PRAGMA page_count").fetchone()[0])
+            freelist_count = int(connection.execute("PRAGMA freelist_count").fetchone()[0])
+            table_counts = {
+                "documents": self._scalar_int(connection, "SELECT COUNT(*) FROM documents"),
+                "content_blobs": self._scalar_int(
+                    connection,
+                    "SELECT COUNT(*) FROM content_blobs",
+                ),
+                "chunks": self._scalar_int(connection, "SELECT COUNT(*) FROM chunks"),
+                "runs": self._scalar_int(connection, "SELECT COUNT(*) FROM runs"),
+                "cleaned_chunks": self._scalar_int(
+                    connection,
+                    "SELECT COUNT(*) FROM cleaned_chunks",
+                ),
+                "cleaned_chunk_cache": self._scalar_int(
+                    connection,
+                    "SELECT COUNT(*) FROM cleaned_chunk_cache",
+                ),
+                "cleaned_outputs": self._scalar_int(
+                    connection,
+                    "SELECT COUNT(*) FROM cleaned_outputs",
+                ),
+                "classifications": self._scalar_int(
+                    connection,
+                    "SELECT COUNT(*) FROM classifications",
+                ),
+                "run_events": self._scalar_int(connection, "SELECT COUNT(*) FROM run_events"),
+                "run_queue": self._scalar_int(connection, "SELECT COUNT(*) FROM run_queue"),
+            }
+            source_file_bytes = self._scalar_int(
+                connection,
+                "SELECT COALESCE(SUM(byte_size), 0) FROM documents",
+            )
+            content_blob_text_bytes = self._scalar_int(
+                connection,
+                "SELECT COALESCE(SUM(LENGTH(CAST(text AS BLOB))), 0) FROM content_blobs",
+            )
+            chunk_text_bytes = self._scalar_int(
+                connection,
+                "SELECT COALESCE(SUM(LENGTH(CAST(text AS BLOB))), 0) FROM chunks",
+            )
+            cleaned_chunk_text_bytes = self._scalar_int(
+                connection,
+                "SELECT COALESCE(SUM(LENGTH(CAST(text AS BLOB))), 0) FROM cleaned_chunks",
+            )
+            cleaned_cache_text_bytes = self._scalar_int(
+                connection,
+                "SELECT COALESCE(SUM(LENGTH(CAST(text AS BLOB))), 0) "
+                "FROM cleaned_chunk_cache",
+            )
+            cleaned_output_text_bytes = self._scalar_int(
+                connection,
+                "SELECT COALESCE(SUM(LENGTH(CAST(text AS BLOB))), 0) FROM cleaned_outputs",
+            )
+        database_file_bytes = self.path.stat().st_size if self.path.exists() else 0
+        wal_file_bytes = _path_size(Path(f"{self.path}-wal"))
+        shm_file_bytes = _path_size(Path(f"{self.path}-shm"))
+        return SQLiteStorageStats(
+            database_path=self.path,
+            database_file_bytes=database_file_bytes,
+            wal_file_bytes=wal_file_bytes,
+            shm_file_bytes=shm_file_bytes,
+            total_sqlite_bytes=database_file_bytes + wal_file_bytes + shm_file_bytes,
+            page_size_bytes=page_size,
+            page_count=page_count,
+            freelist_count=freelist_count,
+            used_page_bytes=max(page_count - freelist_count, 0) * page_size,
+            free_page_bytes=freelist_count * page_size,
+            table_counts=table_counts,
+            source_file_bytes=source_file_bytes,
+            content_blob_text_bytes=content_blob_text_bytes,
+            chunk_text_bytes=chunk_text_bytes,
+            cleaned_chunk_text_bytes=cleaned_chunk_text_bytes,
+            cleaned_cache_text_bytes=cleaned_cache_text_bytes,
+            cleaned_output_text_bytes=cleaned_output_text_bytes,
         )
 
     def _backup_sync(self, destination: Path, overwrite: bool) -> SQLiteBackupResult:
@@ -274,6 +386,11 @@ class SQLiteDatabase:
     def _remove_sidecars(path: Path) -> None:
         Path(f"{path}-wal").unlink(missing_ok=True)
         Path(f"{path}-shm").unlink(missing_ok=True)
+
+    @staticmethod
+    def _scalar_int(connection: sqlite3.Connection, query: LiteralString) -> int:
+        row = connection.execute(query).fetchone()
+        return int(row[0]) if row else 0
 
 
 class SQLiteRepository:

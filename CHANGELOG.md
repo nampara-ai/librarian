@@ -9,6 +9,9 @@
 - Added a SQLite durable queue contention regression that verifies concurrent
   workers claim each run exactly once while repository reads and writes continue
   through the same database.
+- Added `librarian db-stats` for operator-visible SQLite file/page, row-count,
+  and stored-text sizing so large-corpus database growth can be measured from a
+  real workspace.
 
 ## 0.1.0a4 - 2026-05-13
 

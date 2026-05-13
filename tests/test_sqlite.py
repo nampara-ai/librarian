@@ -165,6 +165,40 @@ async def test_sqlite_maintenance_runs_checkpoint_and_optional_vacuum(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_sqlite_storage_stats_report_growth_inputs(tmp_path: Path) -> None:
+    database_path = tmp_path / "librarian.sqlite"
+    database = SQLiteDatabase(database_path)
+    await database.initialize()
+    repository = SQLiteRepository(database)
+    document = Document(
+        id=DocumentId("doc_stats"),
+        source=SourceFile(
+            path=tmp_path / "stats.txt",
+            filename="stats.txt",
+            media_type="text/plain",
+            byte_size=19,
+            sha256="stats-sha",
+        ),
+        status=DocumentStatus.INGESTED,
+    )
+    await repository.save_document(document)
+    await repository.put_text("raw:doc_stats", "stable raw storage text")
+
+    stats = await database.stats()
+
+    assert stats.database_path == database_path
+    assert stats.database_file_bytes > 0
+    assert stats.total_sqlite_bytes >= stats.database_file_bytes
+    assert stats.page_size_bytes > 0
+    assert stats.page_count > 0
+    assert stats.used_page_bytes > 0
+    assert stats.table_counts["documents"] == 1
+    assert stats.table_counts["content_blobs"] == 1
+    assert stats.source_file_bytes == 19
+    assert stats.content_blob_text_bytes == len("stable raw storage text")
+
+
+@pytest.mark.asyncio
 async def test_sqlite_backup_creates_consistent_copy(tmp_path: Path) -> None:
     database_path = tmp_path / "librarian.sqlite"
     backup_path = tmp_path / "backups" / "librarian-backup.sqlite"

@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+import sqlite3
 import warnings
 import zipfile
 from pathlib import Path
@@ -247,6 +248,51 @@ def test_cli_db_check_verifies_sqlite_database(tmp_path: Path) -> None:
     assert "SQLite verification complete" in result.output
     assert "integrity_ok=True" in result.output
     assert "foreign_key_violations=0" in result.output
+
+
+def test_cli_db_stats_reports_machine_readable_storage_sizing(tmp_path: Path) -> None:
+    runner = CliRunner()
+    database_path = tmp_path / ".librarian" / "librarian.sqlite"
+    env = {
+        "LIBRARIAN_DATA_DIR": str(tmp_path / ".librarian"),
+        "LIBRARIAN_DATABASE_PATH": str(database_path),
+    }
+    assert runner.invoke(app, ["migrate"], env=env).exit_code == 0
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO documents (
+              id, source_path, filename, media_type, byte_size, sha256,
+              status, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+            """,
+            (
+                "doc_cli_stats",
+                str(tmp_path / "stats.txt"),
+                "stats.txt",
+                "text/plain",
+                17,
+                "cli-stats-sha",
+                "ingested",
+            ),
+        )
+        connection.execute(
+            "INSERT INTO content_blobs (key, text, created_at) VALUES (?, ?, datetime('now'))",
+            ("raw:doc_cli_stats", "cli raw text"),
+        )
+
+    result = runner.invoke(app, ["db-stats", "--json"], env=env)
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["database_path"] == str(database_path)
+    assert payload["database_file_bytes"] > 0
+    assert payload["total_sqlite_bytes"] >= payload["database_file_bytes"]
+    assert payload["table_counts"]["documents"] == 1
+    assert payload["table_counts"]["content_blobs"] == 1
+    assert payload["source_file_bytes"] == 17
+    assert payload["stored_text_bytes"]["content_blobs"] == len("cli raw text")
 
 
 def test_cli_db_backup_creates_sqlite_backup(tmp_path: Path) -> None:

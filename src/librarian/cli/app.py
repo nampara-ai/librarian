@@ -176,6 +176,77 @@ def db_check() -> None:
     asyncio.run(run())
 
 
+@app.command("db-stats")
+def db_stats(
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable storage sizing details."),
+    ] = False,
+) -> None:
+    """Show SQLite file size, page usage, row counts, and stored text totals."""
+    settings = Settings()
+
+    async def run() -> None:
+        database = SQLiteDatabase(settings.database_path)
+        await database.initialize()
+        result = await database.stats()
+        payload = {
+            "database_path": str(result.database_path),
+            "database_file_bytes": result.database_file_bytes,
+            "wal_file_bytes": result.wal_file_bytes,
+            "shm_file_bytes": result.shm_file_bytes,
+            "total_sqlite_bytes": result.total_sqlite_bytes,
+            "page_size_bytes": result.page_size_bytes,
+            "page_count": result.page_count,
+            "freelist_count": result.freelist_count,
+            "used_page_bytes": result.used_page_bytes,
+            "free_page_bytes": result.free_page_bytes,
+            "table_counts": result.table_counts,
+            "source_file_bytes": result.source_file_bytes,
+            "stored_text_bytes": {
+                "content_blobs": result.content_blob_text_bytes,
+                "chunks": result.chunk_text_bytes,
+                "cleaned_chunks": result.cleaned_chunk_text_bytes,
+                "cleaned_chunk_cache": result.cleaned_cache_text_bytes,
+                "cleaned_outputs": result.cleaned_output_text_bytes,
+            },
+        }
+        if json_output:
+            console.out(json.dumps(payload, indent=2, sort_keys=True))
+            return
+        console.print(f"SQLite database: {result.database_path}")
+        console.print(
+            "Files: "
+            f"database={result.database_file_bytes:,} bytes, "
+            f"wal={result.wal_file_bytes:,} bytes, "
+            f"shm={result.shm_file_bytes:,} bytes, "
+            f"total={result.total_sqlite_bytes:,} bytes"
+        )
+        console.print(
+            "Pages: "
+            f"size={result.page_size_bytes:,} bytes, "
+            f"count={result.page_count:,}, "
+            f"freelist={result.freelist_count:,}, "
+            f"used={result.used_page_bytes:,} bytes, "
+            f"free={result.free_page_bytes:,} bytes"
+        )
+        console.print(f"Source file bytes: {result.source_file_bytes:,}")
+        console.print(
+            "Stored text bytes: "
+            f"raw/content={result.content_blob_text_bytes:,}, "
+            f"chunks={result.chunk_text_bytes:,}, "
+            f"cleaned_chunks={result.cleaned_chunk_text_bytes:,}, "
+            f"cache={result.cleaned_cache_text_bytes:,}, "
+            f"cleaned_outputs={result.cleaned_output_text_bytes:,}"
+        )
+        table = Table("Table", "Rows")
+        for table_name, count in sorted(result.table_counts.items()):
+            table.add_row(table_name, f"{count:,}")
+        console.print(table)
+
+    asyncio.run(run())
+
+
 @app.command("db-backup")
 def db_backup(
     output: Annotated[Path, typer.Argument(help="Destination SQLite backup path.")],

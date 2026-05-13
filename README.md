@@ -37,6 +37,7 @@ pip install -e ".[dev,all]"
 librarian version
 librarian init
 librarian migrate
+librarian db-stats
 librarian db-maintain
 librarian convert path/to/report.docx --format md --output converted/report.md
 librarian convert-dir path/to/folder --format md --output-mode subdirectory

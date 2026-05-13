@@ -18,6 +18,7 @@ Each applied filename is recorded in `schema_migrations`.
 librarian db-backup .librarian/backups/pre-migrate.sqlite
 librarian migrate
 librarian db-check
+librarian db-stats
 librarian db-maintain
 sqlite3 .librarian/librarian.sqlite "select * from schema_migrations"
 sqlite3 .librarian/librarian.sqlite "pragma journal_mode; pragma busy_timeout;"

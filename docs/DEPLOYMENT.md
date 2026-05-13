@@ -165,6 +165,7 @@ For long-lived databases, run maintenance during a quiet window:
 librarian workspace-backup /backups/librarian-workspace-$(date +%Y%m%d%H%M%S).zip
 librarian db-backup /backups/librarian-$(date +%Y%m%d%H%M%S).sqlite
 librarian db-check
+librarian db-stats
 librarian db-maintain
 librarian db-maintain --vacuum
 ```
@@ -178,6 +179,12 @@ rejects symlink destinations or symlinked destination parents, and verifies the 
 `PRAGMA integrity_check` before replacing the destination path. The maintenance command runs SQLite
 optimize and a WAL checkpoint.
 `--vacuum` additionally compacts the database file and can take longer on large corpora.
+Use `librarian db-stats` to inspect current database file bytes, WAL/SHM sidecar bytes, SQLite page
+usage, row counts, source-file bytes, and stored raw/chunk/cleaned text bytes. For large corpora,
+record this output before and after representative imports to estimate local disk growth; the
+stored-text totals show how much of the database is raw extraction, chunk, cache, and cleaned-output
+payload rather than schema/index overhead. `librarian db-stats --json` is suitable for deployment
+runbooks and periodic capacity snapshots.
 To restore, stop API and worker processes first, then run:
 
 ```bash
