@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.0a21 - 2026-05-13
+
+- Redacted PDF OCR page failures before writing page extraction manifests or raising conversion
+  errors, preventing Tesseract/adapter exception text from leaking API keys or provider tokens.
+
 ## 0.1.0a20 - 2026-05-13
 
 - Redacted CLI `run-retry --queue` enqueue failures before printing command errors or persisting

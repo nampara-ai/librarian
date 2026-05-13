@@ -468,7 +468,7 @@ async def test_pdf_extractor_page_manifest_tracks_pending_failed_and_retry_attem
             assert pending_payload["pages"][1]["source"] == "pending"
             assert pending_payload["pages"][1]["status"] == "pending"
             assert pending_payload["pages"][1]["attempts"] == 0
-            raise RuntimeError("temporary tesseract failure")
+            raise RuntimeError("temporary tesseract failure api_key=abc123 sk-testSECRET123")
         return "OCR page 2 after retry"
 
     monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
@@ -476,11 +476,22 @@ async def test_pdf_extractor_page_manifest_tracks_pending_failed_and_retry_attem
     first = PdfExtractor(ocr_correction_mode="never")
     first.set_page_manifest_path(manifest)
 
-    with pytest.raises(RuntimeError, match="Unable to OCR scanned PDF page 2"):
+    with pytest.raises(RuntimeError, match="Unable to OCR scanned PDF page 2") as exc_info:
         await first.extract(path)
 
+    error_text = str(exc_info.value)
+    assert "api_key=[REDACTED]" in error_text
+    assert "[REDACTED]" in error_text
+    assert "abc123" not in error_text
+    assert "sk-testSECRET123" not in error_text
     failed_payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert failed_payload["pages"][1]["status"] == "failed"
+    assert (
+        failed_payload["pages"][1]["error"]
+        == "temporary tesseract failure api_key=[REDACTED] [REDACTED]"
+    )
+    assert "abc123" not in failed_payload["pages"][1]["error"]
+    assert "sk-testSECRET123" not in failed_payload["pages"][1]["error"]
     assert failed_payload["pages"][1]["attempts"] == 1
     assert isinstance(failed_payload["pages"][1]["duration_ms"], float)
 

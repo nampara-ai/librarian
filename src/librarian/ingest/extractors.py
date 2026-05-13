@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
+from librarian.observability import sanitize_error_message
+
 IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"})
 ARCHIVE_EXTENSIONS = frozenset({".zip", ".tar", ".tgz", ".gz", ".bz2", ".xz", ".7z", ".rar"})
 ZIP_CONTAINER_EXTENSIONS = frozenset({".docx", ".epub", ".pptx", ".xlsx"})
@@ -314,6 +316,7 @@ class PdfExtractor:
                     await write_manifest()
                 except Exception as exc:
                     duration_ms = (time.perf_counter() - page_start) * 1000
+                    error = sanitize_error_message(exc)
                     self._record_ocr_page(
                         status="failed",
                         duration_ms=duration_ms,
@@ -323,20 +326,20 @@ class PdfExtractor:
                             page_number=page_number,
                             text="",
                             source="ocr",
-                            error=str(exc),
+                            error=error,
                             warnings=("ocr-page-failed",),
                             attempts=previous_attempts.get(page_number, 0) + 1,
                             duration_ms=duration_ms,
                         )
                         await write_manifest()
                         raise RuntimeError(
-                            f"Unable to OCR scanned PDF page {page_number}: {exc}"
+                            f"Unable to OCR scanned PDF page {page_number}: {error}"
                         ) from exc
                     page_results[page_number - 1] = PdfPageExtraction(
                         page_number=page_number,
                         text="",
                         source="ocr",
-                        error=str(exc),
+                        error=error,
                         warnings=("ocr-page-failed",),
                         attempts=previous_attempts.get(page_number, 0) + 1,
                         duration_ms=duration_ms,
@@ -433,8 +436,9 @@ class PdfExtractor:
                     )
                 )
             except (RuntimeError, ValueError) as exc:
+                error = sanitize_error_message(exc)
                 raise RuntimeError(
-                    f"Unable to OCR scanned PDF page {page_number}: {exc}"
+                    f"Unable to OCR scanned PDF page {page_number}: {error}"
                 ) from exc
             page_outputs[page_number - 1] = PdfPageExtraction(
                 page_number=page_number,
