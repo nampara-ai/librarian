@@ -246,6 +246,12 @@ def test_api_openapi_has_response_models_for_json_endpoints() -> None:
         == "string"
     )
     assert (
+        paths["/runs/{run_id}/events/records/stream"]["get"]["responses"]["200"]["content"][
+            "text/event-stream"
+        ]["schema"]["type"]
+        == "string"
+    )
+    assert (
         paths["/search/results"]["post"]["responses"]["200"]["content"]["application/json"][
             "schema"
         ]["$ref"]
@@ -274,6 +280,7 @@ def test_api_openapi_has_response_models_for_json_endpoints() -> None:
         paths["/documents"]["post"],
         paths["/search/results"]["post"],
         paths["/runs/{run_id}/events/stream"]["get"],
+        paths["/runs/{run_id}/events/records/stream"]["get"],
     ]:
         for status_code in error_codes:
             assert operation["responses"][status_code]["content"]["application/json"]["schema"][

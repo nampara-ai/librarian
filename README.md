@@ -85,6 +85,7 @@ Initial endpoints:
 - `GET /runs/{id}/events?limit=500&offset=0`
 - `GET /runs/{id}/events/records?limit=500&offset=0`
 - `GET /runs/{id}/events/stream`
+- `GET /runs/{id}/events/records/stream`
 - `GET /documents/{id}/content`
 - `GET /documents/{id}/export?format=json|txt|md`
 - `POST /search`

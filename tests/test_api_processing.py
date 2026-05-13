@@ -174,6 +174,14 @@ def test_api_upload_run_and_get_content(tmp_path: Path) -> None:
         assert stream.headers["x-content-type-options"] == "nosniff"
         assert stream.headers["cache-control"] == "no-store"
         assert "event: done" in stream.text
+        record_stream = client.get(f"/runs/{run_id}/events/records/stream")
+        assert record_stream.status_code == 200
+        assert record_stream.headers["x-content-type-options"] == "nosniff"
+        assert record_stream.headers["cache-control"] == "no-store"
+        assert "event: run-event" in record_stream.text
+        assert '"stage":"complete"' in record_stream.text
+        assert '"message":"processing complete"' in record_stream.text
+        assert "event: done" in record_stream.text
 
         exported = client.get(f"/documents/{document_id}/export")
         assert exported.status_code == 200
@@ -1869,9 +1877,11 @@ def test_api_run_events_return_404_for_missing_run(tmp_path: Path) -> None:
     with TestClient(create_app(settings)) as client:
         events = client.get("/runs/run_missing/events")
         stream = client.get("/runs/run_missing/events/stream")
+        record_stream = client.get("/runs/run_missing/events/records/stream")
 
     assert events.status_code == 404
     assert stream.status_code == 404
+    assert record_stream.status_code == 404
 
 
 def test_api_sqlite_submission_failure_marks_run_failed(

@@ -38,6 +38,8 @@
   security audit events.
 - Added configurable API audit-event retention so long-lived deployments can
   prune old denial records automatically.
+- Added a structured API run-event SSE stream for clients that need live JSON
+  progress records.
 
 ## 0.1.0a4 - 2026-05-13
 

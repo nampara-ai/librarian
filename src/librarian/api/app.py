@@ -1380,6 +1380,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             media_type="text/event-stream",
         )
 
+    @app.get(
+        "/runs/{run_id}/events/records/stream",
+        responses={
+            200: {
+                "description": "Server-sent event stream of structured run progress records.",
+                "content": {
+                    "text/event-stream": {"schema": {"type": "string"}},
+                },
+            }
+        },
+    )
+    async def stream_run_event_records(run_id: str) -> StreamingResponse:
+        container = await build_ingest_container(settings)
+        run = await container.repository.get_run(RunId(run_id))
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        return StreamingResponse(
+            _event_record_stream(settings, RunId(run_id)),
+            media_type="text/event-stream",
+        )
+
     @app.post("/search", response_model=SearchResponse)
     async def search(request: SearchRequest) -> SearchResponse:
         document_status = _parse_document_status(request.document_status)
@@ -2433,6 +2454,22 @@ async def _event_stream(settings: Settings, run_id: RunId) -> AsyncIterator[str]
         events = list(await container.repository.list_events(run_id, limit=500, offset=seen))
         for event in events:
             yield f"data: {event}\n\n"
+        seen += len(events)
+        run = await container.repository.get_run(run_id)
+        if run is None or run.status in {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELED}:
+            yield "event: done\ndata: done\n\n"
+            break
+        await asyncio.sleep(0.2)
+
+
+async def _event_record_stream(settings: Settings, run_id: RunId) -> AsyncIterator[str]:
+    seen = 0
+    while True:
+        container = await build_ingest_container(settings)
+        events = list(await container.repository.list_event_records(run_id, limit=500, offset=seen))
+        for event in events:
+            payload = _run_event_response(event).model_dump()
+            yield f"event: run-event\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
         seen += len(events)
         run = await container.repository.get_run(run_id)
         if run is None or run.status in {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELED}:

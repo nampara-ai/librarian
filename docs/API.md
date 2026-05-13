@@ -76,6 +76,9 @@ parents, and manifest writes are atomic replacements.
   `message`, `created_at`, and `sequence`. Supports the same `limit` and `offset` query
   parameters and response metadata as `/events`.
 - `GET /runs/{id}/events/stream`: server-sent event stream with `text/event-stream` responses.
+- `GET /runs/{id}/events/records/stream`: server-sent event stream of structured JSON event
+  records. Each `run-event` payload includes `stage`, `message`, `created_at`, and `sequence`;
+  the stream closes with a `done` event.
 
 ## Search And Metadata
 
