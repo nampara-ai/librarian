@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.0a19 - 2026-05-13
+
+- Redacted conversion, import, and corpus-eval report failure details before writing or returning
+  report item errors so API keys and provider tokens cannot leak through shared workflow artifacts.
+
 ## 0.1.0a18 - 2026-05-13
 
 - Redacted API run-submission failures before returning 503 responses or persisting failed-run

@@ -126,6 +126,52 @@ async def test_corpus_eval_fails_performance_budgets(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_corpus_eval_redacts_conversion_failures(tmp_path: Path) -> None:
+    class FailingExtractor:
+        supported_extensions = frozenset({".txt"})
+
+        async def extract(self, path: Path) -> str:
+            del path
+            raise RuntimeError("extract failed api_key=abc123 sk-testSECRET123")
+
+    source = tmp_path / "secret-failure.txt"
+    source.write_text("Saddle fit notes.", encoding="utf-8")
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    container = await build_container(settings)
+    object.__setattr__(container.ingest_document, "extractor", FailingExtractor())
+    suite = CorpusEvalSuite(
+        cases=[
+            CorpusEvalCase(
+                name="secret failure",
+                source_path=source,
+                process=False,
+            )
+        ]
+    )
+
+    result = await run_corpus_eval_suite(
+        container,
+        suite,
+        output_dir=tmp_path / "converted",
+    )
+
+    assert not result.passed
+    failure = result.cases[0].failures[0]
+    assert failure == (
+        "conversion failed (extraction_failed): "
+        "extract failed api_key=[REDACTED] [REDACTED]"
+    )
+    assert "abc123" not in failure
+    assert "sk-testSECRET123" not in failure
+    rendered = json.loads(corpus_eval_result_json(result))
+    assert "abc123" not in json.dumps(rendered)
+    assert "sk-testSECRET123" not in json.dumps(rendered)
+
+
+@pytest.mark.asyncio
 async def test_corpus_eval_rejects_symlink_output_directory(tmp_path: Path) -> None:
     source = tmp_path / "horse-transcript.md"
     source.write_text("# Horse Transcript\n\nSaddle fit notes.", encoding="utf-8")

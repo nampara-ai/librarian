@@ -12,6 +12,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol, cast
 
+from librarian.observability import sanitize_error_message
+
 _MAX_METADATA_BYTES = 64 * 1024
 _LIBRARIAN_ARTIFACT_TYPES = frozenset(
     {"conversion-sidecar", "import-report", "pdf-page-extraction-manifest"}
@@ -233,7 +235,7 @@ class DocumentConverter:
                         source_path=source_path,
                         output_path=destination,
                         status="failed",
-                        error=str(exc),
+                        error=sanitize_error_message(exc),
                         error_type=classify_conversion_error(exc),
                     )
                 )

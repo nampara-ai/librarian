@@ -29,6 +29,7 @@ from librarian.application.process_document import ProcessDocument
 from librarian.domain.ids import DocumentId, RunId
 from librarian.domain.models import RunStage, RunStatus
 from librarian.ingest.extractors import reject_disallowed_archive_signature
+from librarian.observability import sanitize_error_message
 
 _ARCHIVE_EXTENSIONS = frozenset({".zip", ".tar", ".tgz", ".gz", ".bz2", ".xz", ".7z", ".rar"})
 _DEFAULT_IMPORT_MANIFEST_MAX_BYTES = 10 * 1024 * 1024
@@ -243,7 +244,7 @@ class ImportLibrary:
                     source_path=source_path,
                     output_path=destination,
                     status="failed",
-                    error=str(exc),
+                    error=sanitize_error_message(exc),
                     error_type=classify_conversion_error(exc),
                 )
             item = await self._ingest_converted(conversion, processing_mode)
@@ -327,7 +328,7 @@ class ImportLibrary:
                         source_path=source_path,
                         output_path=destination,
                         status="failed",
-                        error=str(exc),
+                        error=sanitize_error_message(exc),
                         error_type=classify_conversion_error(exc),
                     )
                 item = await self._ingest_converted(conversion, processing_mode)
@@ -383,11 +384,12 @@ class ImportLibrary:
             try:
                 await self.queue_factory().enqueue(run.id)
             except Exception as exc:
+                error = f"queue enqueue failed: {sanitize_error_message(exc)}"
                 await self.process.runs.update_status(
                     run.id,
                     status=RunStatus.FAILED,
                     stage=RunStage.COMPLETE,
-                    error=f"queue enqueue failed: {exc}",
+                    error=error,
                 )
                 return ImportItem(
                     source_path=conversion.source_path,
@@ -395,7 +397,7 @@ class ImportLibrary:
                     document_id=ingested.document.id,
                     run_id=run.id,
                     status="failed",
-                    error=f"queue enqueue failed: {exc}",
+                    error=error,
                 )
             return ImportItem(
                 source_path=conversion.source_path,
@@ -411,7 +413,7 @@ class ImportLibrary:
                 document_id=None,
                 run_id=None,
                 status="failed",
-                error=str(exc),
+                error=sanitize_error_message(exc),
             )
 
 

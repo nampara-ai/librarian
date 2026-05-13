@@ -402,7 +402,7 @@ async def test_import_directory_marks_run_failed_when_enqueue_fails(tmp_path: Pa
     class FailingQueue:
         async def enqueue(self, run_id: object) -> None:
             del run_id
-            raise RuntimeError("queue down")
+            raise RuntimeError("queue down api_key=abc123 sk-testSECRET123")
 
     importer = ImportLibrary(
         converter=DocumentConverter(CompositeExtractor()),
@@ -421,10 +421,16 @@ async def test_import_directory_marks_run_failed_when_enqueue_fails(tmp_path: Pa
     assert result.failed == 1
     assert result.items[0].document_id is not None
     assert result.items[0].run_id is not None
-    assert "queue enqueue failed" in (result.items[0].error or "")
+    assert (
+        result.items[0].error
+        == "queue enqueue failed: queue down api_key=[REDACTED] [REDACTED]"
+    )
+    assert "abc123" not in (result.items[0].error or "")
+    assert "sk-testSECRET123" not in (result.items[0].error or "")
     run = await container.repository.get_run(result.items[0].run_id)
     assert run is not None
     assert run.status == RunStatus.FAILED
+    assert run.error == "queue enqueue failed: queue down api_key=[REDACTED] [REDACTED]"
 
 
 @pytest.mark.asyncio

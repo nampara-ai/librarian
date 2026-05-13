@@ -18,6 +18,7 @@ from librarian.application.convert_document import (
     classify_conversion_error,
 )
 from librarian.application.factory import ApplicationContainer
+from librarian.observability import sanitize_error_message
 from librarian.version import __version__
 
 _MAX_CORPUS_EVAL_JSON_BYTES = 10 * 1024 * 1024
@@ -199,6 +200,7 @@ async def _run_corpus_case(
         _, peak_memory = tracemalloc.get_traced_memory()
         tracemalloc.stop()
         failure_type = classify_conversion_error(exc)
+        error = sanitize_error_message(exc)
         return CorpusEvalCaseResult(
             name=case.name,
             passed=False,
@@ -220,7 +222,7 @@ async def _run_corpus_case(
             search_diagnostics=(),
             classification_code=None,
             classification_label=None,
-            failures=(f"conversion failed ({failure_type.value}): {exc}",),
+            failures=(f"conversion failed ({failure_type.value}): {error}",),
         )
     conversion_seconds = max(time.perf_counter() - conversion_start, 1e-9)
     sidecar = _load_conversion_sidecar(output_path)
@@ -471,14 +473,15 @@ async def _search_recall(
             results = await container.repository.search(phrase, limit=20)
             total_results = await container.repository.search_count(phrase)
         except ValueError as exc:
-            failures.append(f"search failed for {phrase!r}: {exc}")
+            error = sanitize_error_message(exc)
+            failures.append(f"search failed for {phrase!r}: {error}")
             diagnostics.append(
                 SearchDiagnostic(
                     phrase=phrase,
                     hit=False,
                     total_results=None,
                     returned_document_ids=(),
-                    error=str(exc),
+                    error=error,
                 )
             )
             continue

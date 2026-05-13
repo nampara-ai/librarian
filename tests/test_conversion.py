@@ -136,6 +136,31 @@ async def test_convert_directory_to_subdirectory(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_convert_directory_redacts_item_errors(tmp_path: Path) -> None:
+    class FailingExtractor:
+        supported_extensions = frozenset({".txt"})
+
+        async def extract(self, path: Path) -> str:
+            del path
+            raise RuntimeError("extract failed api_key=abc123 sk-testSECRET123")
+
+    source_dir = tmp_path / "input"
+    source_dir.mkdir()
+    (source_dir / "a.txt").write_text("Alpha", encoding="utf-8")
+
+    result = await DocumentConverter(FailingExtractor()).convert_directory(
+        source_dir,
+        format=ConversionFormat.MARKDOWN,
+        output_mode=DirectoryOutputMode.SUBDIRECTORY,
+    )
+
+    assert result.failed == 1
+    assert result.items[0].error == "extract failed api_key=[REDACTED] [REDACTED]"
+    assert "abc123" not in (result.items[0].error or "")
+    assert "sk-testSECRET123" not in (result.items[0].error or "")
+
+
+@pytest.mark.asyncio
 async def test_recursive_convert_directory_skips_own_output_subdirectory(tmp_path: Path) -> None:
     source_dir = tmp_path / "input"
     source_dir.mkdir()
