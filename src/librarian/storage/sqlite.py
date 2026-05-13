@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import re
 import sqlite3
@@ -37,6 +38,8 @@ from librarian.domain.models import (
 _SQLITE_BUSY_TIMEOUT_MS = 5_000
 _MAX_SEARCH_QUERY_CHARS = 4_096
 _MAX_EVENT_PAGE_SIZE = 1_000
+_FTS_HIGHLIGHT_START = "\x1fH\x1f"
+_FTS_HIGHLIGHT_END = "\x1f/H\x1f"
 _SEARCH_TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
 
 
@@ -1435,6 +1438,8 @@ class SQLiteRepository:
         match_query = normalize_search_query(query, phrase=phrase)
         filename_pattern = f"%{_escape_like(filename_contains)}%" if filename_contains else None
         parameters: tuple[object, ...] = (
+            _FTS_HIGHLIGHT_START,
+            _FTS_HIGHLIGHT_END,
             match_query,
             RunStatus.SUCCEEDED.value,
             classification_code,
@@ -1461,7 +1466,7 @@ class SQLiteRepository:
                       documents.status AS document_status,
                       classifications.code AS classification_code,
                       classifications.label AS classification_label,
-                      snippet(cleaned_outputs_fts, 2, '<mark>', '</mark>', '...', 16) AS snippet,
+                      snippet(cleaned_outputs_fts, 2, ?, ?, '...', 16) AS snippet,
                       bm25(cleaned_outputs_fts) AS score
                     FROM cleaned_outputs_fts
                     JOIN runs ON runs.id = cleaned_outputs_fts.run_id
@@ -1497,7 +1502,7 @@ class SQLiteRepository:
                 source="cleaned",
                 filename=str(row["filename"]),
                 document_status=DocumentStatus(str(row["document_status"])),
-                snippet=str(row["snippet"]),
+                snippet=_render_search_snippet(str(row["snippet"])),
                 score=float(row["score"]),
                 classification_code=(
                     str(row["classification_code"])
@@ -1575,6 +1580,8 @@ class SQLiteRepository:
         match_query = normalize_search_query(query, phrase=phrase)
         filename_pattern = f"%{_escape_like(filename_contains)}%" if filename_contains else None
         parameters: tuple[object, ...] = (
+            _FTS_HIGHLIGHT_START,
+            _FTS_HIGHLIGHT_END,
             match_query,
             classification_code,
             classification_code,
@@ -1599,7 +1606,7 @@ class SQLiteRepository:
                       documents.status AS document_status,
                       classifications.code AS classification_code,
                       classifications.label AS classification_label,
-                      snippet(raw_content_fts, 1, '<mark>', '</mark>', '...', 16) AS snippet,
+                      snippet(raw_content_fts, 1, ?, ?, '...', 16) AS snippet,
                       bm25(raw_content_fts) AS score
                     FROM raw_content_fts
                     JOIN documents ON documents.id = raw_content_fts.document_id
@@ -1625,7 +1632,7 @@ class SQLiteRepository:
                 source="raw",
                 filename=str(row["filename"]),
                 document_status=DocumentStatus(str(row["document_status"])),
-                snippet=str(row["snippet"]),
+                snippet=_render_search_snippet(str(row["snippet"])),
                 score=float(row["score"]),
                 classification_code=(
                     str(row["classification_code"])
@@ -1980,6 +1987,14 @@ def normalize_search_query(query: str, *, phrase: bool = False) -> str:
 
 def _normalize_search_phrase(value: str) -> str:
     return " ".join(_SEARCH_TOKEN_RE.findall(value.casefold()))
+
+
+def _render_search_snippet(value: str) -> str:
+    escaped = html.escape(value)
+    return escaped.replace(_FTS_HIGHLIGHT_START, "<mark>").replace(
+        _FTS_HIGHLIGHT_END,
+        "</mark>",
+    )
 
 
 def _escape_like(value: str) -> str:

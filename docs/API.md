@@ -94,7 +94,8 @@ parents, and manifest writes are atomic replacements.
   `limit`/`offset` are applied. Date filters are ISO-8601 document creation timestamps.
 - `POST /search/results`: ranked full-text search results with `document_id`, `run_id`,
   source metadata, classification metadata, `source`, `snippet`, and `score`. Raw-source search
-  results use `source: "raw"` and `run_id: null`. Snippets mark matches with `<mark>...</mark>`.
+  results use `source: "raw"` and `run_id: null`. Snippets escape source markup and preserve
+  Librarian-owned `<mark>...</mark>` match highlights.
   Responses include the same `total`, `limit`, and `offset` pagination metadata as `/search`.
 - `POST /search/facets`: facet counts for a query grouped by classification, document status,
   search source, and filename. Facets honor the same query filters as `/search`, so counts reflect

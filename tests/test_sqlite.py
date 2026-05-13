@@ -424,6 +424,34 @@ async def test_raw_content_fts_migration_backfills_existing_raw_blobs(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_sqlite_search_snippets_escape_source_markup(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    container = await build_container(settings)
+    source = tmp_path / "unsafe.txt"
+    source.write_text(
+        "<script>alert(1)</script> horse <mark>not trusted</mark>",
+        encoding="utf-8",
+    )
+
+    await container.ingest_document.execute(source)
+    results = await container.repository.search_results("script horse", scope="raw")
+
+    assert results
+    snippet = results[0].snippet
+    assert "<mark>script</mark>" in snippet
+    assert "<mark>horse</mark>" in snippet
+    assert "&lt;" in snippet
+    assert "&gt;" in snippet
+    assert "&lt;mark&gt;not trusted&lt;/mark&gt;" in snippet
+    assert "<script>" not in snippet
+    assert "</script>" not in snippet
+    assert "<mark>not trusted</mark>" not in snippet
+
+
+@pytest.mark.asyncio
 async def test_sqlite_search_supports_offset_and_created_date_filters(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",
