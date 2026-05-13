@@ -34,7 +34,7 @@ from librarian.application.convert_document import (
     conversion_output_exclusions,
     iter_supported_files,
 )
-from librarian.application.export_document import ExportedDocument
+from librarian.application.export_document import ExportedDocument, ExportFormat
 from librarian.application.factory import build_container, build_ingest_container
 from librarian.application.import_library import ImportLibrary, ImportProcessingMode
 from librarian.application.jobs import InProcessJobRunner
@@ -1048,6 +1048,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         },
     )
     async def export_document(document_id: str, format: str = "json"):
+        export_format = _normalize_export_format(format)
         container = await build_ingest_container(settings)
         document = await container.repository.get_document(DocumentId(document_id))
         if document is None:
@@ -1061,7 +1062,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             output=output,
             classification=classification,
         )
-        return _export_response(exported, format)
+        return _export_response(exported, export_format)
 
     @app.post("/runs", response_model=RunResponse)
     async def create_run(request: RunRequest, http_request: Request) -> RunResponse:
@@ -2597,16 +2598,22 @@ async def _event_record_stream(settings: Settings, run_id: RunId) -> AsyncIterat
         await asyncio.sleep(0.2)
 
 
-def _export_response(payload: ExportedDocument, format: str):
+def _normalize_export_format(format: str) -> ExportFormat:
     normalized = format.lower()
-    headers = {"Content-Disposition": _content_disposition(_export_filename(payload, normalized))}
-    if normalized == "json":
+    if normalized not in {"json", "txt", "md"}:
+        raise HTTPException(status_code=400, detail="Unsupported export format")
+    return cast(ExportFormat, normalized)
+
+
+def _export_response(payload: ExportedDocument, format: ExportFormat):
+    headers = {"Content-Disposition": _content_disposition(_export_filename(payload, format))}
+    if format == "json":
         return JSONResponse(json.loads(payload.render("json")), headers=headers)
-    if normalized == "txt":
+    if format == "txt":
         return PlainTextResponse(payload.render("txt"), headers=headers)
-    if normalized == "md":
+    if format == "md":
         return PlainTextResponse(payload.render("md"), media_type="text/markdown", headers=headers)
-    raise HTTPException(status_code=400, detail="Unsupported export format")
+    raise ValueError(f"Unsupported export format: {format}")
 
 
 def _export_filename(payload: ExportedDocument, format: str) -> str:

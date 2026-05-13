@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.0a12 - 2026-05-13
+
+- Validated API export formats before document lookup so unsupported formats return a stable
+  `bad_request` response instead of depending on document existence.
+
 ## 0.1.0a11 - 2026-05-13
 
 - Bounded API rate-limiter memory growth by pruning expired per-identity buckets even when traffic

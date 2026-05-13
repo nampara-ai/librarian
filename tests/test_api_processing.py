@@ -233,6 +233,18 @@ def test_api_export_uses_safe_content_disposition_filename(tmp_path: Path) -> No
     assert "\n" not in exported.headers["content-disposition"]
 
 
+def test_api_export_rejects_unsupported_format_before_document_lookup(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.get("/documents/doc_missing/export", params={"format": "pdf"})
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Unsupported export format", "code": "bad_request"}
+
+
 def test_api_key_auth(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",
