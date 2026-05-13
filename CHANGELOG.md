@@ -28,6 +28,8 @@
   scope denials, and rate-limit denials.
 - Added an opt-in OCR page-image preservation setting for sidecar-backed PDF
   page manifests.
+- Added an API endpoint for PDF page manifest status so operators can inspect
+  page-level OCR progress and failures without shell access.
 
 ## 0.1.0a4 - 2026-05-13
 

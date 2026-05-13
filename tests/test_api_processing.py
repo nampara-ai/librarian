@@ -1466,6 +1466,141 @@ def test_api_import_status_reads_manifest_and_resume_skips_completed_items(tmp_p
     assert second.json()["skipped"] == 1
 
 
+def test_api_import_page_manifest_reports_pdf_page_progress(tmp_path: Path) -> None:
+    import_root = tmp_path / "imports"
+    import_root.mkdir()
+    manifest = import_root / "fixture.md.pages.json"
+    image_path = import_root / "fixture.md.pages.page-0002.png"
+    manifest.write_text(
+        json.dumps(
+            {
+                "generated_by": "librarian",
+                "artifact_type": "pdf-page-extraction-manifest",
+                "source_sha256": "abc123",
+                "page_count": 3,
+                "pages": [
+                    {
+                        "page_number": 1,
+                        "source": "embedded",
+                        "status": "succeeded",
+                        "chars": 120,
+                        "confidence": None,
+                        "corrected": False,
+                        "attempts": 0,
+                        "duration_ms": None,
+                        "warnings": [],
+                        "error": None,
+                    },
+                    {
+                        "page_number": 2,
+                        "source": "ocr",
+                        "status": "succeeded",
+                        "chars": 80,
+                        "confidence": 74.0,
+                        "corrected": True,
+                        "attempts": 1,
+                        "duration_ms": 45.5,
+                        "image_path": str(image_path),
+                        "warnings": ["low-ocr-confidence"],
+                        "error": None,
+                    },
+                    {
+                        "page_number": 3,
+                        "source": "ocr",
+                        "status": "failed",
+                        "chars": 0,
+                        "confidence": None,
+                        "corrected": False,
+                        "attempts": 2,
+                        "duration_ms": 12.0,
+                        "warnings": ["ocr-page-failed", "missing-ocr-confidence"],
+                        "error": "tesseract failed",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_import_root=import_root,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        response = client.get(
+            "/imports/page-manifest",
+            params={
+                "manifest_path": str(manifest),
+                "limit": 1,
+                "offset": 0,
+                "failures_only": True,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["manifest_path"] == str(manifest)
+    assert payload["source_sha256"] == "abc123"
+    assert payload["page_count"] == 3
+    assert payload["statuses"] == {"succeeded": 2, "failed": 1}
+    assert payload["sources"] == {"embedded": 1, "ocr": 2}
+    assert payload["warnings"] == {
+        "low-ocr-confidence": 1,
+        "ocr-page-failed": 1,
+        "missing-ocr-confidence": 1,
+    }
+    assert payload["corrected_pages"] == 1
+    assert payload["attempts"] == 3
+    assert payload["average_confidence"] == 74.0
+    assert payload["failures_only"] is True
+    assert payload["total"] == 1
+    assert payload["pages"] == [
+        {
+            "page_number": 3,
+            "source": "ocr",
+            "status": "failed",
+            "chars": 0,
+            "confidence": None,
+            "corrected": False,
+            "attempts": 2,
+            "duration_ms": 12.0,
+            "image_path": None,
+            "warnings": ["ocr-page-failed", "missing-ocr-confidence"],
+            "error": "tesseract failed",
+        }
+    ]
+
+
+def test_api_import_page_manifest_rejects_outside_and_unexpected_json(tmp_path: Path) -> None:
+    import_root = tmp_path / "imports"
+    import_root.mkdir()
+    outside = tmp_path / "fixture.md.pages.json"
+    outside.write_text("{}", encoding="utf-8")
+    unexpected = import_root / "notes.json"
+    unexpected.write_text('{"artifact_type":"import-report","pages":[]}', encoding="utf-8")
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_import_root=import_root,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        outside_response = client.get(
+            "/imports/page-manifest",
+            params={"manifest_path": str(outside)},
+        )
+        unexpected_response = client.get(
+            "/imports/page-manifest",
+            params={"manifest_path": str(unexpected)},
+        )
+
+    assert outside_response.status_code == 400
+    assert outside_response.json()["code"] == "invalid_import_path"
+    assert unexpected_response.status_code == 400
+    assert unexpected_response.json()["code"] == "invalid_manifest_path"
+
+
 def test_api_import_rejects_manifest_over_unrelated_json(tmp_path: Path) -> None:
     import_root = tmp_path / "imports"
     source_dir = import_root / "input"

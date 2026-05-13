@@ -58,6 +58,10 @@ overwritten. `resume: true` reuses successful records from that manifest.
 bounded page of per-file records. Import manifest validation, resume, and status reads are capped by
 `LIBRARIAN_API_MAX_IMPORT_MANIFEST_BYTES`. Manifest paths must not be symlinks or cross symlinked
 parents, and manifest writes are atomic replacements.
+- `GET /imports/page-manifest?manifest_path=...`: read a PDF page extraction manifest under
+  `LIBRARIAN_API_IMPORT_ROOT` and return page-level OCR/conversion progress, including status/source
+  counts, warning counts, attempts, average OCR confidence, corrected page count, optional
+  `image_path`, and a bounded page list. Use `failures_only=true` to inspect failed pages.
 
 ## Runs
 

@@ -144,6 +144,9 @@ librarian page-manifest ./out/report.md.pages.json --json --failures-only
 The JSON view includes counts, confidence summary, retry attempts, OCR duration, and page
 diagnostics without printing raw or corrected page text, so it is safe to use in CI logs and
 operator tickets.
+API deployments can inspect the same sidecar with
+`GET /imports/page-manifest?manifest_path=/data/out/report.md.pages.json`. The path must be under
+`LIBRARIAN_API_IMPORT_ROOT`; use `failures_only=true` to page through failed OCR records.
 Manifest page records also include structured `warnings` codes such as `low-ocr-confidence`,
 `missing-ocr-confidence`, and `ocr-page-failed`.
 

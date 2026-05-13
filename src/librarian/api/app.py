@@ -175,6 +175,37 @@ class ImportStatusResponse(BaseModel):
     items: list[dict[str, object]]
 
 
+class PdfPageManifestPageResponse(BaseModel):
+    page_number: int | None
+    source: str | None
+    status: str | None
+    chars: int | None
+    confidence: float | None
+    corrected: bool
+    attempts: int
+    duration_ms: float | None
+    image_path: str | None
+    warnings: list[str]
+    error: str | None
+
+
+class PdfPageManifestStatusResponse(BaseModel):
+    manifest_path: str
+    source_sha256: str
+    page_count: int
+    statuses: dict[str, int]
+    sources: dict[str, int]
+    warnings: dict[str, int]
+    corrected_pages: int
+    attempts: int
+    average_confidence: float | None
+    failures_only: bool
+    total: int
+    limit: int
+    offset: int
+    pages: list[PdfPageManifestPageResponse]
+
+
 class RunResponse(BaseModel):
     id: str
     document_id: str
@@ -1214,6 +1245,62 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             items=items[offset : offset + limit],
         )
 
+    @app.get("/imports/page-manifest", response_model=PdfPageManifestStatusResponse)
+    async def import_page_manifest_status(
+        manifest_path: str,
+        limit: Annotated[int, Query(ge=1, le=1_000)] = 500,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        failures_only: bool = False,
+    ) -> PdfPageManifestStatusResponse:
+        if settings.api_import_root is None:
+            raise HTTPException(status_code=400, detail="API import root is not configured")
+        path = _resolve_api_path(Path(manifest_path), settings=settings)
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="PDF page manifest not found")
+        try:
+            payload, pages = _read_pdf_page_manifest(
+                path,
+                max_bytes=settings.api_max_import_manifest_bytes,
+            )
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        visible_pages = [
+            page
+            for page in pages
+            if not failures_only or str(page.get("status") or "") == "failed"
+        ]
+        page_window = visible_pages[offset : offset + limit]
+        confidences = [
+            float(confidence)
+            for page in pages
+            if isinstance((confidence := page.get("confidence")), int | float)
+        ]
+        attempts = sum(
+            int(attempt_count)
+            for page in pages
+            if isinstance((attempt_count := page.get("attempts")), int)
+        )
+        return PdfPageManifestStatusResponse(
+            manifest_path=str(path),
+            source_sha256=str(payload.get("source_sha256") or ""),
+            page_count=_manifest_int(payload.get("page_count"), default=len(pages)),
+            statuses=_count_manifest_values(pages, "status"),
+            sources=_count_manifest_values(pages, "source"),
+            warnings=_count_manifest_warnings(pages),
+            corrected_pages=sum(1 for page in pages if page.get("corrected") is True),
+            attempts=attempts,
+            average_confidence=(
+                round(sum(confidences) / len(confidences), 1) if confidences else None
+            ),
+            failures_only=failures_only,
+            total=len(visible_pages),
+            limit=limit,
+            offset=offset,
+            pages=[_pdf_page_manifest_page_response(page) for page in page_window],
+        )
+
     @app.get("/runs/{run_id}/events", response_model=RunEventsResponse)
     async def get_run_events(
         run_id: str,
@@ -1556,6 +1643,111 @@ def _summary_int(summary: dict[str, object], key: str) -> int:
     return 0
 
 
+def _read_pdf_page_manifest(
+    path: Path,
+    *,
+    max_bytes: int,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    if path.is_symlink():
+        raise ValueError(f"PDF page manifest path must not be a symlink: {path}")
+    if path.is_dir():
+        raise ValueError("PDF page manifest must be a JSON file, not a directory")
+    try:
+        manifest_text = _read_limited_text_file(
+            path,
+            max_bytes=max_bytes,
+            label="PDF page manifest",
+        )
+        payload_obj = json.loads(manifest_text)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Invalid PDF page manifest: {exc}") from exc
+    if not isinstance(payload_obj, dict):
+        raise ValueError("PDF page manifest must be a JSON object")
+    payload = cast(dict[str, object], payload_obj)
+    if payload.get("artifact_type") != "pdf-page-extraction-manifest":
+        raise ValueError("PDF page manifest has unexpected artifact_type")
+    pages_obj = payload.get("pages")
+    if not isinstance(pages_obj, list):
+        raise ValueError("PDF page manifest is missing pages")
+    pages: list[dict[str, object]] = []
+    for page in cast(list[object], pages_obj):
+        if not isinstance(page, dict):
+            raise ValueError("PDF page manifest contains an invalid page record")
+        pages.append(cast(dict[str, object], page))
+    return payload, pages
+
+
+def _pdf_page_manifest_page_response(page: dict[str, object]) -> PdfPageManifestPageResponse:
+    return PdfPageManifestPageResponse(
+        page_number=_manifest_int_or_none(page.get("page_number")),
+        source=_manifest_str_or_none(page.get("source")),
+        status=_manifest_str_or_none(page.get("status")),
+        chars=_manifest_int_or_none(page.get("chars")),
+        confidence=_manifest_float_or_none(page.get("confidence")),
+        corrected=page.get("corrected") is True,
+        attempts=_manifest_int(page.get("attempts"), default=0),
+        duration_ms=_manifest_float_or_none(page.get("duration_ms")),
+        image_path=_manifest_str_or_none(page.get("image_path")),
+        warnings=_manifest_warning_list(page),
+        error=_manifest_str_or_none(page.get("error")),
+    )
+
+
+def _count_manifest_values(pages: list[dict[str, object]], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for page in pages:
+        value = page.get(key)
+        if isinstance(value, str) and value:
+            counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+def _count_manifest_warnings(pages: list[dict[str, object]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for page in pages:
+        for warning in _manifest_warning_list(page):
+            counts[warning] = counts.get(warning, 0) + 1
+    return counts
+
+
+def _manifest_warning_list(page: dict[str, object]) -> list[str]:
+    warnings_obj = page.get("warnings")
+    if not isinstance(warnings_obj, list):
+        return []
+    return [
+        warning
+        for warning in cast(list[object], warnings_obj)
+        if isinstance(warning, str)
+    ]
+
+
+def _manifest_int(value: object, *, default: int) -> int:
+    parsed = _manifest_int_or_none(value)
+    return parsed if parsed is not None else default
+
+
+def _manifest_int_or_none(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
+
+
+def _manifest_float_or_none(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    return None
+
+
+def _manifest_str_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
 def _api_error_code(*, status_code: int, detail: object) -> str:
     if isinstance(detail, str):
         normalized = detail.lower()
@@ -1575,6 +1767,8 @@ def _api_error_code(*, status_code: int, detail: object) -> str:
             return "import_too_large"
         if "import manifest contains" in normalized and "configured limit" in normalized:
             return "import_manifest_too_large"
+        if "pdf page manifest contains" in normalized and "configured limit" in normalized:
+            return "page_manifest_too_large"
         if "manifest_path contains more than" in normalized and "configured limit" in normalized:
             return "import_manifest_too_large"
         if "upload directory" in normalized or "upload data_dir" in normalized:
@@ -1586,6 +1780,8 @@ def _api_error_code(*, status_code: int, detail: object) -> str:
         if "import root" in normalized or "path must be under" in normalized:
             return "invalid_import_path"
         if "manifest_path" in normalized:
+            return "invalid_manifest_path"
+        if "pdf page manifest" in normalized:
             return "invalid_manifest_path"
         if "output_dir" in normalized:
             return "invalid_output_dir"

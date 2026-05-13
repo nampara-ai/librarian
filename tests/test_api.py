@@ -263,6 +263,12 @@ def test_api_openapi_has_response_models_for_json_endpoints() -> None:
         ]["$ref"]
         == "#/components/schemas/ImportStatusResponse"
     )
+    assert (
+        paths["/imports/page-manifest"]["get"]["responses"]["200"]["content"][
+            "application/json"
+        ]["schema"]["$ref"]
+        == "#/components/schemas/PdfPageManifestStatusResponse"
+    )
     error_codes = {"400", "401", "403", "404", "413", "422", "429", "500", "503"}
     for operation in [
         paths["/documents"]["post"],
@@ -309,6 +315,9 @@ def test_api_openapi_has_response_models_for_json_endpoints() -> None:
     }
     assert {"items", "total", "limit", "offset"} <= set(
         schemas["ImportStatusResponse"]["required"]
+    )
+    assert {"pages", "statuses", "sources", "warnings", "total", "limit", "offset"} <= set(
+        schemas["PdfPageManifestStatusResponse"]["required"]
     )
 
 
