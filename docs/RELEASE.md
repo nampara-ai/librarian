@@ -106,5 +106,8 @@ The Docker image binds to `0.0.0.0` by default and intentionally refuses to star
 `LIBRARIAN_API_KEY` and `LIBRARIAN_API_IMPORT_ROOT` are set. Use `docker compose` for the default
 service layout, or pass those environment variables explicitly when using `docker run`.
 
+See `docs/SUPPLY_CHAIN.md#reproducibility-notes` for the release reproducibility model, local
+rebuild commands, and how to interpret checksum or attestation mismatches.
+
 Publishing to a package index should be added only after package ownership and signing policy are
 finalized.

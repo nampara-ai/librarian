@@ -18,6 +18,8 @@
 - Added an application-layer `SearchIndex` port and `SearchLibrary` service so
   future semantic or hybrid search adapters can replace SQLite FTS without
   changing API or CLI routes.
+- Added release reproducibility notes covering tag/version checks,
+  constraints, checksums, attestations, and local rebuild/audit commands.
 
 ## 0.1.0a4 - 2026-05-13
 

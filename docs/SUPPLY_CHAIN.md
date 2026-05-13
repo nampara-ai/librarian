@@ -50,7 +50,41 @@ Planned hardening before a stable release:
 
 - Signed release artifacts.
 - Published package index ownership and trusted publishing.
-- Reproducible build notes.
+
+## Reproducibility Notes
+
+Alpha builds are not byte-for-byte reproducible across arbitrary machines because wheel, sdist, and
+container metadata can include build-environment timestamps and toolchain details. They are,
+however, evidence-reproducible from a tag:
+
+- `v*` tags must match `src/librarian/version.py` before the release workflow builds artifacts.
+- The release workflow builds from the checked-out tag and verifies the tag exists before creating
+  the GitHub release.
+- `constraints.txt` is generated from `uv.lock` and records exact third-party registry packages for
+  the tested release environment.
+- `SHA256SUMS.txt` records the exact uploaded distribution, SBOM, constraints, and sanitized
+  evidence bytes, and the workflow verifies it before publication.
+- GitHub artifact attestations bind the published distributions, release metadata/evidence, and
+  container image digest to the workflow run that produced them.
+
+To recreate the tested Python dependency environment for a release, download `constraints.txt` with
+the wheel and install with:
+
+```bash
+pip install -c constraints.txt "nampara_librarian-<version>-py3-none-any.whl[all]"
+```
+
+To audit a release candidate locally before tagging, use the same source checkout and run:
+
+```bash
+rm -rf dist
+python -m build
+python .github/scripts/export_constraints.py --output constraints.txt
+sha256sum dist/* constraints.txt
+```
+
+Treat mismatches against GitHub release assets as a signal to inspect the build host, Python
+version, build backend version, and dependency resolver output before distributing artifacts.
 
 ## Secret Scanning
 

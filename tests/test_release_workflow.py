@@ -202,6 +202,22 @@ def test_release_docs_install_with_exported_constraints() -> None:
     )
 
 
+def test_supply_chain_docs_include_reproducibility_notes() -> None:
+    supply_chain_doc = Path("docs/SUPPLY_CHAIN.md").read_text(encoding="utf-8")
+    release_doc = Path("docs/RELEASE.md").read_text(encoding="utf-8")
+
+    assert "## Reproducibility Notes" in supply_chain_doc
+    assert "not byte-for-byte reproducible" in supply_chain_doc
+    assert "constraints.txt" in supply_chain_doc
+    assert "SHA256SUMS.txt" in supply_chain_doc
+    assert "GitHub artifact attestations" in supply_chain_doc
+    assert "python .github/scripts/export_constraints.py --output constraints.txt" in (
+        supply_chain_doc
+    )
+    assert "sha256sum dist/* constraints.txt" in supply_chain_doc
+    assert "docs/SUPPLY_CHAIN.md#reproducibility-notes" in release_doc
+
+
 def test_changelog_unreleased_section_is_not_placeholder() -> None:
     changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
     unreleased = changelog.split("## Unreleased", maxsplit=1)[1].split("## ", maxsplit=1)[0]
