@@ -73,6 +73,18 @@ _SECURITY_HEADERS = {
 _MAX_UPLOAD_FILENAME_BYTES = 255
 _READ_SCOPE_RESTRICTED_PATHS = frozenset({"/config", "/metrics", "/metrics/prometheus"})
 _OPENAPI_ERROR_STATUS_CODES = ("400", "401", "403", "404", "413", "422", "429", "500", "503")
+_ARCHIVE_SIGNATURES = (
+    b"PK\x03\x04",
+    b"PK\x05\x06",
+    b"PK\x07\x08",
+    b"\x1f\x8b",
+    b"BZh",
+    b"\xfd7zXZ\x00",
+    b"7z\xbc\xaf\x27\x1c",
+    b"Rar!\x1a\x07\x00",
+    b"Rar!\x1a\x07\x01\x00",
+)
+_TAR_USTAR_OFFSET = 257
 
 
 @dataclass(frozen=True, slots=True)
@@ -1918,6 +1930,20 @@ def _reject_disallowed_upload_filename(filename: str) -> None:
         )
 
 
+def _reject_disallowed_upload_signature(chunk: bytes) -> None:
+    if any(chunk.startswith(signature) for signature in _ARCHIVE_SIGNATURES):
+        raise HTTPException(
+            status_code=400,
+            detail="Archive inputs are not supported by default: archive signature detected",
+        )
+    tar_signature_end = _TAR_USTAR_OFFSET + len(b"ustar")
+    if len(chunk) >= tar_signature_end and chunk[_TAR_USTAR_OFFSET:tar_signature_end] == b"ustar":
+        raise HTTPException(
+            status_code=400,
+            detail="Archive inputs are not supported by default: tar signature detected",
+        )
+
+
 def _unique_upload_filename(filename: str) -> str:
     return str(Path(uuid.uuid4().hex) / _safe_filename(filename))
 
@@ -1925,9 +1951,13 @@ def _unique_upload_filename(filename: str) -> str:
 async def _write_limited_upload(file: UploadFile, destination: Path, *, max_bytes: int) -> None:
     await asyncio.to_thread(destination.parent.mkdir, parents=True, exist_ok=True)
     total = 0
+    first_chunk = True
     try:
         with destination.open("wb") as handle:
             while chunk := await file.read(1024 * 1024):
+                if first_chunk:
+                    _reject_disallowed_upload_signature(chunk)
+                    first_chunk = False
                 total += len(chunk)
                 if total > max_bytes:
                     raise HTTPException(

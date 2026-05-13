@@ -9,7 +9,8 @@ Requests above `LIBRARIAN_API_MAX_REQUEST_BYTES` are rejected before routing, ei
 - `POST /documents`: upload one file. Uploads are capped by
   `LIBRARIAN_API_MAX_UPLOAD_BYTES`. Upload storage rejects symlinked `data_dir`/`uploads` paths and
   symlinked parents before persisting files. Known archive/container extensions are rejected before
-  upload bytes are written.
+  upload bytes are written, and common archive signatures are rejected on the first upload chunk
+  before any upload bytes are persisted.
 - `POST /documents/batch`: upload multiple files in one request. Each file returns either a
   `document` object or an `error` object; one failed file does not roll back successful ingests.
   Batch size is capped by `LIBRARIAN_API_MAX_BATCH_FILES` and

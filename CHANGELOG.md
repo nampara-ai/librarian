@@ -4,6 +4,8 @@
 
 - Hardened API import status and PDF page-manifest reads to reject symlinked manifest paths before
   opening JSON files.
+- Hardened API uploads to reject renamed archives with common archive signatures before persisting
+  upload bytes.
 
 ## 0.1.0a5 - 2026-05-13
 

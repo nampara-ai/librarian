@@ -873,6 +873,24 @@ def test_api_upload_rejects_archives_with_explicit_policy(tmp_path: Path) -> Non
     assert not list((tmp_path / ".librarian" / "uploads").glob("*"))
 
 
+def test_api_upload_rejects_renamed_archive_signature_before_persisting(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/documents",
+            files={"file": ("notes.txt", b"PK\x03\x04renamed zip", "text/plain")},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "archive_not_supported"
+    assert not list((tmp_path / ".librarian" / "uploads").glob("*/*"))
+
+
 def test_api_upload_ingest_does_not_require_llm_credentials(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

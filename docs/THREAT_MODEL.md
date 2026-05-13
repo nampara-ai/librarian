@@ -34,8 +34,8 @@ instance, local SQLite storage, optional API exposure, and optional OpenAI-compa
   files must be Librarian import reports.
 - Archive bombs, malware, or unsafe recursive unpacking.
   Mitigation: archive/container formats are rejected by default, and API uploads reject known
-  archive extensions before writing upload bytes. Operators should scan and unpack archives outside
-  Librarian with approved malware tooling.
+  archive extensions plus common archive signatures before writing upload bytes. Operators should
+  scan and unpack archives outside Librarian with approved malware tooling.
 - Unauthorized hosted access.
   Mitigation: public API binds require `LIBRARIAN_API_KEY` or `LIBRARIAN_API_KEYS`, plus
   `LIBRARIAN_API_IMPORT_ROOT`; requests use constant-time API-key comparison, and deployments can
