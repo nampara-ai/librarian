@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nampara-librarian"
-version = "0.1.0a9"
+version = "0.1.0a10"
 description = "Local-first corpus cleaner and library organizer with CLI and API surfaces."
 readme = "README.md"
 requires-python = ">=3.12"

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.0a10 - 2026-05-13
+
+- Added sanitized `Content-Disposition` filenames to API document exports so download clients get
+  stable safe names for JSON, text, and Markdown outputs.
+
 ## 0.1.0a9 - 2026-05-13
 
 - Added an OCR-correction prompt eval fixture that requires common OCR artifacts to be corrected

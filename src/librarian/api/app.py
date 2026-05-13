@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Literal, cast
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
@@ -2590,10 +2590,29 @@ async def _event_record_stream(settings: Settings, run_id: RunId) -> AsyncIterat
 
 def _export_response(payload: ExportedDocument, format: str):
     normalized = format.lower()
+    headers = {"Content-Disposition": _content_disposition(_export_filename(payload, normalized))}
     if normalized == "json":
-        return JSONResponse(json.loads(payload.render("json")))
+        return JSONResponse(json.loads(payload.render("json")), headers=headers)
     if normalized == "txt":
-        return PlainTextResponse(payload.render("txt"))
+        return PlainTextResponse(payload.render("txt"), headers=headers)
     if normalized == "md":
-        return PlainTextResponse(payload.render("md"), media_type="text/markdown")
+        return PlainTextResponse(payload.render("md"), media_type="text/markdown", headers=headers)
     raise HTTPException(status_code=400, detail="Unsupported export format")
+
+
+def _export_filename(payload: ExportedDocument, format: str) -> str:
+    safe_source = _safe_filename(payload.document.source.filename)
+    stem = Path(safe_source).stem.strip(". ") or "document"
+    extension = "json" if format == "json" else format
+    return _truncate_utf8_filename(f"{stem}.{extension}", max_bytes=_MAX_UPLOAD_FILENAME_BYTES)
+
+
+def _content_disposition(filename: str) -> str:
+    ascii_name = "".join(
+        char if 32 <= ord(char) < 127 and char not in {'"', "\\", ";"} else "_"
+        for char in filename
+    ).strip()
+    if not ascii_name:
+        ascii_name = "document"
+    encoded_name = quote(filename, safe="")
+    return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}'

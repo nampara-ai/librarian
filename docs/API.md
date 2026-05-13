@@ -26,7 +26,8 @@ Requests above `LIBRARIAN_API_MAX_REQUEST_BYTES` are rejected before routing, ei
   downloads should use `/export`.
 - `GET /documents/{id}/export?format=json|txt|md`: export latest output. JSON exports return
   `document_id`, `filename`, `classification`, and `text`; `txt` and `md` exports return
-  `text/plain` and `text/markdown` bodies respectively.
+  `text/plain` and `text/markdown` bodies respectively. Export responses include sanitized
+  `Content-Disposition` filenames with UTF-8 `filename*` values for download clients.
 
 ## Imports
 

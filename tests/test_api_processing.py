@@ -191,7 +191,46 @@ def test_api_upload_run_and_get_content(tmp_path: Path) -> None:
         assert exported_md.status_code == 200
         assert exported_md.headers["x-content-type-options"] == "nosniff"
         assert exported_md.headers["cache-control"] == "no-store"
+        assert exported_md.headers["content-disposition"] == (
+            'attachment; filename="notes.md"; filename*=UTF-8\'\'notes.md'
+        )
         assert "# notes" in exported_md.text
+
+
+def test_api_export_uses_safe_content_disposition_filename(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    with TestClient(create_app(settings)) as client:
+        upload = client.post(
+            "/documents",
+            files={
+                "file": (
+                    '../"bad;name"\r\n.txt',
+                    b"Horse transcript about saddle fit.",
+                    "text/plain",
+                )
+            },
+        )
+        assert upload.status_code == 200
+        document_id = upload.json()["id"]
+
+        run = client.post("/runs", json={"document_id": document_id})
+        assert run.status_code == 200
+        _wait_for_run(client, run.json()["id"])
+
+        exported = client.get(f"/documents/{document_id}/export", params={"format": "txt"})
+
+    assert exported.status_code == 200
+    assert exported.headers["content-disposition"] == (
+        'attachment; filename="_bad_name_.txt"; '
+        "filename*=UTF-8''%22bad%3Bname%22.txt"
+    )
+    assert "\r" not in exported.headers["content-disposition"]
+    assert "\n" not in exported.headers["content-disposition"]
 
 
 def test_api_key_auth(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
