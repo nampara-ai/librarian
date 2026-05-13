@@ -1439,6 +1439,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def search(request: SearchRequest) -> SearchResponse:
         document_status = _parse_document_status(request.document_status)
         search_scope = _parse_search_scope(request.scope)
+        _validate_search_date_window(request)
         container = await build_ingest_container(settings)
         try:
             results = await container.search_library.search(
@@ -1476,6 +1477,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def search_results(request: SearchRequest) -> SearchResultsResponse:
         document_status = _parse_document_status(request.document_status)
         search_scope = _parse_search_scope(request.scope)
+        _validate_search_date_window(request)
         container = await build_ingest_container(settings)
         try:
             results = await container.search_library.results(
@@ -1526,6 +1528,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def search_facets(request: SearchRequest) -> SearchFacetsResponse:
         search_scope = _parse_search_scope(request.scope)
         document_status = _parse_document_status(request.document_status)
+        _validate_search_date_window(request)
         container = await build_ingest_container(settings)
         try:
             facets = await container.search_library.facets(
@@ -1712,6 +1715,18 @@ def _parse_search_scope(value: str) -> SearchScope:
     raise HTTPException(status_code=400, detail="Invalid search scope")
 
 
+def _validate_search_date_window(request: SearchRequest) -> None:
+    if (
+        request.created_after is not None
+        and request.created_before is not None
+        and request.created_after > request.created_before
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="created_after must be before or equal to created_before",
+        )
+
+
 def _summary_int(summary: dict[str, object], key: str) -> int:
     value = summary.get(key, 0)
     if isinstance(value, int):
@@ -1874,6 +1889,8 @@ def _api_error_code(*, status_code: int, detail: object) -> str:
             return "invalid_document_status"
         if "search scope" in normalized:
             return "invalid_search_scope"
+        if "created_after" in normalized and "created_before" in normalized:
+            return "invalid_search_window"
         if "archive inputs are not supported" in normalized:
             return "archive_not_supported"
         if "unsupported file extension" in normalized:

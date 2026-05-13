@@ -97,7 +97,9 @@ validated before conversion starts and must not be symlinks or cross symlinked p
   Optional paging and filters: `limit`, `offset`, `classification_code`, `document_status`,
   `filename_contains`, `created_after`, `created_before`, `phrase`, and `scope` (`cleaned` or
   `raw`; default `cleaned`). Responses include `total`, the full matching document count before
-  `limit`/`offset` are applied. Date filters are ISO-8601 document creation timestamps.
+  `limit`/`offset` are applied. Date filters are ISO-8601 document creation timestamps; inverted
+  `created_after`/`created_before` windows return `code: "invalid_search_window"` before storage
+  access.
 - `POST /search/results`: ranked full-text search results with `document_id`, `run_id`,
   source metadata, classification metadata, `source`, `snippet`, and `score`. Raw-source search
   results use `source: "raw"` and `run_id: null`. Snippets escape source markup and preserve

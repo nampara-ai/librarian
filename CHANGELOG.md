@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.0a13 - 2026-05-13
+
+- Rejected inverted API search date windows before storage access so `/search`, `/search/results`,
+  and `/search/facets` return a stable `invalid_search_window` response for impossible ranges.
+
 ## 0.1.0a12 - 2026-05-13
 
 - Validated API export formats before document lookup so unsupported formats return a stable

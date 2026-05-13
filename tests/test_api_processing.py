@@ -2145,6 +2145,39 @@ def test_api_search_rejects_invalid_scope(
     assert response.json()["code"] == "invalid_search_scope"
 
 
+@pytest.mark.parametrize("path", ["/search", "/search/results", "/search/facets"])
+def test_api_search_rejects_inverted_date_window_before_storage(
+    path: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+
+    async def fail_build_container(settings: Settings) -> None:
+        raise AssertionError("invalid search date window should not build a container")
+
+    monkeypatch.setattr(api_app, "build_ingest_container", fail_build_container)
+
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            path,
+            json={
+                "query": "horse",
+                "created_after": "2026-05-13T12:00:00+00:00",
+                "created_before": "2026-05-12T12:00:00+00:00",
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "created_after must be before or equal to created_before",
+        "code": "invalid_search_window",
+    }
+
+
 def test_api_run_events_return_404_for_missing_run(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",
