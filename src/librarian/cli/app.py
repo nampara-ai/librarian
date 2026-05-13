@@ -44,6 +44,7 @@ from librarian.application.import_library import (
     write_import_report,
 )
 from librarian.application.jobs import QueueWorker
+from librarian.application.ports import SearchScope
 from librarian.application.synthetic_corpus import generate_synthetic_corpus
 from librarian.config import Settings
 from librarian.domain.ids import DocumentId, RunId, digest_text
@@ -51,7 +52,7 @@ from librarian.domain.models import DocumentStatus, RunStage, RunStatus
 from librarian.ingest.extractors import CompositeExtractor
 from librarian.llm import LazyLLMProvider
 from librarian.pipeline.chunking import ChunkingPolicy, chunk_text
-from librarian.storage.sqlite import SearchScope, SQLiteDatabase, SQLiteRunQueue
+from librarian.storage.sqlite import SQLiteDatabase, SQLiteRunQueue
 from librarian.version import __version__
 
 app = typer.Typer(no_args_is_help=True)
@@ -912,7 +913,7 @@ def search(
         created_before_filter = _datetime_filter(created_before, option_name="created-before")
         if details:
             try:
-                results = await container.repository.search_results(
+                results = await container.search_library.results(
                     query,
                     limit=limit,
                     offset=offset,
@@ -924,7 +925,7 @@ def search(
                     scope=search_scope,
                     phrase=phrase,
                 )
-                total = await container.repository.search_count(
+                total = await container.search_library.count(
                     query,
                     classification_code=classification_code,
                     document_status=status_filter,
@@ -953,7 +954,7 @@ def search(
             console.print(table)
             return
         try:
-            ids = await container.repository.search(
+            ids = await container.search_library.search(
                 query,
                 limit=limit,
                 offset=offset,

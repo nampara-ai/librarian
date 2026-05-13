@@ -15,6 +15,9 @@
 - Added final-assembly render-quality regression coverage for headings, page
   markers, lists, tables, citations, paragraph boundaries, duplicate boundary
   sentences, and assistant artifact removal.
+- Added an application-layer `SearchIndex` port and `SearchLibrary` service so
+  future semantic or hybrid search adapters can replace SQLite FTS without
+  changing API or CLI routes.
 
 ## 0.1.0a4 - 2026-05-13
 

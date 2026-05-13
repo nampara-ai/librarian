@@ -10,6 +10,7 @@ from librarian.application.clean_chunks import CleanChunks
 from librarian.application.ingest_document import IngestDocument
 from librarian.application.ports import ApplicationMetrics, LLMProvider
 from librarian.application.process_document import ProcessDocument
+from librarian.application.search_library import SearchLibrary
 from librarian.config import Settings
 from librarian.ingest.extractors import CompositeExtractor
 from librarian.llm import LazyLLMProvider, build_provider
@@ -28,6 +29,7 @@ class IngestContainer:
     database: SQLiteDatabase
     repository: SQLiteRepository
     ingest_document: IngestDocument
+    search_library: SearchLibrary
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +80,7 @@ async def build_ingest_container(
         database=database,
         repository=repository,
         ingest_document=ingest,
+        search_library=SearchLibrary(repository),
     )
 
 
@@ -132,6 +135,7 @@ async def build_container(
         database=ingest_container.database,
         repository=repository,
         ingest_document=ingest_container.ingest_document,
+        search_library=ingest_container.search_library,
         process_document=process,
     )
 

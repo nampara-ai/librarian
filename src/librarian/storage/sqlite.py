@@ -11,10 +11,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from importlib.resources import files
 from pathlib import Path
-from typing import Literal, LiteralString
+from typing import LiteralString
 
 from librarian.application.clean_chunks import CleanedChunk
 from librarian.application.jobs import QueuedRun, QueueStatus
+from librarian.application.ports import SearchScope
 from librarian.domain.ids import ChunkId, DocumentId, RunId
 from librarian.domain.models import (
     Chunk,
@@ -37,7 +38,6 @@ _SQLITE_BUSY_TIMEOUT_MS = 5_000
 _MAX_SEARCH_QUERY_CHARS = 4_096
 _MAX_EVENT_PAGE_SIZE = 1_000
 _SEARCH_TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
-SearchScope = Literal["cleaned", "raw"]
 
 
 def _path_crosses_symlink(path: Path) -> bool:

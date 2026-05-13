@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from librarian.domain.ids import DocumentId, RunId
 from librarian.domain.models import (
@@ -16,7 +17,11 @@ from librarian.domain.models import (
     ProcessingRun,
     RunStage,
     RunStatus,
+    SearchFacets,
+    SearchResult,
 )
+
+SearchScope = Literal["cleaned", "raw"]
 
 
 class DocumentRepository(Protocol):
@@ -197,3 +202,69 @@ class OutputRepository(Protocol):
         output: CleanedOutput,
         classification: Classification,
     ) -> None: ...
+
+
+class SearchIndex(Protocol):
+    """Port for full-text or semantic search adapters."""
+
+    async def index(
+        self,
+        output: CleanedOutput,
+        classification: Classification | None,
+    ) -> None: ...
+
+    async def search(
+        self,
+        query: str,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        classification_code: str | None = None,
+        document_status: DocumentStatus | None = None,
+        filename_contains: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        scope: SearchScope = "cleaned",
+        phrase: bool = False,
+    ) -> Sequence[DocumentId]: ...
+
+    async def search_results(
+        self,
+        query: str,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        classification_code: str | None = None,
+        document_status: DocumentStatus | None = None,
+        filename_contains: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        scope: SearchScope = "cleaned",
+        phrase: bool = False,
+    ) -> Sequence[SearchResult]: ...
+
+    async def search_count(
+        self,
+        query: str,
+        *,
+        classification_code: str | None = None,
+        document_status: DocumentStatus | None = None,
+        filename_contains: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        scope: SearchScope = "cleaned",
+        phrase: bool = False,
+    ) -> int: ...
+
+    async def search_facets(
+        self,
+        query: str,
+        *,
+        classification_code: str | None = None,
+        document_status: DocumentStatus | None = None,
+        filename_contains: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        scope: SearchScope = "cleaned",
+        phrase: bool = False,
+    ) -> SearchFacets: ...

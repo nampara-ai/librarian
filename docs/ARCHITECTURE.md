@@ -89,8 +89,11 @@ in SQLite. This keeps the first release portable and easy to back up, but it dup
 payloads. A filesystem or object-store content adapter remains a future option for very large
 hosted deployments; SQLite is still the supported alpha backend.
 
-Search uses SQLite FTS over cleaned outputs. User queries are normalized before `MATCH` so ordinary
-punctuation and hyphenated terms behave like word queries instead of exposing raw FTS syntax.
+Search goes through the application-layer `SearchIndex` port. The default adapter is SQLite FTS over
+cleaned and raw outputs, with snippets, facets, pagination, and filters. User queries are normalized
+before `MATCH` so ordinary punctuation and hyphenated terms behave like word queries instead of
+exposing raw FTS syntax. Future semantic or hybrid indexes should implement the same port rather
+than changing API or CLI route code.
 
 ## Prompt Governance
 

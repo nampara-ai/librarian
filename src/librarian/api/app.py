@@ -37,6 +37,7 @@ from librarian.application.export_document import ExportedDocument
 from librarian.application.factory import build_container, build_ingest_container
 from librarian.application.import_library import ImportLibrary, ImportProcessingMode
 from librarian.application.jobs import InProcessJobRunner
+from librarian.application.ports import SearchScope
 from librarian.config import Settings
 from librarian.domain.ids import DocumentId, RunId
 from librarian.domain.models import (
@@ -57,7 +58,7 @@ from librarian.observability import (
     sanitize_error_message,
     start_request_span,
 )
-from librarian.storage.sqlite import SearchScope, SQLiteDatabase, SQLiteRunQueue
+from librarian.storage.sqlite import SQLiteDatabase, SQLiteRunQueue
 from librarian.taxonomy.dewey import DeweyTaxonomy
 from librarian.version import __version__
 
@@ -1258,7 +1259,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         search_scope = _parse_search_scope(request.scope)
         container = await build_ingest_container(settings)
         try:
-            results = await container.repository.search(
+            results = await container.search_library.search(
                 request.query,
                 limit=request.limit,
                 offset=request.offset,
@@ -1270,7 +1271,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 scope=search_scope,
                 phrase=request.phrase,
             )
-            total = await container.repository.search_count(
+            total = await container.search_library.count(
                 request.query,
                 classification_code=request.classification_code,
                 document_status=document_status,
@@ -1295,7 +1296,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         search_scope = _parse_search_scope(request.scope)
         container = await build_ingest_container(settings)
         try:
-            results = await container.repository.search_results(
+            results = await container.search_library.results(
                 request.query,
                 limit=request.limit,
                 offset=request.offset,
@@ -1307,7 +1308,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 scope=search_scope,
                 phrase=request.phrase,
             )
-            total = await container.repository.search_count(
+            total = await container.search_library.count(
                 request.query,
                 classification_code=request.classification_code,
                 document_status=document_status,
@@ -1345,7 +1346,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         document_status = _parse_document_status(request.document_status)
         container = await build_ingest_container(settings)
         try:
-            facets = await container.repository.search_facets(
+            facets = await container.search_library.facets(
                 request.query,
                 classification_code=request.classification_code,
                 document_status=document_status,
