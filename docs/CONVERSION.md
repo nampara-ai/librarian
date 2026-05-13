@@ -96,6 +96,8 @@ OCR support:
 - Configure language with `LIBRARIAN_OCR_LANGUAGE`, for example `eng` or `eng+spa`.
 - Bound OCR work with `LIBRARIAN_OCR_TIMEOUT_SECONDS`, `LIBRARIAN_OCR_PDF_DPI`, and
   `LIBRARIAN_OCR_PDF_MAX_PAGES`.
+- Improve difficult scans before Tesseract with `LIBRARIAN_OCR_PREPROCESS_MODE=none|grayscale|threshold|deskew`.
+  `threshold` and `deskew` use `LIBRARIAN_OCR_THRESHOLD`, which defaults to `180`.
 
 ## Output Quality Warnings
 
@@ -185,6 +187,8 @@ Markdown:
 export LIBRARIAN_OCR_PDF_MAX_PAGES=1000
 export LIBRARIAN_PDF_MAX_PAGES=1000
 export LIBRARIAN_OCR_PAGE_CONCURRENCY=2
+export LIBRARIAN_OCR_PREPROCESS_MODE=deskew
+export LIBRARIAN_OCR_THRESHOLD=180
 export LIBRARIAN_OCR_LLM_CORRECTION=never
 
 librarian convert ./massive.pdf --format md --output ./massive.md

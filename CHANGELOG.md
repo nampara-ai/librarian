@@ -20,6 +20,8 @@
   changing API or CLI routes.
 - Added release reproducibility notes covering tag/version checks,
   constraints, checksums, attestations, and local rebuild/audit commands.
+- Added opt-in OCR preprocessing controls for grayscale, thresholded, and
+  deskewed image preparation before Tesseract extraction.
 
 ## 0.1.0a4 - 2026-05-13
 

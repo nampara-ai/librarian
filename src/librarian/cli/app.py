@@ -1735,6 +1735,8 @@ def _build_extractor(settings: Settings) -> CompositeExtractor:
         ocr_timeout_seconds=settings.ocr_timeout_seconds,
         ocr_pdf_dpi=settings.ocr_pdf_dpi,
         ocr_pdf_max_pages=settings.ocr_pdf_max_pages,
+        ocr_preprocess_mode=settings.ocr_preprocess_mode,
+        ocr_threshold=settings.ocr_threshold,
         ocr_correction_provider=LazyLLMProvider(settings),
         ocr_correction_mode=settings.ocr_llm_correction,
         ocr_correction_model=settings.ocr_llm_model or settings.llm_model,

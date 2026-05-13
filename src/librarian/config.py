@@ -10,6 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 CoherenceModeSetting = Literal["fast", "balanced", "max-coherence"]
 OcrLlmCorrectionMode = Literal["always", "never", "low-confidence"]
+OcrPreprocessMode = Literal["none", "grayscale", "threshold", "deskew"]
 LogFormatSetting = Literal["json", "text"]
 LogLevelSetting = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 LlmProviderSetting = Literal["mock", "openai-compatible"]
@@ -60,6 +61,8 @@ class Settings(BaseSettings):
     ocr_timeout_seconds: int = Field(default=120, gt=0)
     ocr_pdf_dpi: int = Field(default=200, gt=0)
     ocr_pdf_max_pages: int = Field(default=1_000, gt=0)
+    ocr_preprocess_mode: OcrPreprocessMode = Field(default="none")
+    ocr_threshold: int = Field(default=180, ge=0, le=255)
     ocr_llm_correction: OcrLlmCorrectionMode = Field(default="always")
     ocr_llm_model: str | None = Field(default=None)
     ocr_low_confidence_threshold: float = Field(default=85.0, ge=0, le=100)

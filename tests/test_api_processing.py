@@ -857,6 +857,8 @@ def test_api_config_exposes_operational_controls(tmp_path: Path) -> None:
         llm_max_prompt_chars=87654,
         llm_max_response_chars=98765,
         ocr_language="eng",
+        ocr_preprocess_mode="threshold",
+        ocr_threshold=160,
         otel_service_name="librarian-test",
         universal_timeout_seconds=77,
     )
@@ -877,6 +879,8 @@ def test_api_config_exposes_operational_controls(tmp_path: Path) -> None:
     assert payload["llm_max_prompt_chars"] == 87654
     assert payload["llm_max_response_chars"] == 98765
     assert payload["ocr_language"] == "eng"
+    assert payload["ocr_preprocess_mode"] == "threshold"
+    assert payload["ocr_threshold"] == 160
     assert payload["cleaning_prompt_version"] == "cmos_v2"
     assert payload["classification_prompt_version"] == "dewey_v2"
     assert payload["universal_timeout_seconds"] == 77

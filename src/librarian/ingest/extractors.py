@@ -22,6 +22,7 @@ IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", 
 ARCHIVE_EXTENSIONS = frozenset({".zip", ".tar", ".tgz", ".gz", ".bz2", ".xz", ".7z", ".rar"})
 _MAX_PDF_PAGE_MANIFEST_BYTES = 256 * 1024 * 1024
 OcrCorrectionMode = Literal["always", "never", "low-confidence"]
+OcrPreprocessMode = Literal["none", "grayscale", "threshold", "deskew"]
 
 OCR_CORRECTION_PROMPT = """You are correcting OCR text extracted from a PDF page.
 Preserve every detail, name, number, heading, and paragraph. Fix OCR recognition errors,
@@ -151,6 +152,8 @@ class PdfExtractor:
         ocr_timeout_seconds: int = 120,
         ocr_pdf_dpi: int = 200,
         ocr_pdf_max_pages: int = 1_000,
+        ocr_preprocess_mode: OcrPreprocessMode = "none",
+        ocr_threshold: int = 180,
         ocr_correction_provider: OcrCorrectionProvider | None = None,
         ocr_correction_mode: OcrCorrectionMode = "always",
         ocr_correction_model: str = "mock-cleaner",
@@ -166,6 +169,9 @@ class PdfExtractor:
         self.ocr_timeout_seconds = ocr_timeout_seconds
         self.ocr_pdf_dpi = ocr_pdf_dpi
         self.ocr_pdf_max_pages = ocr_pdf_max_pages
+        _validate_ocr_preprocess_config(ocr_preprocess_mode, threshold=ocr_threshold)
+        self.ocr_preprocess_mode: OcrPreprocessMode = ocr_preprocess_mode
+        self.ocr_threshold = ocr_threshold
         self.ocr_correction_provider = ocr_correction_provider
         self.ocr_correction_mode = ocr_correction_mode
         self.ocr_correction_model = ocr_correction_model
@@ -255,6 +261,8 @@ class PdfExtractor:
                         language=self.ocr_language,
                         timeout_seconds=self.ocr_timeout_seconds,
                         dpi=self.ocr_pdf_dpi,
+                        preprocess_mode=self.ocr_preprocess_mode,
+                        threshold=self.ocr_threshold,
                     )
                     ocr_result = _coerce_ocr_result(ocr_result_obj)
                     corrected = await self._correct_ocr_page(
@@ -365,6 +373,8 @@ class PdfExtractor:
             "ocr_language": self.ocr_language,
             "ocr_timeout_seconds": self.ocr_timeout_seconds,
             "ocr_pdf_dpi": self.ocr_pdf_dpi,
+            "ocr_preprocess_mode": self.ocr_preprocess_mode,
+            "ocr_threshold": self.ocr_threshold,
             "ocr_correction_mode": self.ocr_correction_mode,
             "ocr_correction_model": self.ocr_correction_model,
             "ocr_low_confidence_threshold": self.ocr_low_confidence_threshold,
@@ -395,6 +405,8 @@ class PdfExtractor:
                         language=self.ocr_language,
                         timeout_seconds=self.ocr_timeout_seconds,
                         dpi=self.ocr_pdf_dpi,
+                        preprocess_mode=self.ocr_preprocess_mode,
+                        threshold=self.ocr_threshold,
                     )
                 )
             except (RuntimeError, ValueError) as exc:
@@ -511,9 +523,19 @@ class ImageOcrExtractor:
 
     supported_extensions = IMAGE_EXTENSIONS
 
-    def __init__(self, *, language: str = "eng", timeout_seconds: int = 120) -> None:
+    def __init__(
+        self,
+        *,
+        language: str = "eng",
+        timeout_seconds: int = 120,
+        preprocess_mode: OcrPreprocessMode = "none",
+        threshold: int = 180,
+    ) -> None:
         self.language = language
         self.timeout_seconds = timeout_seconds
+        _validate_ocr_preprocess_config(preprocess_mode, threshold=threshold)
+        self.preprocess_mode: OcrPreprocessMode = preprocess_mode
+        self.threshold = threshold
 
     async def extract(self, path: Path) -> str:
         return await asyncio.to_thread(
@@ -521,6 +543,8 @@ class ImageOcrExtractor:
             path,
             language=self.language,
             timeout_seconds=self.timeout_seconds,
+            preprocess_mode=self.preprocess_mode,
+            threshold=self.threshold,
         )
 
 
@@ -595,6 +619,8 @@ class CompositeExtractor:
         ocr_timeout_seconds: int = 120,
         ocr_pdf_dpi: int = 200,
         ocr_pdf_max_pages: int = 1_000,
+        ocr_preprocess_mode: OcrPreprocessMode = "none",
+        ocr_threshold: int = 180,
         ocr_correction_provider: OcrCorrectionProvider | None = None,
         ocr_correction_mode: OcrCorrectionMode = "always",
         ocr_correction_model: str = "mock-cleaner",
@@ -618,6 +644,8 @@ class CompositeExtractor:
                 ocr_timeout_seconds=ocr_timeout_seconds,
                 ocr_pdf_dpi=ocr_pdf_dpi,
                 ocr_pdf_max_pages=ocr_pdf_max_pages,
+                ocr_preprocess_mode=ocr_preprocess_mode,
+                ocr_threshold=ocr_threshold,
                 ocr_correction_provider=ocr_correction_provider,
                 ocr_correction_mode=ocr_correction_mode,
                 ocr_correction_model=ocr_correction_model,
@@ -629,7 +657,12 @@ class CompositeExtractor:
                 max_pages=pdf_max_pages,
                 metrics=metrics,
             ),
-            ImageOcrExtractor(language=ocr_language, timeout_seconds=ocr_timeout_seconds),
+            ImageOcrExtractor(
+                language=ocr_language,
+                timeout_seconds=ocr_timeout_seconds,
+                preprocess_mode=ocr_preprocess_mode,
+                threshold=ocr_threshold,
+            ),
             MarkItDownExtractor(
                 max_input_bytes=universal_max_input_bytes,
                 timeout_seconds=universal_timeout_seconds,
@@ -663,17 +696,30 @@ class CompositeExtractor:
                 setter(path)
 
 
-def _ocr_image(path: Path, *, language: str = "eng", timeout_seconds: int = 120) -> str:
+def _ocr_image(
+    path: Path,
+    *,
+    language: str = "eng",
+    timeout_seconds: int = 120,
+    preprocess_mode: OcrPreprocessMode = "none",
+    threshold: int = 180,
+) -> str:
     tesseract_path = shutil.which("tesseract")
     if tesseract_path is None:
         raise RuntimeError("OCR requires the 'tesseract' executable on PATH")
-    completed = subprocess.run(  # noqa: S603
-        [tesseract_path, str(path), "stdout", "-l", language],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=timeout_seconds,
-    )
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        prepared_path = _prepare_ocr_image(
+            path,
+            output_dir=Path(tmp_dir),
+            preprocess_mode=preprocess_mode,
+            threshold=threshold,
+        )
+        completed = _run_tesseract(
+            prepared_path,
+            tesseract_path=tesseract_path,
+            language=language,
+            timeout_seconds=timeout_seconds,
+        )
     text = completed.stdout.strip()
     if not text:
         raise ValueError(f"No OCR text found in image: {path}")
@@ -685,16 +731,36 @@ def _ocr_image_result(
     *,
     language: str = "eng",
     timeout_seconds: int = 120,
+    preprocess_mode: OcrPreprocessMode = "none",
+    threshold: int = 180,
 ) -> OcrTextResult:
-    text = _ocr_image(path, language=language, timeout_seconds=timeout_seconds)
-    try:
-        confidence = _ocr_image_confidence(
+    tesseract_path = shutil.which("tesseract")
+    if tesseract_path is None:
+        raise RuntimeError("OCR requires the 'tesseract' executable on PATH")
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        prepared_path = _prepare_ocr_image(
             path,
+            output_dir=Path(tmp_dir),
+            preprocess_mode=preprocess_mode,
+            threshold=threshold,
+        )
+        completed = _run_tesseract(
+            prepared_path,
+            tesseract_path=tesseract_path,
             language=language,
             timeout_seconds=timeout_seconds,
         )
-    except Exception:
-        confidence = None
+        text = completed.stdout.strip()
+        if not text:
+            raise ValueError(f"No OCR text found in image: {path}")
+        try:
+            confidence = _ocr_image_confidence(
+                prepared_path,
+                language=language,
+                timeout_seconds=timeout_seconds,
+            )
+        except Exception:
+            confidence = None
     return OcrTextResult(text=text, confidence=confidence)
 
 
@@ -707,14 +773,108 @@ def _ocr_image_confidence(
     tesseract_path = shutil.which("tesseract")
     if tesseract_path is None:
         raise RuntimeError("OCR requires the 'tesseract' executable on PATH")
-    completed = subprocess.run(  # noqa: S603
-        [tesseract_path, str(path), "stdout", "-l", language, "tsv"],
+    completed = _run_tesseract(
+        path,
+        tesseract_path=tesseract_path,
+        language=language,
+        timeout_seconds=timeout_seconds,
+        output_format="tsv",
+    )
+    return parse_tesseract_tsv_confidence(completed.stdout)
+
+
+def _run_tesseract(
+    path: Path,
+    *,
+    tesseract_path: str,
+    language: str,
+    timeout_seconds: int,
+    output_format: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    command = [tesseract_path, str(path), "stdout", "-l", language]
+    if output_format is not None:
+        command.append(output_format)
+    return subprocess.run(  # noqa: S603
+        command,
         check=True,
         capture_output=True,
         text=True,
         timeout=timeout_seconds,
     )
-    return parse_tesseract_tsv_confidence(completed.stdout)
+
+
+def _prepare_ocr_image(
+    path: Path,
+    *,
+    output_dir: Path,
+    preprocess_mode: OcrPreprocessMode,
+    threshold: int,
+) -> Path:
+    _validate_ocr_preprocess_config(preprocess_mode, threshold=threshold)
+    if preprocess_mode == "none":
+        return path
+    try:
+        image_module = importlib.import_module("PIL.Image")
+    except ImportError as exc:
+        raise RuntimeError("OCR preprocessing requires installing the 'ocr' extra") from exc
+
+    image = image_module.open(path)
+    grayscale = image.convert("L")
+    if preprocess_mode == "grayscale":
+        prepared = grayscale
+    else:
+        prepared = _threshold_ocr_image(grayscale, threshold=threshold)
+        if preprocess_mode == "deskew":
+            prepared = _deskew_ocr_image(prepared, threshold=threshold)
+    prepared_path = output_dir / f"{path.stem}.ocr-preprocessed.png"
+    prepared.save(prepared_path)
+    return prepared_path
+
+
+def _validate_ocr_preprocess_config(preprocess_mode: str, *, threshold: int) -> None:
+    if preprocess_mode not in {"none", "grayscale", "threshold", "deskew"}:
+        raise ValueError(f"Unsupported OCR preprocessing mode: {preprocess_mode}")
+    if threshold < 0 or threshold > 255:
+        raise ValueError("OCR threshold must be between 0 and 255")
+
+
+def _threshold_ocr_image(image: Any, *, threshold: int) -> Any:
+    def binarize(pixel: int) -> int:
+        return 255 if pixel > threshold else 0
+
+    return image.point(binarize, mode="1").convert("L")
+
+
+def _deskew_ocr_image(image: Any, *, threshold: int) -> Any:
+    angles = [angle / 2 for angle in range(-10, 11)]
+    best_angle = max(angles, key=lambda angle: _ocr_deskew_score(image, angle, threshold=threshold))
+    if abs(best_angle) < 0.01:
+        return image
+    image_module = importlib.import_module("PIL.Image")
+    resampling = getattr(image_module, "Resampling", None)
+    resample = resampling.BICUBIC if resampling is not None else image_module.BICUBIC
+    return image.rotate(
+        best_angle,
+        resample=resample,
+        expand=True,
+        fillcolor=255,
+    )
+
+
+def _ocr_deskew_score(image: Any, angle: float, *, threshold: int) -> float:
+    rotated = image.rotate(angle, expand=True, fillcolor=255).convert("L")
+    width, height = rotated.size
+    if width == 0 or height == 0:
+        return 0.0
+    data = rotated.tobytes()
+    row_counts = [
+        sum(1 for pixel in data[row * width : (row + 1) * width] if pixel <= threshold)
+        for row in range(height)
+    ]
+    if not any(row_counts):
+        return 0.0
+    mean = sum(row_counts) / len(row_counts)
+    return sum((count - mean) ** 2 for count in row_counts) / len(row_counts)
 
 
 def parse_tesseract_tsv_confidence(tsv: str) -> float | None:
@@ -752,6 +912,8 @@ def _ocr_pdf(
     timeout_seconds: int = 120,
     dpi: int = 200,
     max_pages: int = 100,
+    preprocess_mode: OcrPreprocessMode = "none",
+    threshold: int = 180,
 ) -> str:
     if shutil.which("tesseract") is None:
         raise RuntimeError("Scanned PDF OCR requires the 'tesseract' executable on PATH")
@@ -774,7 +936,13 @@ def _ocr_pdf(
             ),
         )
         parts = [
-            _ocr_image(image_path, language=language, timeout_seconds=timeout_seconds)
+            _ocr_image(
+                image_path,
+                language=language,
+                timeout_seconds=timeout_seconds,
+                preprocess_mode=preprocess_mode,
+                threshold=threshold,
+            )
             for image_path in image_paths
         ]
 
@@ -791,6 +959,8 @@ def _ocr_pdf_page(
     language: str = "eng",
     timeout_seconds: int = 120,
     dpi: int = 200,
+    preprocess_mode: OcrPreprocessMode = "none",
+    threshold: int = 180,
 ) -> OcrTextResult:
     if shutil.which("tesseract") is None:
         raise RuntimeError("Scanned PDF OCR requires the 'tesseract' executable on PATH")
@@ -814,7 +984,13 @@ def _ocr_pdf_page(
             ),
         )
         results = [
-            _ocr_image_result(image_path, language=language, timeout_seconds=timeout_seconds)
+            _ocr_image_result(
+                image_path,
+                language=language,
+                timeout_seconds=timeout_seconds,
+                preprocess_mode=preprocess_mode,
+                threshold=threshold,
+            )
             for image_path in image_paths
         ]
     text = "\n\n".join(result.text for result in results if result.text.strip())

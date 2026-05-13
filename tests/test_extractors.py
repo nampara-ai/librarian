@@ -261,13 +261,13 @@ async def test_pdf_ocr_passes_timeout_to_rasterizer(
     def fake_which(name: str) -> str:
         return f"/usr/bin/{name}"
 
-    def fake_ocr_image(*args: object, **kwargs: object) -> str:
+    def fake_ocr_image_result(*args: object, **kwargs: object) -> OcrTextResult:
         del args, kwargs
-        return "OCR text"
+        return OcrTextResult(text="OCR text")
 
     monkeypatch.setattr(shutil, "which", fake_which)
     monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
-    monkeypatch.setattr("librarian.ingest.extractors._ocr_image", fake_ocr_image)
+    monkeypatch.setattr("librarian.ingest.extractors._ocr_image_result", fake_ocr_image_result)
 
     text = await PdfExtractor(ocr_timeout_seconds=9, ocr_correction_mode="never").extract(path)
 
@@ -1059,6 +1059,99 @@ def test_parse_tesseract_tsv_confidence_averages_word_confidence() -> None:
     )
 
     assert extractors.parse_tesseract_tsv_confidence(tsv) == 85.5
+
+
+@pytest.mark.asyncio
+async def test_image_ocr_applies_threshold_preprocessing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image_module = pytest.importorskip("PIL.Image")
+    source = tmp_path / "scan.png"
+    image = image_module.new("L", (2, 1))
+    image.putdata([40, 220])
+    image.save(source)
+
+    def fake_run_tesseract(path: Path, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        output = image_module.open(path).convert("L")
+        assert list(output.tobytes()) == [0, 255]
+        return subprocess.CompletedProcess(args=["tesseract"], returncode=0, stdout="OCR text\n")
+
+    def fake_which(name: str) -> str:
+        return name
+
+    monkeypatch.setattr(extractors.shutil, "which", fake_which)
+    monkeypatch.setattr("librarian.ingest.extractors._run_tesseract", fake_run_tesseract)
+
+    text = await ImageOcrExtractor(preprocess_mode="threshold", threshold=180).extract(source)
+
+    assert text == "OCR text"
+
+
+@pytest.mark.asyncio
+async def test_pdf_extractor_passes_ocr_preprocessing_options(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "fixture.pdf"
+    path.write_bytes(b"%PDF")
+    seen: dict[str, object] = {}
+
+    class FakePage:
+        @staticmethod
+        def extract_text() -> None:
+            return None
+
+    class FakePdf:
+        pages = [FakePage()]
+
+        def __enter__(self) -> "FakePdf":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(path: Path) -> FakePdf:
+            del path
+            return FakePdf()
+
+    def fake_import_module(name: str) -> object:
+        if name == "pdfplumber":
+            return FakePdfPlumber
+        return __import__(name)
+
+    def fake_ocr_pdf_page(*args: object, **kwargs: object) -> OcrTextResult:
+        del args
+        seen.update(kwargs)
+        return OcrTextResult(text="OCR raw", confidence=92.0)
+
+    monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", fake_ocr_pdf_page)
+
+    extractor = PdfExtractor(
+        ocr_correction_mode="never",
+        ocr_preprocess_mode="deskew",
+        ocr_threshold=155,
+    )
+    await extractor.extract(path)
+
+    assert seen["preprocess_mode"] == "deskew"
+    assert seen["threshold"] == 155
+    assert extractor.last_metadata is not None
+    assert extractor.last_metadata["extraction_config"] == {
+        "ocr_language": "eng",
+        "ocr_timeout_seconds": 120,
+        "ocr_pdf_dpi": 200,
+        "ocr_preprocess_mode": "deskew",
+        "ocr_threshold": 155,
+        "ocr_correction_mode": "never",
+        "ocr_correction_model": "mock-cleaner",
+        "ocr_low_confidence_threshold": 85.0,
+        "ocr_max_correction_response_chars": 2 * 1024 * 1024,
+    }
 
 
 @pytest.mark.asyncio
