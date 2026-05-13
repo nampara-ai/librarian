@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     ocr_pdf_max_pages: int = Field(default=1_000, gt=0)
     ocr_preprocess_mode: OcrPreprocessMode = Field(default="none")
     ocr_threshold: int = Field(default=180, ge=0, le=255)
+    ocr_preserve_page_images: bool = Field(default=False)
     ocr_llm_correction: OcrLlmCorrectionMode = Field(default="always")
     ocr_llm_model: str | None = Field(default=None)
     ocr_low_confidence_threshold: float = Field(default=85.0, ge=0, le=100)

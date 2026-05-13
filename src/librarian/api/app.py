@@ -362,6 +362,7 @@ class ConfigResponse(BaseModel):
     ocr_pdf_max_pages: int
     ocr_preprocess_mode: str
     ocr_threshold: int
+    ocr_preserve_page_images: bool
     ocr_llm_correction: str
     ocr_llm_model: str | None
     ocr_low_confidence_threshold: float
@@ -1449,6 +1450,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ocr_pdf_max_pages=settings.ocr_pdf_max_pages,
             ocr_preprocess_mode=settings.ocr_preprocess_mode,
             ocr_threshold=settings.ocr_threshold,
+            ocr_preserve_page_images=settings.ocr_preserve_page_images,
             ocr_llm_correction=settings.ocr_llm_correction,
             ocr_llm_model=settings.ocr_llm_model,
             ocr_low_confidence_threshold=settings.ocr_low_confidence_threshold,
@@ -1909,6 +1911,7 @@ def _build_extractor(
         ocr_pdf_max_pages=settings.ocr_pdf_max_pages,
         ocr_preprocess_mode=settings.ocr_preprocess_mode,
         ocr_threshold=settings.ocr_threshold,
+        ocr_preserve_page_images=settings.ocr_preserve_page_images,
         ocr_correction_provider=LazyLLMProvider(settings, metrics=metrics),
         ocr_correction_mode=settings.ocr_llm_correction,
         ocr_correction_model=settings.ocr_llm_model or settings.llm_model,

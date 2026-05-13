@@ -26,6 +26,8 @@
   generation and the shipped synthetic corpus eval suite.
 - Added redacted API security audit log events for authentication failures,
   scope denials, and rate-limit denials.
+- Added an opt-in OCR page-image preservation setting for sidecar-backed PDF
+  page manifests.
 
 ## 0.1.0a4 - 2026-05-13
 

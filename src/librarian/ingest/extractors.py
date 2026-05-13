@@ -71,6 +71,7 @@ class PdfPageExtraction:
     corrected: bool = False
     error: str | None = None
     raw_text: str | None = None
+    image_path: str | None = None
     warnings: tuple[str, ...] = ()
     attempts: int = 0
     duration_ms: float | None = None
@@ -82,6 +83,7 @@ class OcrTextResult:
 
     text: str
     confidence: float | None = None
+    image_path: str | None = None
 
 
 class TextFamilyExtractor:
@@ -154,6 +156,7 @@ class PdfExtractor:
         ocr_pdf_max_pages: int = 1_000,
         ocr_preprocess_mode: OcrPreprocessMode = "none",
         ocr_threshold: int = 180,
+        ocr_preserve_page_images: bool = False,
         ocr_correction_provider: OcrCorrectionProvider | None = None,
         ocr_correction_mode: OcrCorrectionMode = "always",
         ocr_correction_model: str = "mock-cleaner",
@@ -172,6 +175,7 @@ class PdfExtractor:
         _validate_ocr_preprocess_config(ocr_preprocess_mode, threshold=ocr_threshold)
         self.ocr_preprocess_mode: OcrPreprocessMode = ocr_preprocess_mode
         self.ocr_threshold = ocr_threshold
+        self.ocr_preserve_page_images = ocr_preserve_page_images
         self.ocr_correction_provider = ocr_correction_provider
         self.ocr_correction_mode = ocr_correction_mode
         self.ocr_correction_model = ocr_correction_model
@@ -263,6 +267,7 @@ class PdfExtractor:
                         dpi=self.ocr_pdf_dpi,
                         preprocess_mode=self.ocr_preprocess_mode,
                         threshold=self.ocr_threshold,
+                        image_artifact_path=self._ocr_page_image_artifact_path(page_number),
                     )
                     ocr_result = _coerce_ocr_result(ocr_result_obj)
                     corrected = await self._correct_ocr_page(
@@ -279,6 +284,7 @@ class PdfExtractor:
                         confidence=ocr_result.confidence,
                         corrected=corrected_page,
                         raw_text=ocr_result.text,
+                        image_path=ocr_result.image_path,
                         attempts=previous_attempts.get(page_number, 0) + 1,
                         duration_ms=duration_ms,
                         warnings=_ocr_page_warnings(
@@ -346,6 +352,7 @@ class PdfExtractor:
                     "warnings": list(page.warnings),
                     "attempts": page.attempts,
                     "duration_ms": page.duration_ms,
+                    "image_path": page.image_path,
                 }
                 for page in final_pages
             ],
@@ -375,6 +382,7 @@ class PdfExtractor:
             "ocr_pdf_dpi": self.ocr_pdf_dpi,
             "ocr_preprocess_mode": self.ocr_preprocess_mode,
             "ocr_threshold": self.ocr_threshold,
+            "ocr_preserve_page_images": self.ocr_preserve_page_images,
             "ocr_correction_mode": self.ocr_correction_mode,
             "ocr_correction_model": self.ocr_correction_model,
             "ocr_low_confidence_threshold": self.ocr_low_confidence_threshold,
@@ -407,6 +415,7 @@ class PdfExtractor:
                         dpi=self.ocr_pdf_dpi,
                         preprocess_mode=self.ocr_preprocess_mode,
                         threshold=self.ocr_threshold,
+                        image_artifact_path=None,
                     )
                 )
             except (RuntimeError, ValueError) as exc:
@@ -419,6 +428,7 @@ class PdfExtractor:
                 source="ocr",
                 confidence=ocr_result.confidence,
                 raw_text=ocr_result.text,
+                image_path=ocr_result.image_path,
                 warnings=_ocr_page_warnings(
                     confidence=ocr_result.confidence,
                     low_confidence_threshold=self.ocr_low_confidence_threshold,
@@ -439,11 +449,19 @@ class PdfExtractor:
                     "warnings": list(page.warnings),
                     "attempts": page.attempts,
                     "duration_ms": page.duration_ms,
+                    "image_path": page.image_path,
                 }
                 for page in page_outputs
             ],
         }
         return render_pdf_pages_markdown(path, page_outputs)
+
+    def _ocr_page_image_artifact_path(self, page_number: int) -> Path | None:
+        if not self.ocr_preserve_page_images or self.page_manifest_path is None:
+            return None
+        return self.page_manifest_path.with_name(
+            f"{self.page_manifest_path.stem}.page-{page_number:04d}.png"
+        )
 
     def _extract_embedded_pages(self, path: Path) -> tuple[list[PdfPageExtraction], int]:
         try:
@@ -621,6 +639,7 @@ class CompositeExtractor:
         ocr_pdf_max_pages: int = 1_000,
         ocr_preprocess_mode: OcrPreprocessMode = "none",
         ocr_threshold: int = 180,
+        ocr_preserve_page_images: bool = False,
         ocr_correction_provider: OcrCorrectionProvider | None = None,
         ocr_correction_mode: OcrCorrectionMode = "always",
         ocr_correction_model: str = "mock-cleaner",
@@ -646,6 +665,7 @@ class CompositeExtractor:
                 ocr_pdf_max_pages=ocr_pdf_max_pages,
                 ocr_preprocess_mode=ocr_preprocess_mode,
                 ocr_threshold=ocr_threshold,
+                ocr_preserve_page_images=ocr_preserve_page_images,
                 ocr_correction_provider=ocr_correction_provider,
                 ocr_correction_mode=ocr_correction_mode,
                 ocr_correction_model=ocr_correction_model,
@@ -961,6 +981,7 @@ def _ocr_pdf_page(
     dpi: int = 200,
     preprocess_mode: OcrPreprocessMode = "none",
     threshold: int = 180,
+    image_artifact_path: Path | None = None,
 ) -> OcrTextResult:
     if shutil.which("tesseract") is None:
         raise RuntimeError("Scanned PDF OCR requires the 'tesseract' executable on PATH")
@@ -993,12 +1014,28 @@ def _ocr_pdf_page(
             )
             for image_path in image_paths
         ]
+        preserved_image_path = None
+        if image_artifact_path is not None and image_paths:
+            _copy_ocr_page_image(image_paths[0], image_artifact_path)
+            preserved_image_path = str(image_artifact_path)
     text = "\n\n".join(result.text for result in results if result.text.strip())
     if not text:
         raise ValueError(f"No OCR text found on PDF page {page_number}: {path}")
     confidences = [result.confidence for result in results if result.confidence is not None]
     confidence = sum(confidences) / len(confidences) if confidences else None
-    return OcrTextResult(text=text, confidence=confidence)
+    return OcrTextResult(text=text, confidence=confidence, image_path=preserved_image_path)
+
+
+def _copy_ocr_page_image(source_path: Path, destination_path: Path) -> None:
+    _reject_symlinked_output_path(destination_path)
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = destination_path.with_name(f".{destination_path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        shutil.copyfile(source_path, temporary_path)
+        temporary_path.replace(destination_path)
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def _coerce_ocr_result(value: OcrTextResult | str) -> OcrTextResult:
@@ -1075,6 +1112,7 @@ async def _write_pdf_page_manifest(
                 "duration_ms": page.duration_ms,
                 "raw_text": page.raw_text,
                 "corrected_text": page.text if page.corrected else None,
+                "image_path": page.image_path,
                 "text": page.text,
             }
         )
@@ -1160,6 +1198,7 @@ def _reusable_manifest_pages(
             confidence=cast(float | None, item.get("confidence")),
             corrected=item.get("corrected") is True,
             raw_text=cast(str | None, item.get("raw_text")),
+            image_path=cast(str | None, item.get("image_path")),
             warnings=_manifest_warnings(item.get("warnings")),
             attempts=_manifest_attempt_count(item.get("attempts")),
             duration_ms=_manifest_duration_ms(item.get("duration_ms")),

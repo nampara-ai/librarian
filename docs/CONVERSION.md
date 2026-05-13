@@ -98,6 +98,8 @@ OCR support:
   `LIBRARIAN_OCR_PDF_MAX_PAGES`.
 - Improve difficult scans before Tesseract with `LIBRARIAN_OCR_PREPROCESS_MODE=none|grayscale|threshold|deskew`.
   `threshold` and `deskew` use `LIBRARIAN_OCR_THRESHOLD`, which defaults to `180`.
+- Preserve rasterized page images for debugging with `LIBRARIAN_OCR_PRESERVE_PAGE_IMAGES=true`.
+  This only writes page images when conversion sidecars are enabled.
 
 ## Output Quality Warnings
 
@@ -126,6 +128,8 @@ can audit raw-vs-corrected output after long runs. If conversion is retried with
 OCR settings, completed pages are reused instead of OCRed again. Recursive conversion/import treats
 these manifests as Librarian metadata and skips them. Existing page manifests are capped at 256 MiB
 when read for resume or inspection.
+When `LIBRARIAN_OCR_PRESERVE_PAGE_IMAGES=true`, OCR page records also include `image_path` values
+pointing at same-directory raster image artifacts for visual debugging.
 Scanned pages are written as `pending` before OCR begins; failed pages retain the error, warning
 codes, elapsed OCR duration, and retry `attempts`. Resumed extraction increments attempts while
 replaying only unfinished or failed OCR pages.

@@ -56,6 +56,7 @@ async def build_ingest_container(
         ocr_pdf_max_pages=resolved_settings.ocr_pdf_max_pages,
         ocr_preprocess_mode=resolved_settings.ocr_preprocess_mode,
         ocr_threshold=resolved_settings.ocr_threshold,
+        ocr_preserve_page_images=resolved_settings.ocr_preserve_page_images,
         ocr_correction_provider=LazyLLMProvider(resolved_settings, metrics=metrics),
         ocr_correction_mode=resolved_settings.ocr_llm_correction,
         ocr_correction_model=resolved_settings.ocr_llm_model or resolved_settings.llm_model,

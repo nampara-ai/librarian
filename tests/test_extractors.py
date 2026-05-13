@@ -2,7 +2,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -818,6 +818,67 @@ async def test_pdf_page_manifest_preserves_raw_and_corrected_ocr_text(
 
 
 @pytest.mark.asyncio
+async def test_pdf_page_manifest_records_preserved_page_image_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "fixture.pdf"
+    manifest = tmp_path / "fixture.md.pages.json"
+    path.write_bytes(b"%PDF")
+
+    class FakePage:
+        @staticmethod
+        def extract_text() -> None:
+            return None
+
+    class FakePdf:
+        pages = [FakePage()]
+
+        def __enter__(self) -> "FakePdf":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(path: Path) -> FakePdf:
+            del path
+            return FakePdf()
+
+    def fake_import_module(name: str) -> object:
+        if name == "pdfplumber":
+            return FakePdfPlumber
+        return __import__(name)
+
+    def fake_ocr_pdf_page(*args: object, **kwargs: object) -> OcrTextResult:
+        del args
+        image_path = kwargs["image_artifact_path"]
+        assert image_path == tmp_path / "fixture.md.pages.page-0001.png"
+        return OcrTextResult(text="OCR raw", confidence=90.0, image_path=str(image_path))
+
+    monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", fake_ocr_pdf_page)
+
+    extractor = PdfExtractor(
+        ocr_correction_mode="never",
+        ocr_preserve_page_images=True,
+    )
+    extractor.set_page_manifest_path(manifest)
+    await extractor.extract(path)
+
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    page = payload["pages"][0]
+    assert page["image_path"] == str(tmp_path / "fixture.md.pages.page-0001.png")
+    assert extractor.last_metadata is not None
+    metadata_pages = extractor.last_metadata["pages"]
+    assert isinstance(metadata_pages, list)
+    metadata_page = cast(dict[str, object], metadata_pages[0])
+    assert isinstance(metadata_page, dict)
+    assert metadata_page["image_path"] == str(tmp_path / "fixture.md.pages.page-0001.png")
+
+
+@pytest.mark.asyncio
 async def test_pdf_extractor_rejects_oversized_ocr_correction(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1147,6 +1208,7 @@ async def test_pdf_extractor_passes_ocr_preprocessing_options(
         "ocr_pdf_dpi": 200,
         "ocr_preprocess_mode": "deskew",
         "ocr_threshold": 155,
+        "ocr_preserve_page_images": False,
         "ocr_correction_mode": "never",
         "ocr_correction_model": "mock-cleaner",
         "ocr_low_confidence_threshold": 85.0,
