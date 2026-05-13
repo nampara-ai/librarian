@@ -161,7 +161,7 @@ def test_release_workflow_runs_synthetic_corpus_eval_before_build() -> None:
     assert "--corpus-eval release-evidence/corpus-eval-mock.json" in workflow
     assert "--benchmark release-evidence/benchmark-mock.json" in workflow
     assert "--version \"$GITHUB_REF_NAME\"" in workflow
-    assert "--min-corpus-cases 8" in workflow
+    assert "--min-corpus-cases 11" in workflow
     assert "--min-corpus-search-recall 1.0" in workflow
     assert "--min-corpus-output-ratio 0.05" in workflow
     assert "--min-benchmark-cps 1000" in workflow

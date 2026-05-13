@@ -1051,6 +1051,42 @@ def test_cli_generate_corpus_can_include_scanned_pdf_fixtures(tmp_path: Path) ->
     assert "canter transitions" not in extracted
 
 
+def test_cli_generate_corpus_can_include_noisy_ocr_pdf_fixture(tmp_path: Path) -> None:
+    runner = CliRunner()
+    output_dir = tmp_path / "synthetic"
+
+    result = runner.invoke(
+        app,
+        [
+            "generate-corpus",
+            "--output-dir",
+            str(output_dir),
+            "--documents",
+            "1",
+            "--paragraphs",
+            "2",
+            "--paragraph-sentences",
+            "1",
+            "--include-noisy-ocr-pdf",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Generated 2 synthetic document(s)" in result.output
+    payload = json.loads((output_dir / "corpus_eval_cases.json").read_text(encoding="utf-8"))
+    noisy_cases = [case for case in payload["cases"] if "noisy-ocr" in case["tags"]]
+    assert len(noisy_cases) == 1
+    noisy_pdf = output_dir / noisy_cases[0]["source_path"]
+    assert noisy_pdf.exists()
+    assert noisy_pdf.suffix == ".pdf"
+    assert noisy_cases[0]["expected_page_count"] == 1
+    assert "canter transitions" in noisy_cases[0]["expected_contains"]
+    pdfplumber = pytest.importorskip("pdfplumber")
+    with pdfplumber.open(noisy_pdf) as pdf:
+        extracted = "\n".join(page.extract_text() or "" for page in pdf.pages)
+    assert "canter transitions" not in extracted
+
+
 def test_cli_generate_corpus_rejects_symlink_suite_path(tmp_path: Path) -> None:
     runner = CliRunner()
     output_dir = tmp_path / "synthetic"

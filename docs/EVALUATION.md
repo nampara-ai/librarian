@@ -176,6 +176,7 @@ librarian generate-corpus \
   --include-docx \
   --include-pdf \
   --include-scanned-pdf \
+  --include-noisy-ocr-pdf \
   --overwrite
 
 librarian corpus-eval .librarian/synthetic-corpus/corpus_eval_cases.json \
@@ -188,5 +189,7 @@ Scale `--documents`, `--paragraphs`, and `--paragraph-sentences` to approximate 
 Use `--include-docx` to add sanitized DOCX fixtures with body paragraphs, tables, headers, and
 footers, `--include-pdf` to add embedded-text PDF fixtures with expected page counts, and
 `--include-scanned-pdf` to add image-only and mixed embedded/scanned PDF fixtures that exercise OCR
-page recovery. The generated cases include stable search phrases and classification expectations so
-results are comparable across commits and provider configurations.
+page recovery. Add `--include-noisy-ocr-pdf` to include a deterministic mildly skewed, speckled,
+low-contrast scanned page for OCR quality regressions. The generated cases include stable search
+phrases and classification expectations so results are comparable across commits and provider
+configurations.

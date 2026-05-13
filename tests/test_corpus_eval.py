@@ -230,6 +230,7 @@ def test_shipped_synthetic_corpus_suite_covers_conversion_formats() -> None:
         "embedded-text",
         "scanned",
         "mixed-embedded-scanned",
+        "noisy-ocr",
         "ocr",
         "tables",
         "headers-footers",

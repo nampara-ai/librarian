@@ -34,6 +34,7 @@ def generate_synthetic_corpus(
     include_docx: bool = False,
     include_pdf: bool = False,
     include_scanned_pdf: bool = False,
+    include_noisy_ocr_pdf: bool = False,
     overwrite: bool = False,
 ) -> SyntheticCorpusResult:
     """Generate deterministic long-form text fixtures and a corpus-eval suite."""
@@ -235,6 +236,40 @@ def generate_synthetic_corpus(
                     "require_markdown_headings": True,
                 }
             )
+    if include_noisy_ocr_pdf:
+        base_index = len(files)
+        slug, title, first_phrase, second_phrase, classification_prefix = topics[0]
+        path = corpus_dir / f"{base_index + 1:03d}-{slug}-noisy-ocr.pdf"
+        if path.exists() and not overwrite:
+            raise FileExistsError(f"Corpus file already exists: {path}")
+        if path.is_symlink():
+            raise ValueError(f"Corpus file path must not be a symlink: {path}")
+        pdf_text, page_count = _write_synthetic_noisy_ocr_pdf_atomic(
+            path,
+            title=title,
+            first_phrase=first_phrase,
+            second_phrase=second_phrase,
+            document_number=base_index + 1,
+        )
+        files.append(path)
+        total_bytes += path.stat().st_size
+        total_chars += len(pdf_text)
+        cases.append(
+            {
+                "name": f"{title} Noisy OCR PDF",
+                "source_path": str(path.relative_to(suite_path.parent)),
+                "tags": ["synthetic", "pdf", "scanned", "ocr", "noisy-ocr", slug],
+                "format": "md",
+                "process": True,
+                "expected_contains": [first_phrase, second_phrase],
+                "expected_search_phrases": [first_phrase],
+                "expected_classification_prefix": classification_prefix,
+                "expected_page_count": page_count,
+                "min_output_char_ratio": 0.001,
+                "max_output_char_ratio": 50.0,
+                "require_markdown_headings": True,
+            }
+        )
     _write_text_atomic(suite_path, json.dumps({"cases": cases}, indent=2) + "\n")
     return SyntheticCorpusResult(
         corpus_dir=corpus_dir,
@@ -382,6 +417,36 @@ def _write_synthetic_scanned_pdf_atomic(
         raise
 
 
+def _write_synthetic_noisy_ocr_pdf_atomic(
+    path: Path,
+    *,
+    title: str,
+    first_phrase: str,
+    second_phrase: str,
+    document_number: int,
+) -> tuple[str, int]:
+    _reject_symlinked_path(path, label="Output path")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp.pdf")
+    try:
+        text = "\n".join(
+            [
+                title,
+                f"Document {document_number} noisy OCR fixture",
+                "Mild skew, speckles, and low-contrast text",
+                f"Search anchors: {first_phrase}; {second_phrase}",
+            ]
+        )
+        lines = [line for line in text.splitlines() if line.strip()]
+        payload = _render_image_only_pdf([lines], noisy=True)
+        temporary_path.write_bytes(payload)
+        temporary_path.replace(path)
+        return text, 1
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+
 def _reject_symlinked_path(path: Path, *, label: str) -> None:
     for current in (*reversed(path.parents), path):
         if current.exists() and current.is_symlink():
@@ -499,7 +564,7 @@ def _render_simple_pdf(pages: list[list[str]]) -> bytes:
     return _assemble_pdf(objects)
 
 
-def _render_image_only_pdf(pages: list[list[str]]) -> bytes:
+def _render_image_only_pdf(pages: list[list[str]], *, noisy: bool = False) -> bytes:
     objects: list[bytes] = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"",
@@ -510,7 +575,7 @@ def _render_image_only_pdf(pages: list[list[str]]) -> bytes:
         content_object = page_object + 1
         image_object = page_object + 2
         page_refs.append(f"{page_object} 0 R")
-        image = _render_scan_page_jpeg(page_lines)
+        image = _render_scan_page_jpeg(page_lines, noisy=noisy)
         content = f"q\n468 0 0 648 72 72 cm\n/Im{image_object} Do\nQ".encode("ascii")
         objects.append(
             (
@@ -618,22 +683,44 @@ def _image_page_objects(pages: list[list[str]], *, first_object: int) -> _ImageP
     return _ImagePdfObjects(objects=objects, page_refs=page_refs)
 
 
-def _render_scan_page_jpeg(lines: list[str]) -> bytes:
+def _render_scan_page_jpeg(lines: list[str], *, noisy: bool = False) -> bytes:
     try:
         from PIL import Image, ImageDraw, ImageFont
     except ImportError as exc:
         raise RuntimeError("Scanned PDF fixtures require Pillow via the 'ocr' extra") from exc
 
-    image = Image.new("RGB", (_SCAN_PAGE_WIDTH, _SCAN_PAGE_HEIGHT), "white")
+    background = (248, 248, 244) if noisy else "white"
+    image = Image.new("RGB", (_SCAN_PAGE_WIDTH, _SCAN_PAGE_HEIGHT), background)
     draw = ImageDraw.Draw(image)
     font: Any = _load_scan_font(ImageFont)
     y = 90
     for line in lines:
-        draw.text((70, y), line[:74], fill="black", font=font)
+        fill = (24, 24, 24) if noisy else "black"
+        draw.text((70, y), line[:74], fill=fill, font=font)
         y += 50
+    if noisy:
+        _add_scan_noise(image, ImageDraw)
+        image = image.rotate(
+            1.2,
+            resample=Image.Resampling.BICUBIC,
+            expand=False,
+            fillcolor=background,
+        )
     buffer = BytesIO()
-    image.save(buffer, format="JPEG", quality=76, optimize=True)
+    image.save(buffer, format="JPEG", quality=70 if noisy else 76, optimize=True)
     return buffer.getvalue()
+
+
+def _add_scan_noise(image: Any, image_draw_module: Any) -> None:
+    draw = image_draw_module.Draw(image)
+    for index in range(0, 360):
+        x = (index * 37) % _SCAN_PAGE_WIDTH
+        y = (index * 91) % _SCAN_PAGE_HEIGHT
+        shade = 178 + (index % 45)
+        draw.point((x, y), fill=(shade, shade, shade))
+    for index in range(0, 12):
+        y = 72 + index * 76
+        draw.line((58, y, _SCAN_PAGE_WIDTH - 70, y + 1), fill=(226, 226, 222), width=1)
 
 
 def _load_scan_font(image_font_module: Any) -> Any:

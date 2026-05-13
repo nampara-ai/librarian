@@ -22,6 +22,8 @@
   constraints, checksums, attestations, and local rebuild/audit commands.
 - Added opt-in OCR preprocessing controls for grayscale, thresholded, and
   deskewed image preparation before Tesseract extraction.
+- Added a deterministic noisy scanned-OCR PDF fixture option to synthetic corpus
+  generation and the shipped synthetic corpus eval suite.
 
 ## 0.1.0a4 - 2026-05-13
 
