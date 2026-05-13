@@ -222,8 +222,18 @@ def test_shipped_synthetic_corpus_suite_covers_conversion_formats() -> None:
     suite = load_corpus_eval_suite(EXAMPLES_DIR / "synthetic-corpus" / "corpus_eval_cases.json")
     tags = {tag for case in suite.cases for tag in case.tags}
 
-    assert len(suite.cases) >= 8
-    assert {"long-document", "docx", "pdf", "embedded-text", "tables", "headers-footers"} <= tags
+    assert len(suite.cases) >= 10
+    assert {
+        "long-document",
+        "docx",
+        "pdf",
+        "embedded-text",
+        "scanned",
+        "mixed-embedded-scanned",
+        "ocr",
+        "tables",
+        "headers-footers",
+    } <= tags
     assert any(case.expected_page_count is not None for case in suite.cases)
     assert all(case.expected_search_phrases for case in suite.cases)
     assert all(case.expected_classification_prefix for case in suite.cases)

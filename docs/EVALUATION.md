@@ -159,8 +159,10 @@ summaries intentionally, or attach large generated artifacts to the release.
 
 The repository includes a small sanitized fixture set at
 `examples/synthetic-corpus/corpus_eval_cases.json`. CI runs it end-to-end to cover Markdown,
-DOCX with tables/headers/footers, and embedded-text PDF extraction with search/classification
-checks. Generate larger local suites when measuring scale or release-candidate performance.
+DOCX with tables/headers/footers, embedded-text PDFs, scanned OCR PDFs, and mixed
+embedded/scanned PDFs with search/classification checks. The OCR fixtures are synthetic page
+images, so they exercise Tesseract and page-source accounting without committing private scans.
+Generate larger local suites when measuring scale or release-candidate performance.
 
 Use `generate-corpus` to create deterministic sanitized long-document fixtures without committing
 private or large source files:
@@ -173,6 +175,7 @@ librarian generate-corpus \
   --paragraph-sentences 6 \
   --include-docx \
   --include-pdf \
+  --include-scanned-pdf \
   --overwrite
 
 librarian corpus-eval .librarian/synthetic-corpus/corpus_eval_cases.json \
@@ -183,6 +186,7 @@ librarian corpus-eval .librarian/synthetic-corpus/corpus_eval_cases.json \
 
 Scale `--documents`, `--paragraphs`, and `--paragraph-sentences` to approximate larger page counts.
 Use `--include-docx` to add sanitized DOCX fixtures with body paragraphs, tables, headers, and
-footers, and `--include-pdf` to add embedded-text PDF fixtures with expected page counts. The
-generated cases include stable search phrases and classification expectations so results are
-comparable across commits and provider configurations.
+footers, `--include-pdf` to add embedded-text PDF fixtures with expected page counts, and
+`--include-scanned-pdf` to add image-only and mixed embedded/scanned PDF fixtures that exercise OCR
+page recovery. The generated cases include stable search phrases and classification expectations so
+results are comparable across commits and provider configurations.

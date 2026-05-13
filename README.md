@@ -59,7 +59,7 @@ librarian export doc_... --format md --output cleaned.md
 librarian benchmark --repeats 3 --output benchmark.json
 librarian benchmark --input-path examples/benchmark_text.txt
 librarian eval examples/eval_cases.json --output eval.json
-librarian generate-corpus --output-dir .librarian/synthetic-corpus
+librarian generate-corpus --output-dir .librarian/synthetic-corpus --include-docx --include-pdf --include-scanned-pdf
 librarian corpus-eval examples/corpus_eval_cases.json --output corpus-eval.json --overwrite
 librarian chunk path/to/transcript.txt
 librarian api

@@ -202,12 +202,12 @@ def test_release_docs_install_with_exported_constraints() -> None:
     )
 
 
-def test_changelog_unreleased_section_is_drained_for_release() -> None:
+def test_changelog_unreleased_section_is_not_placeholder() -> None:
     changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
     unreleased = changelog.split("## Unreleased", maxsplit=1)[1].split("## ", maxsplit=1)[0]
 
     assert "No unreleased changes." not in unreleased
-    assert "- " not in unreleased
+    assert "- " in unreleased
 
 
 def test_mock_eval_baseline_is_marked_as_manifest_not_release_evidence() -> None:

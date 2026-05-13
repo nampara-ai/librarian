@@ -1048,6 +1048,10 @@ def generate_corpus(
         bool,
         typer.Option(help="Also generate sanitized embedded-text PDF fixtures."),
     ] = False,
+    include_scanned_pdf: Annotated[
+        bool,
+        typer.Option(help="Also generate sanitized scanned and mixed OCR PDF fixtures."),
+    ] = False,
     overwrite: Annotated[bool, typer.Option(help="Overwrite existing generated files.")] = False,
 ) -> None:
     """Generate a deterministic sanitized corpus-eval fixture."""
@@ -1060,6 +1064,7 @@ def generate_corpus(
             sentences_per_paragraph=paragraph_sentences,
             include_docx=include_docx,
             include_pdf=include_pdf,
+            include_scanned_pdf=include_scanned_pdf,
             overwrite=overwrite,
         )
     except (FileExistsError, ValueError) as exc:

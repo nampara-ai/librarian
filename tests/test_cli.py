@@ -968,6 +968,43 @@ def test_cli_generate_corpus_can_include_embedded_pdf_fixtures(tmp_path: Path) -
     assert "saddle fit" in extracted
 
 
+def test_cli_generate_corpus_can_include_scanned_pdf_fixtures(tmp_path: Path) -> None:
+    runner = CliRunner()
+    output_dir = tmp_path / "synthetic"
+
+    result = runner.invoke(
+        app,
+        [
+            "generate-corpus",
+            "--output-dir",
+            str(output_dir),
+            "--documents",
+            "1",
+            "--paragraphs",
+            "8",
+            "--paragraph-sentences",
+            "1",
+            "--include-scanned-pdf",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Generated 3 synthetic document(s)" in result.output
+    payload = json.loads((output_dir / "corpus_eval_cases.json").read_text(encoding="utf-8"))
+    scanned_cases = [case for case in payload["cases"] if "scanned" in case["tags"]]
+    assert len(scanned_cases) == 2
+    assert any("mixed-embedded-scanned" in case["tags"] for case in scanned_cases)
+    first_pdf = output_dir / scanned_cases[0]["source_path"]
+    assert first_pdf.exists()
+    assert first_pdf.suffix == ".pdf"
+    assert "ocr" in scanned_cases[0]["tags"]
+    assert scanned_cases[0]["expected_page_count"] >= 1
+    pdfplumber = pytest.importorskip("pdfplumber")
+    with pdfplumber.open(first_pdf) as pdf:
+        extracted = "\n".join(page.extract_text() or "" for page in pdf.pages)
+    assert "canter transitions" not in extracted
+
+
 def test_cli_generate_corpus_rejects_symlink_suite_path(tmp_path: Path) -> None:
     runner = CliRunner()
     output_dir = tmp_path / "synthetic"

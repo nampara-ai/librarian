@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added deterministic scanned and mixed embedded/scanned PDF fixtures to
+  `generate-corpus` and the shipped synthetic corpus eval suite, covering OCR
+  extraction, OCR page metrics, search recall, and classification without
+  private documents.
+
 ## 0.1.0a4 - 2026-05-13
 
 - Added exact phrase search, search totals, result/facet pagination metadata, raw/cleaned search

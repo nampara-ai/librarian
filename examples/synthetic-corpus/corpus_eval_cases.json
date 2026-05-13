@@ -201,6 +201,57 @@
       "min_output_char_ratio": 0.05,
       "max_output_char_ratio": 50.0,
       "require_markdown_headings": true
+    },
+    {
+      "name": "Horse Training Seminar OCR PDF 1",
+      "source_path": "corpus/009-equine-training-scanned.pdf",
+      "tags": [
+        "synthetic",
+        "pdf",
+        "scanned",
+        "ocr",
+        "equine-training"
+      ],
+      "format": "md",
+      "process": true,
+      "expected_contains": [
+        "canter transitions",
+        "saddle fit"
+      ],
+      "expected_search_phrases": [
+        "canter transitions"
+      ],
+      "expected_classification_prefix": "636",
+      "expected_page_count": 2,
+      "min_output_char_ratio": 0.001,
+      "max_output_char_ratio": 50.0,
+      "require_markdown_headings": true
+    },
+    {
+      "name": "Health Interview Transcript OCR PDF 2",
+      "source_path": "corpus/010-health-interview-scanned.pdf",
+      "tags": [
+        "synthetic",
+        "pdf",
+        "scanned",
+        "ocr",
+        "health-interview",
+        "mixed-embedded-scanned"
+      ],
+      "format": "md",
+      "process": true,
+      "expected_contains": [
+        "medicine adherence",
+        "follow-up care"
+      ],
+      "expected_search_phrases": [
+        "medicine adherence"
+      ],
+      "expected_classification_prefix": "610",
+      "expected_page_count": 2,
+      "min_output_char_ratio": 0.001,
+      "max_output_char_ratio": 50.0,
+      "require_markdown_headings": true
     }
   ]
 }
