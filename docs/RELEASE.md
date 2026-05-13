@@ -81,10 +81,11 @@ git push origin "v${RELEASE_VERSION}"
 The release workflow serializes runs per tag, first runs a read-only full-history Gitleaks scan,
 then installs Tesseract/Poppler, verifies that the tag matches the package version and that
 `CHANGELOG.md` has no remaining Unreleased entries, runs `librarian doctor --strict`, builds source
-and wheel distributions, smoke-installs the built wheel and runs the installed CLI, audits the
-resolved Python environment with `pip-audit --skip-editable`, generates sanitized mock eval,
+and wheel distributions, exports `constraints.txt` from `uv.lock`, smoke-installs the built wheel
+with those constraints and runs the installed CLI, audits the resolved Python environment with
+`pip-audit --skip-editable`, generates sanitized mock eval,
 corpus-eval, and benchmark evidence, verifies that evidence against the release tag, generates an
-SBOM and `constraints.txt` from `uv.lock`,
+SBOM,
 publishes a Docker image to GitHub Container Registry, creates provenance attestations for
 distributions, release metadata/evidence, and the container image, writes `SHA256SUMS.txt` for
 direct artifact verification of the distributions, SBOM, dependency constraints, and sanitized mock

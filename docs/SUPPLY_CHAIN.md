@@ -62,6 +62,8 @@ however, evidence-reproducible from a tag:
   the GitHub release.
 - `constraints.txt` is generated from `uv.lock` and records exact third-party registry packages for
   the tested release environment.
+- The built wheel is smoke-installed with `-c constraints.txt` so release validation uses the same
+  dependency pins published to users.
 - `SHA256SUMS.txt` records the exact uploaded distribution, SBOM, constraints, and sanitized
   evidence bytes, and the workflow verifies it before publication.
 - GitHub artifact attestations bind the published distributions, release metadata/evidence, and

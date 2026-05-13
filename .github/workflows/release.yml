@@ -108,10 +108,13 @@ jobs:
         run: |
           rm -rf dist
           python -m build
+      - name: Export dependency constraints
+        run: python .github/scripts/export_constraints.py --output constraints.txt
       - name: Smoke install wheel
         run: |
           python -m venv "$RUNNER_TEMP/librarian-wheel-smoke"
-          "$RUNNER_TEMP/librarian-wheel-smoke/bin/python" -m pip install dist/*.whl
+          WHEEL="$(ls dist/*.whl)"
+          "$RUNNER_TEMP/librarian-wheel-smoke/bin/python" -m pip install -c constraints.txt "$WHEEL[all]"
           "$RUNNER_TEMP/librarian-wheel-smoke/bin/librarian" version
       - name: Attest distributions
         uses: actions/attest-build-provenance@v3
@@ -119,8 +122,6 @@ jobs:
           subject-path: "dist/*"
       - name: Generate SBOM
         run: cyclonedx-py environment --output-format JSON --output-file sbom.json
-      - name: Export dependency constraints
-        run: python .github/scripts/export_constraints.py --output constraints.txt
       - name: Generate checksums
         run: sha256sum dist/* sbom.json constraints.txt release-evidence/*.json > SHA256SUMS.txt
       - name: Verify checksums

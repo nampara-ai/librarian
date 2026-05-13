@@ -30,6 +30,8 @@
   page manifests.
 - Added an API endpoint for PDF page manifest status so operators can inspect
   page-level OCR progress and failures without shell access.
+- Changed the release workflow to smoke-install built wheels against the
+  exported `constraints.txt` dependency pins before publishing artifacts.
 
 ## 0.1.0a4 - 2026-05-13
 

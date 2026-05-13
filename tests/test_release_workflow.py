@@ -59,10 +59,16 @@ def test_release_workflow_publishes_verifiable_artifacts() -> None:
     assert "actions/attest-build-provenance" in workflow
     assert "Attest release metadata" in workflow
     assert 'python -m venv "$RUNNER_TEMP/librarian-wheel-smoke"' in workflow
-    assert '"$RUNNER_TEMP/librarian-wheel-smoke/bin/python" -m pip install dist/*.whl' in workflow
+    assert "export_constraints.py --output constraints.txt" in workflow
+    assert workflow.index("export_constraints.py --output constraints.txt") < workflow.index(
+        "Smoke install wheel"
+    )
+    assert (
+        '"$RUNNER_TEMP/librarian-wheel-smoke/bin/python" -m pip install -c '
+        'constraints.txt "$WHEEL[all]"'
+    ) in workflow
     assert '"$RUNNER_TEMP/librarian-wheel-smoke/bin/librarian" version' in workflow
     assert "cyclonedx-py environment --output-format JSON --output-file sbom.json" in workflow
-    assert "export_constraints.py --output constraints.txt" in workflow
     assert (
         "sha256sum dist/* sbom.json constraints.txt release-evidence/*.json > SHA256SUMS.txt"
         in workflow
