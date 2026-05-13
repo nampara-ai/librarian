@@ -24,9 +24,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Secret scan
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo" \
+            -w /repo \
+            zricethezav/gitleaks:v8.30.1 \
+            detect --source . --no-banner --redact --verbose
 
   build:
     needs: secret-scan

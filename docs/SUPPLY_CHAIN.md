@@ -92,12 +92,15 @@ version, build backend version, and dependency resolver output before distributi
 
 Do not commit API keys, provider logs, private documents, `.env` files, or generated eval outputs
 that contain private text. CI runs Gitleaks with full git history checkout so both new pull requests
-and scheduled scans can detect committed credentials.
+and scheduled scans can detect committed credentials. CI and release scans run the pinned
+`zricethezav/gitleaks:v8.30.1` container so secret scanning is not coupled to a GitHub Actions
+JavaScript runtime.
 
 Run a local scan before release candidates or after handling credentials:
 
 ```bash
-gitleaks detect --source . --redact --verbose
+docker run --rm -v "$PWD:/repo" -w /repo zricethezav/gitleaks:v8.30.1 \
+  detect --source . --no-banner --redact --verbose
 ```
 
 If a real secret is committed, rotate it before rewriting history or adding an allowlist entry.

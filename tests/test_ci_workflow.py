@@ -30,7 +30,8 @@ def test_workflows_do_not_persist_checkout_credentials() -> None:
 def test_secret_scan_workflow_runs_gitleaks_without_write_permissions() -> None:
     workflow = Path(".github/workflows/secrets.yml").read_text(encoding="utf-8")
 
-    assert "gitleaks/gitleaks-action@v2" in workflow
+    assert "zricethezav/gitleaks:v8.30.1" in workflow
+    assert "detect --source . --no-banner --redact --verbose" in workflow
     assert "timeout-minutes: 15" in workflow
     assert "pull_request:" in workflow
     assert "schedule:" in workflow

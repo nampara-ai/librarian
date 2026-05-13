@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a14 - 2026-05-13
+
+- Replaced the Node-backed Gitleaks GitHub Action in CI/release secret scans with a pinned
+  `zricethezav/gitleaks:v8.30.1` container invocation to keep secret scanning independent of
+  GitHub Actions Node runtime deprecations.
+
 ## 0.1.0a13 - 2026-05-13
 
 - Rejected inverted API search date windows before storage access so `/search`, `/search/results`,

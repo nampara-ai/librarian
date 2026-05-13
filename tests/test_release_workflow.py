@@ -98,9 +98,9 @@ def test_release_workflow_scans_secrets_before_build() -> None:
     assert "timeout-minutes: 90" in workflow
     assert "permissions:\n      contents: read" in workflow
     assert "fetch-depth: 0" in workflow
-    assert "gitleaks/gitleaks-action@v2" in workflow
-    assert "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in workflow
-    assert workflow.index("gitleaks/gitleaks-action@v2") < workflow.index("python -m build")
+    assert "zricethezav/gitleaks:v8.30.1" in workflow
+    assert "detect --source . --no-banner --redact --verbose" in workflow
+    assert workflow.index("zricethezav/gitleaks:v8.30.1") < workflow.index("python -m build")
     assert workflow.index("security-events: write") > workflow.index("needs: secret-scan")
 
 
