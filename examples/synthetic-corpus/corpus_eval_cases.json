@@ -222,7 +222,7 @@
         "canter transitions"
       ],
       "expected_classification_prefix": "636",
-      "expected_page_count": 2,
+      "expected_page_count": 1,
       "min_output_char_ratio": 0.001,
       "max_output_char_ratio": 50.0,
       "require_markdown_headings": true

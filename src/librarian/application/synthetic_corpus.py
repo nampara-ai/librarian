@@ -9,6 +9,9 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+_SCAN_PAGE_WIDTH = 850
+_SCAN_PAGE_HEIGHT = 1100
+
 
 @dataclass(frozen=True, slots=True)
 class SyntheticCorpusResult:
@@ -354,7 +357,7 @@ def _write_synthetic_scanned_pdf_atomic(
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp.pdf")
     try:
-        text = _synthetic_plain_text(
+        text = _synthetic_ocr_plain_text(
             title=title,
             first_phrase=first_phrase,
             second_phrase=second_phrase,
@@ -367,11 +370,13 @@ def _write_synthetic_scanned_pdf_atomic(
             embedded = [scanned_pages[0]]
             scanned = scanned_pages[1:] or scanned_pages[:1]
             payload = _render_mixed_text_image_pdf(embedded, scanned)
+            page_count = len(embedded) + len(scanned)
         else:
             payload = _render_image_only_pdf(scanned_pages)
+            page_count = len(scanned_pages)
         temporary_path.write_bytes(payload)
         temporary_path.replace(path)
-        return text, len(scanned_pages)
+        return text, page_count
     except Exception:
         temporary_path.unlink(missing_ok=True)
         raise
@@ -434,6 +439,25 @@ def _synthetic_plain_text(
             f"{second_phrase}, source fidelity, page markers, and searchable transcript structure."
         )
     return "\n".join(lines)
+
+
+def _synthetic_ocr_plain_text(
+    *,
+    title: str,
+    first_phrase: str,
+    second_phrase: str,
+    paragraphs: int,
+    document_number: int,
+) -> str:
+    del paragraphs
+    return "\n".join(
+        [
+            title,
+            f"Document {document_number} OCR smoke fixture",
+            "Source fidelity and searchable OCR text",
+            f"Search anchors: {first_phrase}; {second_phrase}",
+        ]
+    )
 
 
 def _paginate_pdf_lines(lines: list[str], *, lines_per_page: int) -> list[list[str]]:
@@ -502,7 +526,8 @@ def _render_image_only_pdf(pages: list[list[str]]) -> bytes:
         )
         objects.append(
             (
-                f"<< /Type /XObject /Subtype /Image /Width 1240 /Height 1754 "
+                f"<< /Type /XObject /Subtype /Image /Width {_SCAN_PAGE_WIDTH} "
+                f"/Height {_SCAN_PAGE_HEIGHT} "
                 f"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode "
                 f"/Length {len(image)} >>\nstream\n"
             ).encode("ascii")
@@ -582,7 +607,8 @@ def _image_page_objects(pages: list[list[str]], *, first_object: int) -> _ImageP
         )
         objects.append(
             (
-                f"<< /Type /XObject /Subtype /Image /Width 1240 /Height 1754 "
+                f"<< /Type /XObject /Subtype /Image /Width {_SCAN_PAGE_WIDTH} "
+                f"/Height {_SCAN_PAGE_HEIGHT} "
                 f"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode "
                 f"/Length {len(image)} >>\nstream\n"
             ).encode("ascii")
@@ -598,15 +624,15 @@ def _render_scan_page_jpeg(lines: list[str]) -> bytes:
     except ImportError as exc:
         raise RuntimeError("Scanned PDF fixtures require Pillow via the 'ocr' extra") from exc
 
-    image = Image.new("RGB", (1240, 1754), "white")
+    image = Image.new("RGB", (_SCAN_PAGE_WIDTH, _SCAN_PAGE_HEIGHT), "white")
     draw = ImageDraw.Draw(image)
     font: Any = _load_scan_font(ImageFont)
-    y = 140
+    y = 90
     for line in lines:
-        draw.text((120, y), line[:74], fill="black", font=font)
-        y += 72
+        draw.text((70, y), line[:74], fill="black", font=font)
+        y += 50
     buffer = BytesIO()
-    image.save(buffer, format="JPEG", quality=92)
+    image.save(buffer, format="JPEG", quality=76, optimize=True)
     return buffer.getvalue()
 
 
@@ -618,7 +644,7 @@ def _load_scan_font(image_font_module: Any) -> Any:
     )
     for font_path in font_paths:
         try:
-            return image_font_module.truetype(font_path, 38)
+            return image_font_module.truetype(font_path, 28)
         except OSError:
             continue
     return image_font_module.load_default()
