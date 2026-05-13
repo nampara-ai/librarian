@@ -675,6 +675,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             supplied = _supplied_api_key(request)
             credential = _matched_api_credential(supplied, credentials) if supplied else None
             if credential is None:
+                _log_api_security_event(
+                    logger,
+                    request,
+                    event="api_auth_failed",
+                    credential_present=supplied is not None,
+                )
                 return _with_security_headers(
                     JSONResponse(
                         status_code=401,
@@ -682,6 +688,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     )
                 )
             if not _api_credential_allows(credential, request):
+                _log_api_security_event(
+                    logger,
+                    request,
+                    event="api_scope_denied",
+                    credential_scope=credential.scope,
+                )
                 return _with_security_headers(
                     JSONResponse(
                         status_code=403,
@@ -705,6 +717,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             now=time.monotonic(),
         )
         if not allowed:
+            _log_api_security_event(
+                logger,
+                request,
+                event="api_rate_limited",
+                retry_after_seconds=retry_after_seconds,
+            )
             return _with_security_headers(
                 JSONResponse(
                     status_code=429,
@@ -2021,16 +2039,39 @@ def _api_credential_allows(credential: ApiCredential, request: Request) -> bool:
     }
 
 
+def _log_api_security_event(
+    logger: logging.Logger,
+    request: Request,
+    *,
+    event: str,
+    **extra: object,
+) -> None:
+    logger.warning(
+        event,
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "client_host": _client_host(request),
+            **extra,
+        },
+    )
+
+
 def _rate_limit_identity(request: Request) -> str:
     supplied_key = _supplied_api_key(request)
     if supplied_key:
         digest = hashlib.sha256(supplied_key.encode("utf-8")).hexdigest()
         return f"api-key:{digest}"
+    client_host = _client_host(request)
+    return f"ip:{client_host}"
+
+
+def _client_host(request: Request) -> str:
     client_host = request.client.host if request.client else "unknown"
     forwarded_for = request.headers.get("x-forwarded-for")
     if forwarded_for:
         client_host = forwarded_for.split(",", maxsplit=1)[0].strip() or client_host
-    return f"ip:{client_host}"
+    return client_host
 
 
 def _resolve_api_path(path: Path, *, settings: Settings) -> Path:

@@ -24,6 +24,8 @@
   deskewed image preparation before Tesseract extraction.
 - Added a deterministic noisy scanned-OCR PDF fixture option to synthetic corpus
   generation and the shipped synthetic corpus eval suite.
+- Added redacted API security audit log events for authentication failures,
+  scope denials, and rate-limit denials.
 
 ## 0.1.0a4 - 2026-05-13
 

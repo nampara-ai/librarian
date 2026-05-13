@@ -39,8 +39,9 @@ instance, local SQLite storage, optional API exposure, and optional OpenAI-compa
 - Unauthorized hosted access.
   Mitigation: public API binds require `LIBRARIAN_API_KEY` or `LIBRARIAN_API_KEYS`, plus
   `LIBRARIAN_API_IMPORT_ROOT`; requests use constant-time API-key comparison, and deployments can
-  keep multiple keys active during rotation. Multi-user auth and tenant isolation are future
-  hosted-mode work.
+  keep multiple keys active during rotation. Authentication failures, scope denials, and rate-limit
+  denials are logged as security audit events without recording API key values. Multi-user auth and
+  tenant isolation are future hosted-mode work.
 
 ## Data Leakage Threats
 
@@ -84,7 +85,7 @@ instance, local SQLite storage, optional API exposure, and optional OpenAI-compa
 ## Residual Risks
 
 - Static API-key auth is not enough for multi-user hosted service. Hosted deployments need users,
-  scoped tokens, RBAC, audit logs, and tenant-specific data roots.
+  RBAC, durable audit storage, and tenant-specific data roots.
 - External LLM providers receive document text during processing. Operators must choose providers
   whose data-use terms fit their corpus.
 - Local filesystem malware scanning is out of scope. Operators remain responsible for scanning input

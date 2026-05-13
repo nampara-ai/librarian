@@ -186,20 +186,26 @@ def test_api_upload_run_and_get_content(tmp_path: Path) -> None:
         assert "# notes" in exported_md.text
 
 
-def test_api_key_auth(tmp_path: Path) -> None:
+def test_api_key_auth(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",
         database_path=tmp_path / ".librarian" / "librarian.sqlite",
         api_key="secret",
     )
+    caplog.set_level("WARNING", logger="librarian.api")
     with TestClient(create_app(settings)) as client:
         assert client.get("/health").status_code == 200
-        rejected = client.get("/documents")
+        rejected = client.get("/documents", headers={"x-api-key": "wrong-secret"})
         assert rejected.status_code == 401
         assert rejected.json()["code"] == "invalid_api_key"
         assert rejected.headers["x-content-type-options"] == "nosniff"
         assert rejected.headers["cache-control"] == "no-store"
         assert client.get("/documents", headers={"x-api-key": "secret"}).status_code == 200
+    auth_events = [record for record in caplog.records if record.message == "api_auth_failed"]
+    assert len(auth_events) == 1
+    assert auth_events[0].__dict__["credential_present"] is True
+    assert auth_events[0].__dict__["path"] == "/documents"
+    assert "wrong-secret" not in caplog.text
 
 
 def test_api_liveness_endpoints_remain_public_with_auth(tmp_path: Path) -> None:
@@ -252,12 +258,16 @@ def test_api_accepts_rotated_api_keys(tmp_path: Path) -> None:
     assert rejected.json()["code"] == "invalid_api_key"
 
 
-def test_api_accepts_scoped_read_only_keys(tmp_path: Path) -> None:
+def test_api_accepts_scoped_read_only_keys(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",
         database_path=tmp_path / ".librarian" / "librarian.sqlite",
         api_keys="read:reader,write:writer",
     )
+    caplog.set_level("WARNING", logger="librarian.api")
     with TestClient(create_app(settings)) as client:
         read_list = client.get("/documents", headers={"x-api-key": "reader"})
         read_search = client.post(
@@ -284,6 +294,11 @@ def test_api_accepts_scoped_read_only_keys(tmp_path: Path) -> None:
         "code": "insufficient_scope",
     }
     assert accepted_write.status_code == 200
+    scope_events = [record for record in caplog.records if record.message == "api_scope_denied"]
+    assert len(scope_events) == 1
+    assert scope_events[0].__dict__["credential_scope"] == "read"
+    assert scope_events[0].__dict__["path"] == "/documents"
+    assert "reader" not in caplog.text
 
 
 def test_api_read_scoped_keys_cannot_read_operational_endpoints(tmp_path: Path) -> None:
@@ -339,12 +354,16 @@ def test_api_accepts_hashed_scoped_keys(tmp_path: Path) -> None:
     assert rejected_plain_hash.status_code == 401
 
 
-def test_api_rate_limit_returns_429_with_retry_after(tmp_path: Path) -> None:
+def test_api_rate_limit_returns_429_with_retry_after(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",
         database_path=tmp_path / ".librarian" / "librarian.sqlite",
         api_rate_limit_per_minute=1,
     )
+    caplog.set_level("WARNING", logger="librarian.api")
     with TestClient(create_app(settings)) as client:
         assert client.get("/health").status_code == 200
         first = client.get("/documents")
@@ -354,6 +373,10 @@ def test_api_rate_limit_returns_429_with_retry_after(tmp_path: Path) -> None:
     assert limited.status_code == 429
     assert limited.json() == {"detail": "Rate limit exceeded", "code": "rate_limited"}
     assert int(limited.headers["retry-after"]) > 0
+    rate_events = [record for record in caplog.records if record.message == "api_rate_limited"]
+    assert len(rate_events) == 1
+    assert rate_events[0].__dict__["path"] == "/documents"
+    assert int(rate_events[0].__dict__["retry_after_seconds"]) > 0
 
 
 def test_api_liveness_endpoints_are_rate_limit_exempt(tmp_path: Path) -> None:
