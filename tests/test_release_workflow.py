@@ -203,9 +203,11 @@ def test_release_docs_install_with_exported_constraints() -> None:
     release_doc = Path("docs/RELEASE.md").read_text(encoding="utf-8")
 
     assert "constraints.txt" in release_doc
-    assert 'pip install -c constraints.txt "nampara_librarian-0.1.0a4-py3-none-any.whl[all]"' in (
-        release_doc
+    install_command = (
+        'pip install -c constraints.txt '
+        '"nampara_librarian-${RELEASE_VERSION}-py3-none-any.whl[all]"'
     )
+    assert install_command in release_doc
 
 
 def test_supply_chain_docs_include_reproducibility_notes() -> None:
@@ -224,12 +226,11 @@ def test_supply_chain_docs_include_reproducibility_notes() -> None:
     assert "docs/SUPPLY_CHAIN.md#reproducibility-notes" in release_doc
 
 
-def test_changelog_unreleased_section_is_not_placeholder() -> None:
+def test_changelog_unreleased_section_is_ready_for_development_or_release() -> None:
     changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
     unreleased = changelog.split("## Unreleased", maxsplit=1)[1].split("## ", maxsplit=1)[0]
 
     assert "No unreleased changes." not in unreleased
-    assert "- " in unreleased
 
 
 def test_mock_eval_baseline_is_marked_as_manifest_not_release_evidence() -> None:

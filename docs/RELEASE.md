@@ -99,8 +99,8 @@ For alpha users downloading artifacts directly from GitHub Releases, install the
 
 ```bash
 sha256sum --check SHA256SUMS.txt
-gh attestation verify nampara_librarian-0.1.0a4-py3-none-any.whl --repo nampara-ai/librarian
-pip install -c constraints.txt "nampara_librarian-0.1.0a4-py3-none-any.whl[all]"
+gh attestation verify "nampara_librarian-${RELEASE_VERSION}-py3-none-any.whl" --repo nampara-ai/librarian
+pip install -c constraints.txt "nampara_librarian-${RELEASE_VERSION}-py3-none-any.whl[all]"
 ```
 
 The Docker image binds to `0.0.0.0` by default and intentionally refuses to start unless
