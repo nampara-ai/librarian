@@ -42,6 +42,7 @@
   progress records.
 - Escaped source markup in search snippets while preserving trusted match
   highlight tags.
+- Hardened workspace restore to reject zip members marked as symlinks.
 
 ## 0.1.0a4 - 2026-05-13
 

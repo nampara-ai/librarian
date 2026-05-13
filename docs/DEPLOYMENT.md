@@ -210,9 +210,9 @@ librarian workspace-restore /backups/librarian-workspace-20260512120000.zip --ye
 
 Workspace restore rejects archives whose total uncompressed size exceeds 10 GiB by default. Use
 `--max-expanded-bytes` to raise or lower that limit for your environment. Restore also rejects
-oversized manifests, duplicate archive paths, unsafe member paths, and archives with excessive file
-counts before applying data files. Restore data directories must not be symlinks or cross symlinked
-parents.
+oversized manifests, duplicate archive paths, unsafe member paths, symlink archive members, and
+archives with excessive file counts before applying data files. Restore data directories must not
+be symlinks or cross symlinked parents.
 
 ## Upload And Archive Policy
 

@@ -527,6 +527,38 @@ def test_cli_workspace_restore_rejects_unsafe_archive_path(tmp_path: Path) -> No
     assert "unsafe path" in result.output
 
 
+def test_cli_workspace_restore_rejects_symlink_archive_member(tmp_path: Path) -> None:
+    runner = CliRunner()
+    env = {
+        "LIBRARIAN_DATA_DIR": str(tmp_path / ".librarian"),
+        "LIBRARIAN_DATABASE_PATH": str(tmp_path / ".librarian" / "librarian.sqlite"),
+    }
+    archive_path = tmp_path / "symlink-member.zip"
+    assert runner.invoke(app, ["migrate"], env=env).exit_code == 0
+    db_backup = tmp_path / "db.sqlite"
+    assert runner.invoke(app, ["db-backup", str(db_backup)], env=env).exit_code == 0
+    link_info = zipfile.ZipInfo("data/uploads/link")
+    link_info.create_system = 3
+    link_info.external_attr = 0o120777 << 16
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr(
+            "workspace-backup.json",
+            json.dumps(
+                {
+                    "artifact_type": "librarian-workspace-backup",
+                    "database_archive_path": "data/librarian.sqlite",
+                }
+            ),
+        )
+        archive.write(db_backup, "data/librarian.sqlite")
+        archive.writestr(link_info, "../outside")
+
+    result = runner.invoke(app, ["workspace-restore", str(archive_path), "--yes"], env=env)
+
+    assert result.exit_code != 0
+    assert "symlink member" in result.output
+
+
 def test_cli_workspace_restore_does_not_apply_data_when_database_invalid(tmp_path: Path) -> None:
     runner = CliRunner()
     env = {

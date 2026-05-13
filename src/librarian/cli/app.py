@@ -1784,6 +1784,8 @@ def _validate_workspace_archive_members(
             has_database_snapshot = True
         if member.is_dir():
             continue
+        if _zip_member_is_symlink(member):
+            raise ValueError(f"Workspace archive contains symlink member: {name}")
         expanded_bytes += member.file_size
         if expanded_bytes > max_expanded_bytes:
             raise ValueError(
@@ -1799,6 +1801,10 @@ def _validate_workspace_archive_path(name: str) -> None:
     parts = PurePosixPath(name).parts
     if name.startswith("/") or ".." in parts:
         raise ValueError(f"Workspace archive contains unsafe path: {name}")
+
+
+def _zip_member_is_symlink(member: zipfile.ZipInfo) -> bool:
+    return (member.external_attr >> 16) & 0o170000 == 0o120000
 
 
 def _reject_symlinked_workspace_restore_path(path: Path, *, data_dir: Path) -> None:
