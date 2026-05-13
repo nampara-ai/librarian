@@ -295,6 +295,67 @@ def test_cli_db_stats_reports_machine_readable_storage_sizing(tmp_path: Path) ->
     assert payload["stored_text_bytes"]["content_blobs"] == len("cli raw text")
 
 
+def test_cli_api_audit_lists_redacted_security_events(tmp_path: Path) -> None:
+    runner = CliRunner()
+    database_path = tmp_path / ".librarian" / "librarian.sqlite"
+    env = {
+        "LIBRARIAN_DATA_DIR": str(tmp_path / ".librarian"),
+        "LIBRARIAN_DATABASE_PATH": str(database_path),
+    }
+    assert runner.invoke(app, ["migrate"], env=env).exit_code == 0
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO api_audit_events (
+              event, method, path, client_host, credential_present,
+              credential_scope, retry_after_seconds, created_at
+            )
+            VALUES
+              (?, ?, ?, ?, ?, ?, ?, ?),
+              (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "api_auth_failed",
+                "GET",
+                "/documents",
+                "127.0.0.1",
+                1,
+                None,
+                None,
+                "2026-05-13T12:00:00+00:00",
+                "api_rate_limited",
+                "POST",
+                "/search",
+                "127.0.0.2",
+                0,
+                None,
+                59,
+                "2026-05-13T12:01:00+00:00",
+            ),
+        )
+
+    result = runner.invoke(app, ["api-audit", "--json", "--event", "api_auth_failed"], env=env)
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["limit"] == 100
+    assert payload["offset"] == 0
+    assert payload["events"] == [
+        {
+            "id": 1,
+            "event": "api_auth_failed",
+            "method": "GET",
+            "path": "/documents",
+            "client_host": "127.0.0.1",
+            "credential_present": True,
+            "credential_scope": None,
+            "retry_after_seconds": None,
+            "created_at": "2026-05-13T12:00:00+00:00",
+        }
+    ]
+    assert "secret" not in result.output.lower()
+
+
 def test_cli_db_backup_creates_sqlite_backup(tmp_path: Path) -> None:
     runner = CliRunner()
     env = {

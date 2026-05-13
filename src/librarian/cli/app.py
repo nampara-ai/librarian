@@ -248,6 +248,64 @@ def db_stats(
     asyncio.run(run())
 
 
+@app.command("api-audit")
+def api_audit(
+    limit: Annotated[
+        int,
+        typer.Option(help="Maximum audit events to print.", min=1, max=1_000),
+    ] = 100,
+    offset: Annotated[int, typer.Option(help="Audit events to skip.", min=0)] = 0,
+    event: Annotated[
+        str | None,
+        typer.Option(help="Restrict to one audit event type."),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable audit events."),
+    ] = False,
+) -> None:
+    """List durable API security audit events."""
+    settings = Settings()
+
+    async def run() -> None:
+        database = SQLiteDatabase(settings.database_path)
+        await database.initialize()
+        rows = await asyncio.to_thread(
+            _read_api_audit_events,
+            database,
+            limit,
+            offset,
+            event,
+        )
+        if json_output:
+            console.out(json.dumps({"events": rows, "limit": limit, "offset": offset}, indent=2))
+            return
+        table = Table(
+            "ID",
+            "Created",
+            "Event",
+            "Method",
+            "Path",
+            "Client",
+            "Credential",
+            "Retry After",
+        )
+        for row in rows:
+            table.add_row(
+                str(row["id"]),
+                str(row["created_at"]),
+                str(row["event"]),
+                str(row["method"]),
+                str(row["path"]),
+                str(row["client_host"]),
+                _audit_credential_summary(row),
+                str(row["retry_after_seconds"] or ""),
+            )
+        console.print(table)
+
+    asyncio.run(run())
+
+
 @app.command("db-backup")
 def db_backup(
     output: Annotated[Path, typer.Argument(help="Destination SQLite backup path.")],
@@ -1465,6 +1523,65 @@ def _read_pdf_page_manifest(path: Path) -> tuple[dict[str, object], list[dict[st
             raise ValueError("PDF page manifest contains an invalid page record")
         pages.append(cast(dict[str, object], page))
     return payload, pages
+
+
+def _read_api_audit_events(
+    database: SQLiteDatabase,
+    limit: int,
+    offset: int,
+    event: str | None,
+) -> list[dict[str, object]]:
+    with database.connect() as connection:
+        if event:
+            rows = connection.execute(
+                """
+                SELECT id, event, method, path, client_host, credential_present,
+                       credential_scope, retry_after_seconds, created_at
+                FROM api_audit_events
+                WHERE event = ?
+                ORDER BY id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (event, limit, offset),
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                """
+                SELECT id, event, method, path, client_host, credential_present,
+                       credential_scope, retry_after_seconds, created_at
+                FROM api_audit_events
+                ORDER BY id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            ).fetchall()
+    return [
+        {
+            "id": int(row["id"]),
+            "event": str(row["event"]),
+            "method": str(row["method"]),
+            "path": str(row["path"]),
+            "client_host": str(row["client_host"]),
+            "credential_present": bool(row["credential_present"]),
+            "credential_scope": (
+                str(row["credential_scope"]) if row["credential_scope"] is not None else None
+            ),
+            "retry_after_seconds": (
+                int(row["retry_after_seconds"])
+                if row["retry_after_seconds"] is not None
+                else None
+            ),
+            "created_at": str(row["created_at"]),
+        }
+        for row in rows
+    ]
+
+
+def _audit_credential_summary(row: dict[str, object]) -> str:
+    scope = row.get("credential_scope")
+    if isinstance(scope, str) and scope:
+        return f"scope={scope}"
+    return "present" if row.get("credential_present") is True else ""
 
 
 def _count_manifest_values(pages: list[dict[str, object]], key: str) -> dict[str, int]:

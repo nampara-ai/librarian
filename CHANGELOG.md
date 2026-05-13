@@ -34,6 +34,8 @@
   exported `constraints.txt` dependency pins before publishing artifacts.
 - Added durable SQLite API audit events for authentication failures, scope
   denials, and rate-limit denials without storing credential material.
+- Added `librarian api-audit` for paginated operator inspection of durable API
+  security audit events.
 
 ## 0.1.0a4 - 2026-05-13
 
