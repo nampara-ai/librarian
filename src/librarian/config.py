@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import ipaddress
 from pathlib import Path
 from typing import Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 CoherenceModeSetting = Literal["fast", "balanced", "max-coherence"]
@@ -88,6 +89,7 @@ class Settings(BaseSettings):
     api_max_import_manifest_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
     api_max_content_chars: int = Field(default=2 * 1024 * 1024, gt=0)
     api_rate_limit_per_minute: int = Field(default=0, ge=0)
+    api_trusted_proxy_cidrs: str | None = Field(default=None)
     api_audit_retention_days: int = Field(default=90, ge=0)
     log_level: LogLevelSetting = Field(default="INFO")
     log_format: LogFormatSetting = Field(default="json")
@@ -101,6 +103,19 @@ class Settings(BaseSettings):
     job_worker_id: str = Field(default="worker-local")
     job_lease_seconds: int = Field(default=300, gt=0)
     job_max_attempts: int = Field(default=3, gt=0)
+
+    @field_validator("api_trusted_proxy_cidrs")
+    @classmethod
+    def validate_api_trusted_proxy_cidrs(cls, value: str | None) -> str | None:
+        """Validate comma-separated trusted proxy IP networks."""
+        if value is None:
+            return None
+        networks = [
+            str(ipaddress.ip_network(entry.strip(), strict=False))
+            for entry in value.split(",")
+            if entry.strip()
+        ]
+        return ",".join(networks) if networks else None
 
     @model_validator(mode="after")
     def validate_cross_field_settings(self) -> Self:

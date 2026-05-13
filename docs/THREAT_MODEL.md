@@ -43,6 +43,8 @@ instance, local SQLite storage, optional API exposure, and optional OpenAI-compa
   `LIBRARIAN_API_IMPORT_ROOT`; requests use constant-time API-key comparison, and deployments can
   keep multiple keys active during rotation. Authentication failures, scope denials, and rate-limit
   denials are logged and persisted as security audit events without recording API key values.
+  Forwarded client IP headers are ignored for rate-limit and audit identity unless the socket peer
+  is in `LIBRARIAN_API_TRUSTED_PROXY_CIDRS`.
   Multi-user auth and tenant isolation are future hosted-mode work.
 
 ## Data Leakage Threats

@@ -422,6 +422,57 @@ def test_api_rate_limit_returns_429_with_retry_after(
     assert int(row[5]) > 0
 
 
+def test_api_rate_limit_ignores_untrusted_x_forwarded_for(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_rate_limit_per_minute=1,
+    )
+    with TestClient(create_app(settings)) as client:
+        first = client.get("/documents", headers={"x-forwarded-for": "198.51.100.1"})
+        limited = client.get("/documents", headers={"x-forwarded-for": "198.51.100.2"})
+
+    assert first.status_code == 200
+    assert limited.status_code == 429
+    assert limited.json()["code"] == "rate_limited"
+
+
+def test_api_rate_limit_uses_x_forwarded_for_from_trusted_proxy(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_rate_limit_per_minute=1,
+        api_trusted_proxy_cidrs="10.0.0.0/24",
+    )
+    with TestClient(create_app(settings), client=("10.0.0.5", 50000)) as client:
+        first = client.get("/documents", headers={"x-forwarded-for": "198.51.100.1"})
+        second = client.get("/documents", headers={"x-forwarded-for": "198.51.100.2"})
+        limited = client.get("/documents", headers={"x-forwarded-for": "198.51.100.1"})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert limited.status_code == 429
+    assert limited.json()["code"] == "rate_limited"
+
+
+def test_api_audit_ignores_untrusted_x_forwarded_for(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_key="secret",
+    )
+    with TestClient(create_app(settings), client=("203.0.113.10", 50000)) as client:
+        rejected = client.get(
+            "/documents",
+            headers={"x-api-key": "wrong-secret", "x-forwarded-for": "198.51.100.99"},
+        )
+
+    assert rejected.status_code == 401
+    with sqlite3.connect(settings.database_path) as connection:
+        row = connection.execute("SELECT client_host FROM api_audit_events").fetchone()
+    assert row == ("203.0.113.10",)
+
+
 def test_api_audit_events_prune_expired_rows(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",
@@ -1009,6 +1060,7 @@ def test_api_config_exposes_operational_controls(tmp_path: Path) -> None:
         api_max_import_manifest_bytes=3210,
         api_max_content_chars=123,
         api_rate_limit_per_minute=60,
+        api_trusted_proxy_cidrs="10.0.0.0/24,192.0.2.10",
         api_audit_retention_days=14,
         llm_max_prompt_chars=87654,
         llm_max_response_chars=98765,
@@ -1033,6 +1085,7 @@ def test_api_config_exposes_operational_controls(tmp_path: Path) -> None:
     assert payload["api_max_import_manifest_bytes"] == 3210
     assert payload["api_max_content_chars"] == 123
     assert payload["api_rate_limit_per_minute"] == 60
+    assert payload["api_trusted_proxy_cidrs"] == "10.0.0.0/24,192.0.2.10/32"
     assert payload["api_audit_retention_days"] == 14
     assert payload["llm_max_prompt_chars"] == 87654
     assert payload["llm_max_response_chars"] == 98765

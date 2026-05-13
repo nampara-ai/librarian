@@ -27,6 +27,7 @@ from librarian.config import Settings
         {"api_max_import_manifest_bytes": 0},
         {"api_max_content_chars": 0},
         {"api_rate_limit_per_minute": -1},
+        {"api_trusted_proxy_cidrs": "not-a-network"},
         {"api_audit_retention_days": -1},
         {"log_level": "VERBOSE"},
         {"log_format": "xml"},

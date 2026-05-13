@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.0a8 - 2026-05-13
+
+- Hardened API client-IP identity so `X-Forwarded-For` is ignored for rate limiting and audit logs
+  unless the connecting proxy is explicitly trusted by CIDR.
+
 ## 0.1.0a7 - 2026-05-13
 
 - Hardened CLI/import text and broad-format conversion to reject renamed archives by signature while

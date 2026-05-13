@@ -126,7 +126,9 @@ Validation errors use `code: "validation_error"` and keep FastAPI's structured v
 Unhandled server exceptions return `code: "server_error"` with a generic message so internal
 exception text and provider credentials are not exposed to API clients.
 When `LIBRARIAN_API_RATE_LIMIT_PER_MINUTE` is enabled, exhausted clients receive HTTP 429 with
-`code: "rate_limited"` and a `Retry-After` header.
+`code: "rate_limited"` and a `Retry-After` header. Unauthenticated rate limits use the socket peer
+IP unless `LIBRARIAN_API_TRUSTED_PROXY_CIDRS` explicitly trusts the connecting proxy; untrusted
+`X-Forwarded-For` headers are ignored.
 When scoped keys are configured with `LIBRARIAN_API_KEYS=read:<key>,write:<key>`, read-only keys can
 call `GET`, `HEAD`, `OPTIONS`, and search endpoints except operational `/config`, `/metrics`, and
 `/metrics/prometheus`; blocked writes or operational reads return HTTP 403 with

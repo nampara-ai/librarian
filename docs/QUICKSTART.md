@@ -7,7 +7,7 @@ From a downloaded release wheel:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install "nampara_librarian-0.1.0a7-py3-none-any.whl[all]"
+pip install "nampara_librarian-0.1.0a8-py3-none-any.whl[all]"
 librarian init
 librarian doctor
 ```

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import json
 import logging
 import secrets
@@ -381,6 +382,7 @@ class ConfigResponse(BaseModel):
     api_max_import_manifest_bytes: int
     api_max_content_chars: int
     api_rate_limit_per_minute: int
+    api_trusted_proxy_cidrs: str | None
     api_audit_retention_days: int
     api_auth_keys_configured: int
     coherence_mode: str
@@ -713,6 +715,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if credential is None:
                 _log_api_security_event(
                     logger,
+                    settings,
                     request,
                     event="api_auth_failed",
                     credential_present=supplied is not None,
@@ -732,6 +735,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if not _api_credential_allows(credential, request):
                 _log_api_security_event(
                     logger,
+                    settings,
                     request,
                     event="api_scope_denied",
                     credential_scope=credential.scope,
@@ -761,12 +765,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ):
             return await call_next(request)
         allowed, retry_after_seconds = rate_limiter.allow(
-            _rate_limit_identity(request),
+            _rate_limit_identity(request, settings),
             now=time.monotonic(),
         )
         if not allowed:
             _log_api_security_event(
                 logger,
+                settings,
                 request,
                 event="api_rate_limited",
                 retry_after_seconds=retry_after_seconds,
@@ -1581,6 +1586,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             api_max_import_manifest_bytes=settings.api_max_import_manifest_bytes,
             api_max_content_chars=settings.api_max_content_chars,
             api_rate_limit_per_minute=settings.api_rate_limit_per_minute,
+            api_trusted_proxy_cidrs=settings.api_trusted_proxy_cidrs,
             api_audit_retention_days=settings.api_audit_retention_days,
             api_auth_keys_configured=len(_configured_api_credentials(settings)),
             coherence_mode=settings.coherence_mode,
@@ -2332,6 +2338,7 @@ def _api_credential_allows(credential: ApiCredential, request: Request) -> bool:
 
 def _log_api_security_event(
     logger: logging.Logger,
+    settings: Settings,
     request: Request,
     *,
     event: str,
@@ -2342,7 +2349,7 @@ def _log_api_security_event(
         extra={
             "method": request.method,
             "path": request.url.path,
-            "client_host": _client_host(request),
+            "client_host": _client_host(request, settings),
             **extra,
         },
     )
@@ -2362,7 +2369,7 @@ async def _record_api_audit_event(
         settings,
         request.method,
         request.url.path,
-        _client_host(request),
+        _client_host(request, settings),
         event,
         credential_present,
         credential_scope,
@@ -2409,21 +2416,45 @@ def _record_api_audit_event_sync(
         )
 
 
-def _rate_limit_identity(request: Request) -> str:
+def _rate_limit_identity(request: Request, settings: Settings) -> str:
     supplied_key = _supplied_api_key(request)
     if supplied_key:
         digest = hashlib.sha256(supplied_key.encode("utf-8")).hexdigest()
         return f"api-key:{digest}"
-    client_host = _client_host(request)
+    client_host = _client_host(request, settings)
     return f"ip:{client_host}"
 
 
-def _client_host(request: Request) -> str:
+def _client_host(request: Request, settings: Settings) -> str:
     client_host = request.client.host if request.client else "unknown"
     forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        client_host = forwarded_for.split(",", maxsplit=1)[0].strip() or client_host
+    if forwarded_for and _trusted_proxy_client_host(client_host, settings):
+        forwarded_host = forwarded_for.split(",", maxsplit=1)[0].strip()
+        if _valid_forwarded_ip(forwarded_host):
+            client_host = forwarded_host
     return client_host
+
+
+def _trusted_proxy_client_host(client_host: str, settings: Settings) -> bool:
+    if not settings.api_trusted_proxy_cidrs:
+        return False
+    try:
+        client_ip = ipaddress.ip_address(client_host)
+    except ValueError:
+        return False
+    return any(
+        client_ip in ipaddress.ip_network(entry.strip(), strict=False)
+        for entry in settings.api_trusted_proxy_cidrs.split(",")
+        if entry.strip()
+    )
+
+
+def _valid_forwarded_ip(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return True
 
 
 def _resolve_api_path(path: Path, *, settings: Settings) -> Path:
