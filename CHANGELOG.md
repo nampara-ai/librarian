@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.0a18 - 2026-05-13
+
+- Redacted API run-submission failures before returning 503 responses or persisting failed-run
+  errors, preventing queue/backend exception text from exposing API keys or provider tokens.
+
 ## 0.1.0a17 - 2026-05-13
 
 - Redacted per-file API batch-upload failure details before returning item-level errors so

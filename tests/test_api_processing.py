@@ -2261,7 +2261,7 @@ def test_api_sqlite_submission_failure_marks_run_failed(
 
     async def fail_enqueue(self: object, run_id: object) -> None:
         del self, run_id
-        raise RuntimeError("queue insert failed")
+        raise RuntimeError("queue insert failed api_key=abc123 sk-testSECRET123")
 
     monkeypatch.setattr(SQLiteRunQueue, "enqueue", fail_enqueue)
 
@@ -2274,12 +2274,17 @@ def test_api_sqlite_submission_failure_marks_run_failed(
         response = client.post("/runs", json={"document_id": upload.json()["id"]})
 
     assert response.status_code == 503
-    assert "Run submission failed" in response.json()["detail"]
+    detail = response.json()["detail"]
+    assert "Run submission failed" in detail
+    assert "api_key=[REDACTED]" in detail
+    assert "[REDACTED]" in detail
+    assert "abc123" not in detail
+    assert "sk-testSECRET123" not in detail
     container = asyncio.run(build_container(settings))
     runs = asyncio.run(container.repository.list_runs(limit=10))
     assert len(runs) == 1
     assert runs[0].status.value == "failed"
-    assert runs[0].error == "submission failed: queue insert failed"
+    assert runs[0].error == "submission failed: queue insert failed api_key=[REDACTED] [REDACTED]"
 
 
 def _wait_for_run(client: TestClient, run_id: str):

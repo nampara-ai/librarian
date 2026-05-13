@@ -1009,7 +1009,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await _submit_run(settings, http_request, run.id)
         except Exception as exc:
             await _fail_unsubmitted_run(container, run.id, exc)
-            raise HTTPException(status_code=503, detail=f"Run submission failed: {exc}") from exc
+            raise HTTPException(
+                status_code=503,
+                detail=_run_submission_error_detail(exc),
+            ) from exc
         return _run_response(run)
 
     @app.get("/documents/{document_id}/content", response_model=ContentResponse)
@@ -1079,7 +1082,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await _submit_run(settings, http_request, run.id)
         except Exception as exc:
             await _fail_unsubmitted_run(container, run.id, exc)
-            raise HTTPException(status_code=503, detail=f"Run submission failed: {exc}") from exc
+            raise HTTPException(
+                status_code=503,
+                detail=_run_submission_error_detail(exc),
+            ) from exc
         return _run_response(run)
 
     @app.get("/runs", response_model=RunsResponse)
@@ -1141,7 +1147,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await _submit_run(settings, http_request, retry.id)
         except Exception as exc:
             await _fail_unsubmitted_run(container, retry.id, exc)
-            raise HTTPException(status_code=503, detail=f"Run submission failed: {exc}") from exc
+            raise HTTPException(
+                status_code=503,
+                detail=_run_submission_error_detail(exc),
+            ) from exc
         return _run_response(retry)
 
     @app.post("/imports", response_model=ImportResponse)
@@ -2587,8 +2596,12 @@ async def _fail_unsubmitted_run(container: Any, run_id: RunId, exc: Exception) -
         run_id,
         status=RunStatus.FAILED,
         stage=RunStage.COMPLETE,
-        error=f"submission failed: {exc}",
+        error=f"submission failed: {sanitize_error_message(exc)}",
     )
+
+
+def _run_submission_error_detail(exc: Exception) -> str:
+    return f"Run submission failed: {sanitize_error_message(exc)}"
 
 
 def _job_runner(request: Request) -> InProcessJobRunner:
