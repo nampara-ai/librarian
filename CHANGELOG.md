@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a31 - 2026-05-14
+
+- Added bounded search facet buckets with `facet_limit` so broad facet queries
+  stay predictable on large libraries while source totals continue to report
+  the full matching document count.
+
 ## 0.1.0a30 - 2026-05-14
 
 - Added classification prefix filters to CLI and API search so users can browse

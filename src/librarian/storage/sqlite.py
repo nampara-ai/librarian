@@ -38,6 +38,7 @@ from librarian.domain.models import (
 _SQLITE_BUSY_TIMEOUT_MS = 5_000
 _MAX_SEARCH_QUERY_CHARS = 4_096
 _MAX_EVENT_PAGE_SIZE = 1_000
+_MAX_SEARCH_FACET_LIMIT = 500
 _FTS_HIGHLIGHT_START = "\x1fH\x1f"
 _FTS_HIGHLIGHT_END = "\x1f/H\x1f"
 _SEARCH_TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
@@ -680,6 +681,7 @@ class SQLiteRepository:
         created_before: datetime | None = None,
         scope: SearchScope = "cleaned",
         phrase: bool = False,
+        facet_limit: int = 50,
     ) -> SearchFacets:
         """Return facet counts for matching documents."""
         return await asyncio.to_thread(
@@ -693,6 +695,7 @@ class SQLiteRepository:
             created_before,
             scope,
             phrase,
+            facet_limit,
         )
 
     async def emit(self, run_id: RunId, stage: RunStage, message: str) -> None:
@@ -1701,7 +1704,9 @@ class SQLiteRepository:
         created_before: datetime | None,
         scope: SearchScope,
         phrase: bool = False,
+        facet_limit: int = 50,
     ) -> SearchFacets:
+        _validate_facet_limit(facet_limit)
         if scope == "raw":
             return self._raw_search_facets_sync(
                 query,
@@ -1712,6 +1717,7 @@ class SQLiteRepository:
                 created_after,
                 created_before,
                 phrase,
+                facet_limit,
             )
         match_query = normalize_search_query(query, phrase=phrase)
         filename_pattern = f"%{_escape_like(filename_contains)}%" if filename_contains else None
@@ -1734,6 +1740,7 @@ class SQLiteRepository:
             created_before.isoformat() if created_before else None,
             created_before.isoformat() if created_before else None,
         )
+        limited_filter_parameters = (*filter_parameters, facet_limit)
         with self.database.connect() as connection:
             try:
                 classification_rows = connection.execute(
@@ -1763,8 +1770,9 @@ class SQLiteRepository:
                       AND (? IS NULL OR documents.created_at <= ?)
                     GROUP BY classifications.code, classifications.label
                     ORDER BY count DESC, classifications.code ASC
+                    LIMIT ?
                     """,
-                    filter_parameters,
+                    limited_filter_parameters,
                 ).fetchall()
                 status_rows = connection.execute(
                     """
@@ -1823,12 +1831,13 @@ class SQLiteRepository:
                       AND (? IS NULL OR documents.created_at <= ?)
                     GROUP BY documents.filename
                     ORDER BY count DESC, documents.filename ASC
+                    LIMIT ?
                     """,
-                    filter_parameters,
+                    limited_filter_parameters,
                 ).fetchall()
             except sqlite3.OperationalError as exc:
                 raise ValueError("Invalid search query") from exc
-        total = sum(int(row["count"]) for row in filename_rows)
+        total = sum(int(row["count"]) for row in status_rows)
         return SearchFacets(
             classifications=_classification_facets(classification_rows),
             statuses=tuple(
@@ -1852,7 +1861,9 @@ class SQLiteRepository:
         created_after: datetime | None,
         created_before: datetime | None,
         phrase: bool = False,
+        facet_limit: int = 50,
     ) -> SearchFacets:
+        _validate_facet_limit(facet_limit)
         match_query = normalize_search_query(query, phrase=phrase)
         filename_pattern = f"%{_escape_like(filename_contains)}%" if filename_contains else None
         classification_prefix_pattern = (
@@ -1873,6 +1884,7 @@ class SQLiteRepository:
             created_before.isoformat() if created_before else None,
             created_before.isoformat() if created_before else None,
         )
+        limited_filter_parameters = (*filter_parameters, facet_limit)
         with self.database.connect() as connection:
             try:
                 classification_rows = connection.execute(
@@ -1892,8 +1904,9 @@ class SQLiteRepository:
                       AND (? IS NULL OR documents.created_at <= ?)
                     GROUP BY classifications.code, classifications.label
                     ORDER BY count DESC, classifications.code ASC
+                    LIMIT ?
                     """,
-                    filter_parameters,
+                    limited_filter_parameters,
                 ).fetchall()
                 status_rows = connection.execute(
                     """
@@ -1930,12 +1943,13 @@ class SQLiteRepository:
                       AND (? IS NULL OR documents.created_at <= ?)
                     GROUP BY documents.filename
                     ORDER BY count DESC, documents.filename ASC
+                    LIMIT ?
                     """,
-                    filter_parameters,
+                    limited_filter_parameters,
                 ).fetchall()
             except sqlite3.OperationalError as exc:
                 raise ValueError("Invalid search query") from exc
-        total = sum(int(row["count"]) for row in filename_rows)
+        total = sum(int(row["count"]) for row in status_rows)
         return SearchFacets(
             classifications=_classification_facets(classification_rows),
             statuses=tuple(
@@ -2004,6 +2018,11 @@ def _validate_event_page(*, limit: int, offset: int) -> None:
         raise ValueError(f"limit must be between 1 and {_MAX_EVENT_PAGE_SIZE}")
     if offset < 0:
         raise ValueError("offset must be greater than or equal to 0")
+
+
+def _validate_facet_limit(limit: int) -> None:
+    if limit < 1 or limit > _MAX_SEARCH_FACET_LIMIT:
+        raise ValueError(f"facet_limit must be between 1 and {_MAX_SEARCH_FACET_LIMIT}")
 
 
 def normalize_search_query(query: str, *, phrase: bool = False) -> str:

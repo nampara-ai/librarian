@@ -109,7 +109,8 @@ validated before conversion starts and must not be symlinks or cross symlinked p
   Responses include the same `total`, `limit`, and `offset` pagination metadata as `/search`.
 - `POST /search/facets`: facet counts for a query grouped by classification, document status,
   search source, and filename. Facets honor the same query filters as `/search`, so counts reflect
-  the active result set.
+  the active result set. `facet_limit` caps classification and filename bucket counts, defaults to
+  `50`, and is capped at `500`; source totals still report the full matching document count.
 - `GET /classifications`: built-in Dewey labels.
 - `GET /config`: selected runtime settings.
 - `GET /health`: health check.

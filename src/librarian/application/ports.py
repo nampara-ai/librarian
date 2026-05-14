@@ -271,4 +271,5 @@ class SearchIndex(Protocol):
         created_before: datetime | None = None,
         scope: SearchScope = "cleaned",
         phrase: bool = False,
+        facet_limit: int = 50,
     ) -> SearchFacets: ...

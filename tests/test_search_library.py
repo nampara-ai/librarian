@@ -149,6 +149,7 @@ async def test_search_library_delegates_filters_to_configured_index() -> None:
         "scope": "raw",
         "phrase": True,
     }
+    expected_facet_filters = {**expected_filters, "facet_limit": 50}
 
     assert ids == [DocumentId("doc_search")]
     assert results[0].snippet == "<mark>horse</mark>"
@@ -171,5 +172,5 @@ async def test_search_library_delegates_filters_to_configured_index() -> None:
             {"limit": 5, "offset": 2, **expected_filters},
         ),
         ("search_count", "follow-up care", expected_filters),
-        ("search_facets", "follow-up care", expected_filters),
+        ("search_facets", "follow-up care", expected_facet_filters),
     ]

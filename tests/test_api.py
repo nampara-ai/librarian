@@ -377,6 +377,8 @@ def test_search_request_schema_documents_scope_default() -> None:
 
     assert schema["properties"]["scope"]["default"] == "cleaned"
     assert schema["properties"]["phrase"]["default"] is False
+    assert schema["properties"]["facet_limit"]["default"] == 50
+    assert schema["properties"]["facet_limit"]["maximum"] == 500
 
 
 def test_openapi_documents_configured_api_auth(tmp_path: Path) -> None:

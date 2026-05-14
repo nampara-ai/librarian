@@ -129,6 +129,7 @@ class SearchLibrary:
         created_before: datetime | None = None,
         scope: SearchScope = "cleaned",
         phrase: bool = False,
+        facet_limit: int = 50,
     ) -> SearchFacets:
         """Return facet counts for the query and filters."""
         return await self.index.search_facets(
@@ -141,4 +142,5 @@ class SearchLibrary:
             created_before=created_before,
             scope=scope,
             phrase=phrase,
+            facet_limit=facet_limit,
         )

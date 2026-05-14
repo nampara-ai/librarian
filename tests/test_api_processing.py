@@ -2229,9 +2229,14 @@ def test_api_search_rejects_out_of_range_limits(tmp_path: Path) -> None:
     with TestClient(create_app(settings)) as client:
         negative = client.post("/search", json={"query": "horse", "limit": -1})
         huge = client.post("/search", json={"query": "horse", "limit": 100_000})
+        facet_huge = client.post(
+            "/search/facets",
+            json={"query": "horse", "facet_limit": 100_000},
+        )
 
     assert negative.status_code == 422
     assert huge.status_code == 422
+    assert facet_huge.status_code == 422
 
 
 def test_api_search_rejects_invalid_document_status_filter(

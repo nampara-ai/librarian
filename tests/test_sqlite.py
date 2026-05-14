@@ -649,6 +649,36 @@ async def test_sqlite_search_facets_honor_filters(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_sqlite_search_facets_cap_buckets_without_losing_total(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    container = await build_container(settings)
+    for index in range(3):
+        source = tmp_path / f"facet-{index}.txt"
+        source.write_text(
+            f"Horse facet limit transcript fixture {index}.",
+            encoding="utf-8",
+        )
+        await container.ingest_document.execute(source)
+
+    facets = await container.repository.search_facets(
+        "Horse facet",
+        scope="raw",
+        facet_limit=2,
+    )
+
+    assert facets.sources[0].count == 3
+    assert [(item.value, item.count) for item in facets.filenames] == [
+        ("facet-0.txt", 1),
+        ("facet-1.txt", 1),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_sqlite_lists_structured_run_events(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",

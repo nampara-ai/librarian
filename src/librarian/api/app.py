@@ -255,6 +255,7 @@ class SearchRequest(BaseModel):
     created_after: datetime | None = None
     created_before: datetime | None = None
     scope: str = "cleaned"
+    facet_limit: int = Field(default=50, ge=1, le=500)
 
 
 class SearchResponse(BaseModel):
@@ -1564,6 +1565,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 created_before=request.created_before,
                 scope=search_scope,
                 phrase=request.phrase,
+                facet_limit=request.facet_limit,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=sanitize_error_message(exc)) from exc
