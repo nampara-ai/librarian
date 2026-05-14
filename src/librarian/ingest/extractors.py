@@ -24,6 +24,7 @@ from librarian.application.transcripts import (
     render_transcript,
 )
 from librarian.observability import sanitize_error_message
+from librarian.pipeline.validation import validate_cleaned_text
 
 IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"})
 ARCHIVE_EXTENSIONS = frozenset({".zip", ".tar", ".tgz", ".gz", ".bz2", ".xz", ".7z", ".rar"})
@@ -105,6 +106,14 @@ class OcrTextResult:
     text: str
     confidence: float | None = None
     image_path: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OcrCorrectionResult:
+    """Corrected OCR text plus quality warnings."""
+
+    text: str
+    warnings: tuple[str, ...] = ()
 
 
 class TextFamilyExtractor:
@@ -320,13 +329,21 @@ class PdfExtractor:
                         image_artifact_path=self._ocr_page_image_artifact_path(page_number),
                     )
                     ocr_result = _coerce_ocr_result(ocr_result_obj)
-                    corrected = await self._correct_ocr_page(
+                    correction = await self._correct_ocr_page(
                         page_number=page_number,
                         text=ocr_result.text,
                         confidence=ocr_result.confidence,
                     )
+                    corrected = correction.text
                     corrected_page = corrected != ocr_result.text
                     duration_ms = (time.perf_counter() - page_start) * 1000
+                    warnings = (
+                        *_ocr_page_warnings(
+                            confidence=ocr_result.confidence,
+                            low_confidence_threshold=self.ocr_low_confidence_threshold,
+                        ),
+                        *correction.warnings,
+                    )
                     page_results[page_number - 1] = PdfPageExtraction(
                         page_number=page_number,
                         text=corrected,
@@ -337,10 +354,7 @@ class PdfExtractor:
                         image_path=ocr_result.image_path,
                         attempts=previous_attempts.get(page_number, 0) + 1,
                         duration_ms=duration_ms,
-                        warnings=_ocr_page_warnings(
-                            confidence=ocr_result.confidence,
-                            low_confidence_threshold=self.ocr_low_confidence_threshold,
-                        ),
+                        warnings=tuple(dict.fromkeys(warnings)),
                     )
                     self._record_ocr_page(
                         status="succeeded",
@@ -569,9 +583,9 @@ class PdfExtractor:
         page_number: int,
         text: str,
         confidence: float | None = None,
-    ) -> str:
+    ) -> OcrCorrectionResult:
         if self.ocr_correction_mode == "never":
-            return text
+            return OcrCorrectionResult(text=text)
         if (
             self.ocr_correction_mode == "low-confidence"
             and (
@@ -579,7 +593,7 @@ class PdfExtractor:
                 or confidence >= self.ocr_low_confidence_threshold
             )
         ):
-            return text
+            return OcrCorrectionResult(text=text)
         provider = self.ocr_correction_provider
         if provider is None:
             raise RuntimeError("LLM OCR correction is enabled but no LLM provider is configured")
@@ -603,7 +617,10 @@ class PdfExtractor:
             )
         if not clean:
             raise ValueError(f"LLM OCR correction returned empty text for page {page_number}")
-        return clean
+        validated = validate_cleaned_text(clean, input_size=len(text), source_text=text)
+        if not validated.ok:
+            raise ValueError(f"LLM OCR correction returned empty text for page {page_number}")
+        return OcrCorrectionResult(text=validated.text, warnings=validated.warnings)
 
 
 class ImageOcrExtractor:

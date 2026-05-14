@@ -946,6 +946,69 @@ async def test_pdf_page_manifest_preserves_raw_and_corrected_ocr_text(
 
 
 @pytest.mark.asyncio
+async def test_pdf_page_manifest_records_ocr_correction_quality_warnings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "fixture.pdf"
+    manifest = tmp_path / "fixture.md.pages.json"
+    path.write_bytes(b"%PDF")
+    repeated_tail = " The correction tail repeats without new evidence." * 8
+
+    class FakeProvider:
+        name = "fake"
+
+        async def complete(self, **kwargs: object) -> str:
+            del kwargs
+            return f"OCR corrected intro.{repeated_tail}"
+
+    class FakePage:
+        @staticmethod
+        def extract_text() -> None:
+            return None
+
+    class FakePdf:
+        pages = [FakePage()]
+
+        def __enter__(self) -> "FakePdf":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(path: Path) -> FakePdf:
+            del path
+            return FakePdf()
+
+    def fake_import_module(name: str) -> object:
+        if name == "pdfplumber":
+            return FakePdfPlumber
+        return __import__(name)
+
+    def fake_ocr_pdf_page(*args: object, **kwargs: object) -> OcrTextResult:
+        del args, kwargs
+        return OcrTextResult(text="OCR raw", confidence=42.0)
+
+    monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", fake_ocr_pdf_page)
+    extractor = PdfExtractor(ocr_correction_provider=FakeProvider())
+    extractor.set_page_manifest_path(manifest)
+
+    await extractor.extract(path)
+
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    page = payload["pages"][0]
+    assert "repeated-tail" in page["warnings"]
+    assert page["corrected"] is True
+    assert extractor.last_metadata is not None
+    metadata_pages = extractor.last_metadata["pages"]
+    assert isinstance(metadata_pages, list)
+    assert "repeated-tail" in metadata_pages[0]["warnings"]
+
+
+@pytest.mark.asyncio
 async def test_pdf_page_manifest_records_preserved_page_image_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

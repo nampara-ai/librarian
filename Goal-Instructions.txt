@@ -14,7 +14,7 @@
   conversion/OCR adapters, versioned prompts, CLI/API parity, CI, CodeQL,
   Docker, and release automation.
 
-  Current public release: `v0.1.0a61`.
+  Current public release: `v0.1.0a62`.
 
   High-level code tour:
 
@@ -173,7 +173,7 @@
   persists runs and outputs in SQLite; and exposes the same workflow through
   both a CLI and FastAPI API.
 
-  Current release: v0.1.0a61
+  Current release: v0.1.0a62
   Repo: https://github.com/nampara-ai/librarian
 
   Codebase Tour
@@ -225,7 +225,7 @@
 
   The repo is in solid alpha shape:
 
-  - Latest release: v0.1.0a61
+  - Latest release: v0.1.0a62
   - CI passes.
   - CodeQL passes.
   - Release workflow passes.
@@ -1118,3 +1118,7 @@
   repeated-tail cleaned-output warning. Degenerate OCR/LLM outputs that end by
   looping the same phrase now persist `repeated-tail` warnings and fail evals
   unless the case explicitly allows that degradation.
+- 2026-05-14: Extended output quality validation into the PDF OCR correction
+  path. LLM-corrected OCR page text now carries repeated-tail and related
+  warning codes into page manifests and extraction metadata before the text
+  reaches the normal cleaning pipeline.

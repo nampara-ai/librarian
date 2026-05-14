@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a62 - 2026-05-14
+
+- Extended cleaned-output quality validation into LLM OCR correction so page
+  manifests and extraction metadata now surface repeated-tail and related OCR
+  correction warnings before corrected text enters the normal cleaning pipeline.
+
 ## 0.1.0a61 - 2026-05-14
 
 - Added repeated-tail output validation so degenerate LLM/OCR corrections that

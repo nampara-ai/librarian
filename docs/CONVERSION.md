@@ -121,6 +121,11 @@ OCR support:
   `threshold` and `deskew` use `LIBRARIAN_OCR_THRESHOLD`, which defaults to `180`.
 - Preserve rasterized page images for debugging with `LIBRARIAN_OCR_PRESERVE_PAGE_IMAGES=true`.
   This only writes page images when conversion sidecars are enabled.
+- Tune scanned-PDF throughput with `LIBRARIAN_OCR_PAGE_CONCURRENCY`.
+- Control LLM OCR correction with `LIBRARIAN_OCR_LLM_CORRECTION=always|never|low-confidence`
+  and optionally override the correction model with `LIBRARIAN_OCR_LLM_MODEL`.
+  `low-confidence` uses Tesseract TSV word confidence for PDF OCR and only corrects pages below
+  `LIBRARIAN_OCR_LOW_CONFIDENCE_THRESHOLD`, which defaults to `85`.
 
 ## Output Quality Warnings
 
@@ -128,12 +133,9 @@ Cleaned chunk records include non-fatal warnings when output quality checks find
 regressions, including collapsed paragraphs, missing Markdown headings/lists/tables, missing
 citation markers, malformed Markdown tables, orphan list markers, repeated tails, context-marker
 leaks, and assistant artifacts. These warnings are persisted with cleaned chunks so eval suites and
-operators can investigate suspicious outputs without blocking successful runs.
-- Tune scanned-PDF throughput with `LIBRARIAN_OCR_PAGE_CONCURRENCY`.
-- Control LLM OCR correction with `LIBRARIAN_OCR_LLM_CORRECTION=always|never|low-confidence`
-  and optionally override the correction model with `LIBRARIAN_OCR_LLM_MODEL`.
-  `low-confidence` uses Tesseract TSV word confidence for PDF OCR and only corrects pages below
-  `LIBRARIAN_OCR_LOW_CONFIDENCE_THRESHOLD`, which defaults to `85`.
+operators can investigate suspicious outputs without blocking successful runs. LLM OCR correction
+uses the same warning checks before corrected page text is accepted, and those correction warnings
+are attached to the PDF page manifest records for the affected OCR pages.
 
 PDF extraction is page-aware. Librarian reads embedded text from pages that have it and OCRs only
 pages where embedded extraction is empty. This avoids the old all-or-nothing scanned-PDF fallback
@@ -173,7 +175,7 @@ API deployments can inspect the same sidecar with
 `GET /imports/page-manifest?manifest_path=/data/out/report.md.pages.json`. The path must be under
 `LIBRARIAN_API_IMPORT_ROOT`; use `failures_only=true` to page through failed OCR records.
 Manifest page records also include structured `warnings` codes such as `low-ocr-confidence`,
-`missing-ocr-confidence`, and `ocr-page-failed`.
+`missing-ocr-confidence`, `repeated-tail`, and `ocr-page-failed`.
 
 Markdown PDF output includes stable page boundaries:
 
