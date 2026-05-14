@@ -200,6 +200,9 @@ def test_shipped_eval_suite_covers_v2_prompt_risks() -> None:
     assert len(suite.cases) >= 6
     assert {
         "classification",
+        "transcript",
+        "legal",
+        "technical",
         "no-summarization",
         "markdown",
         "structure",

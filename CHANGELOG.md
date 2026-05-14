@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.0a53 - 2026-05-14
+
+- Added a release evidence floor for prompt eval coverage with
+  `--min-eval-cases`, wired CI/release/manual verification to require the six
+  shipped sanitized prompt-risk cases, and expanded the shipped eval-suite
+  coverage test for transcript, legal, technical, Markdown, OCR correction, and
+  no-summarization risks.
+
 ## 0.1.0a52 - 2026-05-14
 
 - Surfaced PDF page-manifest schema and lifecycle summaries through CLI/API

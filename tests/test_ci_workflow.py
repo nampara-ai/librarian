@@ -105,6 +105,7 @@ def test_ci_runs_and_verifies_example_evidence() -> None:
     assert "--eval \"$RUNNER_TEMP/ci-eval.json\"" in workflow
     assert "--corpus-eval \"$RUNNER_TEMP/ci-corpus-eval.json\"" in workflow
     assert "--benchmark \"$RUNNER_TEMP/ci-benchmark.json\"" in workflow
+    assert "--min-eval-cases 6" in workflow
     assert "--min-corpus-cases 13" in workflow
     assert "--min-corpus-search-recall 1.0" in workflow
     assert "--min-corpus-output-ratio 0.05" in workflow

@@ -1080,3 +1080,7 @@
   and API inspection responses, and made corpus-eval cross-check page summary
   diagnostics against per-page records so stale or forged summaries fail
   evaluation instead of being trusted as proxy evidence.
+- 2026-05-14: Tightened prompt-eval release evidence with a `--min-eval-cases`
+  gate requiring the six shipped sanitized prompt-risk cases, and expanded the
+  shipped eval-suite coverage test for transcript, legal, technical, Markdown,
+  OCR correction, no-summarization, and classification risks.

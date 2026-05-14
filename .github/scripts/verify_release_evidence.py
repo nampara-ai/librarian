@@ -601,6 +601,7 @@ def verify_eval(
     path: Path,
     *,
     require_real_provider: bool,
+    min_cases: int,
     expected_version: str | None,
 ) -> list[str]:
     payload = _load_json(path)
@@ -638,7 +639,11 @@ def verify_eval(
         failures=failures,
     )
     _expect(bool(payload.get("model")), f"{path}: eval missing model", failures)
-    _expect(summary.get("case_count", 0) >= 1, f"{path}: eval has no cases", failures)
+    _expect(
+        summary.get("case_count", 0) >= min_cases,
+        f"{path}: eval has too few cases",
+        failures,
+    )
     _check_pass_counts(summary, path, label="eval", failures=failures)
     _check_case_results(payload, summary, path, label="eval", failures=failures)
     _check_eval_case_metrics(payload, path, failures=failures)
@@ -835,6 +840,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-corpus-search-recall", type=float, default=1.0)
     parser.add_argument("--min-corpus-output-ratio", type=float, default=0.0)
     parser.add_argument("--min-corpus-cases", type=int, default=1)
+    parser.add_argument("--min-eval-cases", type=int, default=1)
     parser.add_argument("--min-benchmark-cps", type=float, default=1.0)
     parser.add_argument("--min-benchmark-runs", type=int, default=1)
     parser.add_argument("--version", help="Expected Librarian release version or tag.")
@@ -847,6 +853,7 @@ def main(argv: list[str] | None = None) -> int:
                 verify_eval(
                     path,
                     require_real_provider=args.require_real_provider,
+                    min_cases=args.min_eval_cases,
                     expected_version=args.version,
                 )
             )

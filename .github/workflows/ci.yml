@@ -63,6 +63,7 @@ jobs:
             --corpus-eval "$RUNNER_TEMP/ci-corpus-eval.json" \
             --benchmark "$RUNNER_TEMP/ci-benchmark.json" \
             --version "$VERSION" \
+            --min-eval-cases 6 \
             --min-corpus-cases 13 \
             --min-corpus-search-recall 1.0 \
             --min-corpus-output-ratio 0.05 \

@@ -102,6 +102,7 @@ jobs:
             --corpus-eval release-evidence/corpus-eval-mock.json \
             --benchmark release-evidence/benchmark-mock.json \
             --version "$GITHUB_REF_NAME" \
+            --min-eval-cases 6 \
             --min-corpus-cases 13 \
             --min-corpus-search-recall 1.0 \
             --min-corpus-output-ratio 0.05 \

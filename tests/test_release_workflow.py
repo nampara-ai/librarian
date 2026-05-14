@@ -167,6 +167,7 @@ def test_release_workflow_runs_synthetic_corpus_eval_before_build() -> None:
     assert "--corpus-eval release-evidence/corpus-eval-mock.json" in workflow
     assert "--benchmark release-evidence/benchmark-mock.json" in workflow
     assert "--version \"$GITHUB_REF_NAME\"" in workflow
+    assert "--min-eval-cases 6" in workflow
     assert "--min-corpus-cases 13" in workflow
     assert "--min-corpus-search-recall 1.0" in workflow
     assert "--min-corpus-output-ratio 0.05" in workflow
@@ -179,6 +180,7 @@ def test_release_docs_use_one_release_version_variable() -> None:
 
     assert "from librarian.version import __version__; print(__version__)" in release_doc
     assert '--version "v${RELEASE_VERSION}"' in release_doc
+    assert "--min-eval-cases 6" in release_doc
     assert "--min-corpus-output-ratio 0.05" in release_doc
     assert 'git tag "v${RELEASE_VERSION}"' in release_doc
     assert 'git push origin "v${RELEASE_VERSION}"' in release_doc
@@ -764,6 +766,8 @@ def test_release_evidence_verifier_accepts_passing_artifacts(tmp_path: Path) -> 
                 "--benchmark",
                 str(benchmark_path),
                 "--require-real-provider",
+                "--min-eval-cases",
+                "2",
                 "--min-corpus-cases",
                 "8",
                 "--min-benchmark-cps",
@@ -776,6 +780,57 @@ def test_release_evidence_verifier_accepts_passing_artifacts(tmp_path: Path) -> 
         )
         == 0
     )
+
+
+def test_release_evidence_verifier_rejects_too_few_eval_cases(tmp_path: Path) -> None:
+    verifier = _load_release_evidence_module()
+    eval_path = tmp_path / "eval.json"
+    eval_path.write_text(
+        """
+        {
+          "artifact_type": "librarian-eval-result",
+          "evidence_tier": "mock-smoke",
+          "passed": true,
+          "provider": "mock",
+          "model": "mock-cleaner",
+          "generated_at": "2026-05-13T00:00:00+00:00",
+          "librarian_version": "0.1.0a4",
+          "cleaning_prompt_version": "cmos_v2",
+          "classification_prompt_version": "dewey_v2",
+          "summary": {
+            "case_count": 1,
+            "passed_count": 1,
+            "failed_count": 0,
+            "failure_count": 0,
+            "failure_case_count": 0,
+            "total_input_chars": 100,
+            "total_output_chars": 95,
+            "average_chars_per_second": 100,
+            "warning_count": 0,
+            "warning_case_count": 0
+          },
+          "cases": [
+            {
+              "name": "case one",
+              "passed": true,
+              "tags": ["provider"],
+              "input_chars": 100,
+              "output_chars": 95,
+              "output_char_ratio": 0.95,
+              "duration_seconds": 1.0,
+              "chars_per_second": 100,
+              "classification_code": "636.1",
+              "classification_label": "Horses",
+              "warnings": [],
+              "failures": []
+            }
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    assert verifier.main(["--eval", str(eval_path), "--min-eval-cases", "2"]) == 1
 
 
 def test_release_evidence_verifier_rejects_mock_or_failed_artifacts(tmp_path: Path) -> None:
