@@ -34,7 +34,9 @@ uv run python .github/scripts/verify_release_evidence.py \
    Keep private/provider outputs out of Git. Attach sanitized evidence to the release when it is
    appropriate for public distribution. Eval, corpus-eval, and benchmark JSON must carry the
    expected `artifact_type` and an `evidence_tier` that matches the provider (`mock-smoke` for
-   deterministic CI artifacts, `real-provider` for hosted provider evidence).
+   deterministic CI artifacts, `real-provider` for hosted provider evidence). The verifier also
+   cross-checks summary counts against per-case and per-run details so hidden failures cannot be
+   masked by a green top-level summary.
 6. Run secret scanning:
 
 ```bash

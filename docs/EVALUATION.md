@@ -114,7 +114,8 @@ Eval JSON results include an `artifact_type`, an `evidence_tier` (`mock-smoke` o
 `real-provider`), Librarian version, generation timestamp, provider/model settings, prompt
 versions, aggregate pass/throughput/warning/failure summary metrics, and per-case classification,
 warning, output character ratio, and failure details. Release-candidate evidence verification
-rejects artifacts whose tier does not match the recorded provider.
+rejects artifacts whose tier does not match the recorded provider or whose summary counts do not
+match the per-case and per-run details.
 
 ## Corpus Eval Format
 

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.0a34 - 2026-05-14
+
+- Strengthened release evidence verification to cross-check eval and corpus-eval
+  summaries against per-case details, and benchmark summaries against per-run
+  measurements, so hidden case failures or malformed run records cannot pass
+  release gates.
+
 ## 0.1.0a33 - 2026-05-14
 
 - Added explicit eval evidence artifact metadata and verifier checks so prompt eval,

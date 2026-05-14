@@ -127,6 +127,68 @@ def _check_evidence_tier(
         failures.append(f"{path}: {label} evidence_tier is not real-provider")
 
 
+def _check_case_results(
+    payload: dict[str, Any],
+    summary: dict[str, Any],
+    path: Path,
+    *,
+    label: str,
+    failures: list[str],
+) -> None:
+    cases = payload.get("cases")
+    if not isinstance(cases, list) or not cases:
+        failures.append(f"{path}: {label} missing case details")
+        return
+    if not all(isinstance(item, dict) for item in cases):
+        failures.append(f"{path}: {label} case details must be objects")
+        return
+    case_count = summary.get("case_count")
+    passed_count = summary.get("passed_count")
+    failed_count = summary.get("failed_count")
+    if isinstance(case_count, int) and len(cases) != case_count:
+        failures.append(f"{path}: {label} case detail count does not match summary")
+    detailed_passed = sum(1 for item in cases if item.get("passed") is True)
+    detailed_failed = sum(1 for item in cases if item.get("passed") is False)
+    if isinstance(passed_count, int) and detailed_passed != passed_count:
+        failures.append(f"{path}: {label} detailed passed count does not match summary")
+    if isinstance(failed_count, int) and detailed_failed != failed_count:
+        failures.append(f"{path}: {label} detailed failed count does not match summary")
+    for index, item in enumerate(cases, start=1):
+        if item.get("passed") is not True:
+            failures.append(f"{path}: {label} case {index} did not pass")
+        case_failures = item.get("failures")
+        if not isinstance(case_failures, list):
+            failures.append(f"{path}: {label} case {index} missing failures list")
+        elif case_failures:
+            failures.append(f"{path}: {label} case {index} has failure details")
+
+
+def _check_benchmark_runs(
+    runs: Any,
+    summary: dict[str, Any],
+    path: Path,
+    *,
+    failures: list[str],
+) -> None:
+    if not isinstance(runs, list) or not runs:
+        failures.append(f"{path}: benchmark missing run details")
+        return
+    if not all(isinstance(item, dict) for item in runs):
+        failures.append(f"{path}: benchmark run details must be objects")
+        return
+    run_count = summary.get("run_count")
+    if isinstance(run_count, int) and len(runs) != run_count:
+        failures.append(f"{path}: benchmark run count does not match summary")
+    for index, item in enumerate(runs, start=1):
+        if not isinstance(item.get("provider"), str) or not item.get("provider"):
+            failures.append(f"{path}: benchmark run {index} missing provider")
+        if not isinstance(item.get("input_chars"), int | float) or item.get("input_chars", 0) <= 0:
+            failures.append(f"{path}: benchmark run {index} missing positive input_chars")
+        cps = item.get("chars_per_second")
+        if not isinstance(cps, int | float) or float(cps) <= 0:
+            failures.append(f"{path}: benchmark run {index} missing positive chars_per_second")
+
+
 def verify_eval(
     path: Path,
     *,
@@ -170,6 +232,7 @@ def verify_eval(
     _expect(bool(payload.get("model")), f"{path}: eval missing model", failures)
     _expect(summary.get("case_count", 0) >= 1, f"{path}: eval has no cases", failures)
     _check_pass_counts(summary, path, label="eval", failures=failures)
+    _check_case_results(payload, summary, path, label="eval", failures=failures)
     _expect(summary.get("failure_count") == 0, f"{path}: eval failures recorded", failures)
     _expect(
         payload.get("cleaning_prompt_version") == "cmos_v2",
@@ -239,6 +302,7 @@ def verify_corpus_eval(
         failures,
     )
     _check_pass_counts(summary, path, label="corpus eval", failures=failures)
+    _check_case_results(payload, summary, path, label="corpus eval", failures=failures)
     _expect(summary.get("failure_count") == 0, f"{path}: corpus eval failures recorded", failures)
     _expect(
         isinstance(average_search_recall, int | float)
@@ -316,6 +380,7 @@ def verify_benchmark(
         f"{path}: too few benchmark runs",
         failures,
     )
+    _check_benchmark_runs(runs, summary, path, failures=failures)
     _check_generated_at(payload, path, label="benchmark", failures=failures)
     _expect(
         bool(payload.get("librarian_version")),

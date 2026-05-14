@@ -365,7 +365,11 @@ def test_release_evidence_verifier_accepts_passing_artifacts(tmp_path: Path) -> 
           "librarian_version": "0.1.0a4",
           "cleaning_prompt_version": "cmos_v2",
           "classification_prompt_version": "dewey_v2",
-          "summary": {"case_count": 2, "passed_count": 2, "failed_count": 0, "failure_count": 0}
+          "summary": {"case_count": 2, "passed_count": 2, "failed_count": 0, "failure_count": 0},
+          "cases": [
+            {"passed": true, "failures": []},
+            {"passed": true, "failures": []}
+          ]
         }
         """,
         encoding="utf-8",
@@ -390,7 +394,17 @@ def test_release_evidence_verifier_accepts_passing_artifacts(tmp_path: Path) -> 
             "average_search_recall": 1.0,
             "total_input_bytes": 1000,
             "total_output_chars": 750
-          }
+          },
+          "cases": [
+            {"passed": true, "failures": []},
+            {"passed": true, "failures": []},
+            {"passed": true, "failures": []},
+            {"passed": true, "failures": []},
+            {"passed": true, "failures": []},
+            {"passed": true, "failures": []},
+            {"passed": true, "failures": []},
+            {"passed": true, "failures": []}
+          ]
         }
         """,
         encoding="utf-8",
@@ -403,8 +417,8 @@ def test_release_evidence_verifier_accepts_passing_artifacts(tmp_path: Path) -> 
           "generated_at": "2026-05-13T00:00:00+00:00",
           "librarian_version": "0.1.0a4",
           "cleaning_prompt_version": "cmos_v2",
-          "summary": {"average_chars_per_second": 1000},
-          "runs": [{"provider": "openai-compatible"}]
+          "summary": {"run_count": 1, "average_chars_per_second": 1000},
+          "runs": [{"provider": "openai-compatible", "input_chars": 100, "chars_per_second": 1000}]
         }
         """,
         encoding="utf-8",
@@ -474,6 +488,31 @@ def test_release_evidence_verifier_rejects_mismatched_evidence_tier(tmp_path: Pa
           "cleaning_prompt_version": "cmos_v2",
           "classification_prompt_version": "dewey_v2",
           "summary": {"case_count": 1, "passed_count": 1, "failed_count": 0, "failure_count": 0}
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    assert verifier.main(["--eval", str(eval_path)]) == 1
+
+
+def test_release_evidence_verifier_rejects_hidden_case_failures(tmp_path: Path) -> None:
+    verifier = _load_release_evidence_module()
+    eval_path = tmp_path / "eval.json"
+    eval_path.write_text(
+        """
+        {
+          "artifact_type": "librarian-eval-result",
+          "evidence_tier": "real-provider",
+          "passed": true,
+          "provider": "openai-compatible",
+          "model": "gpt-4.1-mini",
+          "generated_at": "2026-05-13T00:00:00+00:00",
+          "librarian_version": "0.1.0a4",
+          "cleaning_prompt_version": "cmos_v2",
+          "classification_prompt_version": "dewey_v2",
+          "summary": {"case_count": 1, "passed_count": 1, "failed_count": 0, "failure_count": 0},
+          "cases": [{"passed": false, "failures": ["missing expected text"]}]
         }
         """,
         encoding="utf-8",
