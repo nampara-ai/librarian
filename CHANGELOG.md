@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a39 - 2026-05-14
+
+- Strengthened release evidence verification to recompute corpus-eval page
+  attempt totals, failed-page totals, and max page duration from per-case
+  records, rejecting mismatched OCR page diagnostic summaries.
+
 ## 0.1.0a38 - 2026-05-14
 
 - Added page status counts, OCR warning counts, retry attempts, and max page

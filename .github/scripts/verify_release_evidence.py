@@ -271,6 +271,48 @@ def _check_corpus_case_metrics(
             failures.append(f"{path}: corpus eval case {index} missing search diagnostics")
 
 
+def _check_corpus_page_summary(
+    payload: dict[str, Any],
+    summary: dict[str, Any],
+    path: Path,
+    *,
+    failures: list[str],
+) -> None:
+    cases = payload.get("cases")
+    if not isinstance(cases, list) or not all(isinstance(item, dict) for item in cases):
+        return
+    total_attempts = 0
+    total_failed_pages = 0
+    durations: list[float] = []
+    for item in cases:
+        attempts = item.get("page_attempts")
+        if isinstance(attempts, int) and attempts >= 0:
+            total_attempts += attempts
+        statuses = item.get("page_status_counts")
+        if isinstance(statuses, dict):
+            failed_pages = statuses.get("failed", 0)
+            if isinstance(failed_pages, int) and failed_pages >= 0:
+                total_failed_pages += failed_pages
+        duration = item.get("max_page_duration_ms")
+        if isinstance(duration, int | float) and float(duration) >= 0:
+            durations.append(float(duration))
+
+    if summary.get("total_page_attempts") != total_attempts:
+        failures.append(f"{path}: corpus eval total_page_attempts does not match cases")
+    if summary.get("total_failed_pages") != total_failed_pages:
+        failures.append(f"{path}: corpus eval total_failed_pages does not match cases")
+    expected_max_duration = max(durations) if durations else None
+    actual_max_duration = summary.get("max_page_duration_ms")
+    if expected_max_duration is None:
+        if actual_max_duration is not None:
+            failures.append(f"{path}: corpus eval max_page_duration_ms does not match cases")
+    elif (
+        not isinstance(actual_max_duration, int | float)
+        or abs(float(actual_max_duration) - expected_max_duration) > 1e-9
+    ):
+        failures.append(f"{path}: corpus eval max_page_duration_ms does not match cases")
+
+
 def _check_benchmark_runs(
     runs: Any,
     summary: dict[str, Any],
@@ -429,6 +471,7 @@ def verify_corpus_eval(
     _check_pass_counts(summary, path, label="corpus eval", failures=failures)
     _check_case_results(payload, summary, path, label="corpus eval", failures=failures)
     _check_corpus_case_metrics(payload, path, failures=failures)
+    _check_corpus_page_summary(payload, summary, path, failures=failures)
     _expect(summary.get("failure_count") == 0, f"{path}: corpus eval failures recorded", failures)
     _expect(
         isinstance(average_search_recall, int | float)
