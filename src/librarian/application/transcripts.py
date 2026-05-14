@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import html
 import io
 import json
 import re
@@ -167,7 +168,8 @@ def parse_transcript(text: str) -> list[TranscriptSegment]:
         if pending_start is None or not pending_text:
             pending_text = []
             return
-        normalized = _normalize_segment_text(" ".join(pending_text))
+        normalized, markup_speaker = _clean_caption_markup(" ".join(pending_text))
+        normalized = _normalize_segment_text(normalized)
         if normalized:
             end = pending_end if pending_end is not None else pending_start + 1.0
             duration = max(end - pending_start, 0.001)
@@ -177,7 +179,7 @@ def parse_transcript(text: str) -> list[TranscriptSegment]:
                     text=text_value,
                     start_seconds=pending_start,
                     duration_seconds=duration,
-                    speaker=speaker or pending_speaker,
+                    speaker=speaker or pending_speaker or markup_speaker,
                 )
             )
         pending_text = []
@@ -533,8 +535,32 @@ def _strip_vtt_settings(value: str) -> str:
     return re.sub(r"(?:^|\s)(?:align|line|position|size|vertical):\S+", " ", value).strip()
 
 
+def _clean_caption_markup(value: str) -> tuple[str, str | None]:
+    voice_speaker: str | None = None
+
+    def voice_replacement(match: re.Match[str]) -> str:
+        nonlocal voice_speaker
+        speaker = _normalize_segment_text(match.group("speaker"))
+        if speaker and voice_speaker is None:
+            voice_speaker = speaker[:64]
+        return " "
+
+    text = re.sub(
+        r"<v(?:\.[^>\s]+)*\s+(?P<speaker>[^>]+)>",
+        voice_replacement,
+        value,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"</?v(?:\.[^>]*)?>", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"</?(?:c|i|b|u|ruby|rt|lang)(?:\.[^>]*)?(?:\s+[^>]*)?>", " ", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\{\\[^}]+\}", " ", text)
+    return html.unescape(text), voice_speaker
+
+
 def _normalize_segment_text(value: str) -> str:
-    return re.sub(r"\s+", " ", value).strip()
+    compact = re.sub(r"\s+", " ", value).strip()
+    return re.sub(r"\s+([,.;:!?])", r"\1", compact)
 
 
 def _split_speaker(value: str) -> tuple[str, str | None]:

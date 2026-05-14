@@ -1060,3 +1060,7 @@
   `librarian convert` produce timestamped, sentence-merged Markdown instead of
   raw caption cue text. Also fixed VTT cue settings so layout directives do not
   leak into transcript content.
+- 2026-05-14: Improved caption parser fidelity for SRT/VTT inputs by stripping
+  common inline caption markup, unescaping caption entities, preserving WebVTT
+  voice labels as speakers, and removing spacing artifacts left by stripped
+  markup before transcript normalization, quote matching, import, or conversion.

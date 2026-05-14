@@ -56,6 +56,25 @@ Opening line.
     assert segments[0].text == "Opening line."
 
 
+def test_parse_transcript_cleans_caption_markup_and_voice_labels() -> None:
+    segments = parse_transcript(
+        """WEBVTT
+
+cue-1
+00:00:00.000 --> 00:00:02.000 align:start
+<v Ada>Welcome &amp; hello <i>there</i></v>
+
+00:00:02.000 --> 00:00:04.000
+<c.highlight>Measured</c> value {\\an8}<b>3.14</b>.
+"""
+    )
+
+    assert len(segments) == 2
+    assert segments[0].speaker == "Ada"
+    assert segments[0].text == "Welcome & hello there"
+    assert segments[1].text == "Measured value 3.14."
+
+
 def test_merge_transcript_sentences_avoids_common_abbreviation_split() -> None:
     segments = parse_transcript(
         """[00:00] Dr.

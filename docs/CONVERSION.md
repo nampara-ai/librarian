@@ -44,8 +44,9 @@ librarian transcript-find ./input/captions.srt "quoted source phrase" --json
 
 `transcript-normalize` accepts SRT/VTT-style timestamp ranges and line-oriented timestamp
 prefixes. By default it merges short timestamp segments into sentence-like spans while preserving
-speaker labels and source timestamps; use `--no-merge-sentences` to keep original segment
-granularity. Output formats are `md`, `txt`, `srt`, and `csv`.
+speaker labels and source timestamps. It strips common SRT/VTT caption markup, preserves WebVTT
+voice labels as speakers, and unescapes caption entities; use `--no-merge-sentences` to keep
+original segment granularity. Output formats are `md`, `txt`, `srt`, and `csv`.
 `transcript-find` maps an exact or fuzzy quote back to transcript timestamps and segment indexes,
 which is useful for citation checks before importing or publishing cleaned transcript excerpts.
 

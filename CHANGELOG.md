@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a48 - 2026-05-14
+
+- Improved SRT/VTT transcript parsing by stripping common caption markup,
+  unescaping HTML entities, preserving WebVTT voice labels as speakers, and
+  removing spacing artifacts left by inline caption tags.
+
 ## 0.1.0a47 - 2026-05-14
 
 - Added direct `.srt` and `.vtt` ingest/conversion support through the composite
