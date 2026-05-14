@@ -19,6 +19,7 @@ class TranscriptFormat(StrEnum):
     MARKDOWN = "md"
     TEXT = "txt"
     SRT = "srt"
+    VTT = "vtt"
     CSV = "csv"
 
 
@@ -150,6 +151,11 @@ def format_srt_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
+def format_vtt_timestamp(seconds: float) -> str:
+    """Format seconds as a WebVTT timestamp."""
+    return format_srt_timestamp(seconds).replace(",", ".")
+
+
 def parse_transcript(text: str) -> list[TranscriptSegment]:
     """Parse common timestamped transcript formats into segments.
 
@@ -275,6 +281,8 @@ def render_transcript(
         )
     if format == TranscriptFormat.SRT:
         return _render_srt(rendered_segments)
+    if format == TranscriptFormat.VTT:
+        return _render_vtt(rendered_segments)
     if format == TranscriptFormat.CSV:
         return _render_csv(rendered_segments)
     raise ValueError(f"Unsupported transcript format: {format.value}")
@@ -618,6 +626,21 @@ def _render_srt(segments: list[TranscriptSegment]) -> str:
                     str(index),
                     f"{format_srt_timestamp(segment.start_seconds)} --> "
                     f"{format_srt_timestamp(segment.end_seconds)}",
+                    _segment_display_text(segment, include_speaker=True),
+                ]
+            )
+        )
+    return "\n\n".join(blocks)
+
+
+def _render_vtt(segments: list[TranscriptSegment]) -> str:
+    blocks = ["WEBVTT"]
+    for segment in segments:
+        blocks.append(
+            "\n".join(
+                [
+                    f"{format_vtt_timestamp(segment.start_seconds)} --> "
+                    f"{format_vtt_timestamp(segment.end_seconds)}",
                     _segment_display_text(segment, include_speaker=True),
                 ]
             )

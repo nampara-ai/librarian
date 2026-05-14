@@ -7,7 +7,7 @@ From a downloaded release wheel:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install "nampara_librarian-0.1.0a48-py3-none-any.whl[all]"
+pip install "nampara_librarian-0.1.0a49-py3-none-any.whl[all]"
 librarian init
 librarian doctor
 ```
@@ -41,7 +41,7 @@ artifacts:
 
 ```bash
 librarian transcript-normalize ./captions.srt --format md --output ./captions.md
-librarian transcript-normalize ./captions.vtt --format csv --output ./captions.csv
+librarian transcript-normalize ./captions.vtt --format vtt --output ./captions-clean.vtt
 librarian transcript-find ./captions.srt "quoted source phrase" --json
 librarian import ./captions.vtt --format md --process
 ```

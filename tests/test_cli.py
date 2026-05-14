@@ -235,6 +235,31 @@ def test_cli_transcript_normalize_writes_requested_format(tmp_path: Path) -> Non
     assert "Ada: This is the first sentence." in rendered
 
 
+def test_cli_transcript_normalize_writes_vtt(tmp_path: Path) -> None:
+    source = tmp_path / "transcript.txt"
+    output = tmp_path / "transcript.vtt"
+    source.write_text("[00:00] Ada: Clean WebVTT output.", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "transcript-normalize",
+            str(source),
+            "--output",
+            str(output),
+            "--format",
+            "vtt",
+        ],
+    )
+
+    assert result.exit_code == 0
+    rendered = output.read_text(encoding="utf-8")
+    assert rendered.startswith("WEBVTT\n\n")
+    assert "00:00:00.000 --> 00:00:01.000" in rendered
+    assert "Ada: Clean WebVTT output." in rendered
+
+
 def test_cli_transcript_find_reports_timestamp_evidence(tmp_path: Path) -> None:
     source = tmp_path / "transcript.txt"
     source.write_text(

@@ -1064,3 +1064,7 @@
   common inline caption markup, unescaping caption entities, preserving WebVTT
   voice labels as speakers, and removing spacing artifacts left by stripped
   markup before transcript normalization, quote matching, import, or conversion.
+- 2026-05-14: Added WebVTT transcript export support so normalized caption
+  workflows can round-trip to clean `.vtt` files through `librarian
+  transcript-normalize --format vtt`, including VTT timestamp rendering, CLI
+  validation, tests, and docs.

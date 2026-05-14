@@ -7,6 +7,7 @@ from librarian.application.transcripts import (
     find_quote_in_transcript,
     format_compact_timestamp,
     format_srt_timestamp,
+    format_vtt_timestamp,
     merge_transcript_sentences,
     normalize_transcript_file,
     parse_timestamp,
@@ -22,6 +23,7 @@ def test_parse_timestamp_formats() -> None:
     assert parse_timestamp("00:00:03,500") == 3.5
     assert format_compact_timestamp(3723.25) == "01:02:03"
     assert format_srt_timestamp(3723.25) == "01:02:03,250"
+    assert format_vtt_timestamp(3723.25) == "01:02:03.250"
 
 
 def test_parse_transcript_supports_srt_and_speaker_lines() -> None:
@@ -112,6 +114,23 @@ def test_render_transcript_formats_csv_and_srt() -> None:
     assert "00:00,00:02,2.000,Ada,First sentence." in csv_output
     assert "00:00:00,000 --> 00:00:02,000" in srt_output
     assert "Ada: First sentence." in srt_output
+
+
+def test_render_transcript_formats_vtt() -> None:
+    segments = parse_transcript(
+        """00:00-00:02 Ada: First sentence.
+00:02-00:04 Ada: Second sentence."""
+    )
+
+    vtt_output = render_transcript(
+        segments,
+        format=TranscriptFormat.VTT,
+        merge_sentences=False,
+    )
+
+    assert vtt_output.startswith("WEBVTT\n\n")
+    assert "00:00:00.000 --> 00:00:02.000" in vtt_output
+    assert "Ada: First sentence." in vtt_output
 
 
 def test_normalize_transcript_file_rejects_empty_or_existing_output(tmp_path: Path) -> None:

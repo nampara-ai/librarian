@@ -586,7 +586,7 @@ def transcript_normalize(
     output: Annotated[Path, typer.Option(help="Output transcript path.")],
     format: Annotated[
         str,
-        typer.Option(help="Output format: md, txt, srt, or csv."),
+        typer.Option(help="Output format: md, txt, srt, vtt, or csv."),
     ] = "md",
     merge_sentences: Annotated[
         bool,
@@ -1484,7 +1484,7 @@ def _transcript_format(value: str) -> TranscriptFormat:
     try:
         return aliases.get(normalized, TranscriptFormat(normalized))
     except ValueError as exc:
-        raise typer.BadParameter("format must be one of: md, txt, srt, csv") from exc
+        raise typer.BadParameter("format must be one of: md, txt, srt, vtt, csv") from exc
 
 
 def _directory_output_mode(value: str) -> DirectoryOutputMode:

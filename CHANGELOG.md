@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a49 - 2026-05-14
+
+- Added clean WebVTT transcript export through `TranscriptFormat.VTT` and
+  `librarian transcript-normalize --format vtt`, including VTT timestamp
+  formatting and CLI/docs coverage.
+
 ## 0.1.0a48 - 2026-05-14
 
 - Improved SRT/VTT transcript parsing by stripping common caption markup,
