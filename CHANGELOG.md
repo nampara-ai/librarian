@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a29 - 2026-05-14
+
+- Expanded broad SQLite FTS query normalization for hyphenated and slash-separated
+  compounds so searches such as `follow-up care` can match both separated tokens and
+  concatenated document forms like `followup`, while quoted phrase searches remain exact.
+
 ## 0.1.0a28 - 2026-05-14
 
 - Improved broad SQLite FTS query normalization so possessive apostrophes in user searches

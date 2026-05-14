@@ -371,11 +371,17 @@ async def test_sqlite_verify_reports_integrity_and_migrations(tmp_path: Path) ->
 
 
 def test_normalize_search_query_preserves_safe_quoted_phrases() -> None:
-    assert normalize_search_query('"follow-up care" horse?!') == '"follow up care" horse'
+    assert normalize_search_query('"follow-up care" horse?!') == '"follow up care" AND horse'
     assert normalize_search_query("follow-up care", phrase=True) == '"follow up care"'
-    assert normalize_search_query('horse "follow-up') == "horse follow up"
+    assert normalize_search_query("follow-up care") == "((follow AND up) OR followup) AND care"
+    assert normalize_search_query("co-operate/horse") == (
+        "((co AND operate AND horse) OR cooperatehorse)"
+    )
+    assert normalize_search_query('horse "follow-up') == (
+        "horse AND ((follow AND up) OR followup)"
+    )
     assert normalize_search_query("children's hospital horse\u2019s gait") == (
-        "children hospital horse gait"
+        "children AND hospital AND horse AND gait"
     )
     assert normalize_search_query('"children\u2019s hospital"') == '"children s hospital"'
     with pytest.raises(ValueError, match="Invalid search query"):
@@ -546,10 +552,13 @@ async def test_sqlite_search_phrase_mode_requires_adjacent_terms(tmp_path: Path)
     container = await build_container(settings)
     phrase_source = tmp_path / "phrase.txt"
     reordered_source = tmp_path / "reordered.txt"
+    compact_source = tmp_path / "compact.txt"
     phrase_source.write_text("Follow-up care checklist for discharge.", encoding="utf-8")
     reordered_source.write_text("Care plans should follow up after discharge.", encoding="utf-8")
+    compact_source.write_text("Followup care checklist for discharge.", encoding="utf-8")
     phrase_document = await container.ingest_document.execute(phrase_source)
     reordered_document = await container.ingest_document.execute(reordered_source)
+    compact_document = await container.ingest_document.execute(compact_source)
 
     broad_results = await container.repository.search_results("follow-up care", scope="raw")
     phrase_results = await container.repository.search_results(
@@ -571,6 +580,7 @@ async def test_sqlite_search_phrase_mode_requires_adjacent_terms(tmp_path: Path)
     assert {item.document_id for item in broad_results} == {
         phrase_document.document.id,
         reordered_document.document.id,
+        compact_document.document.id,
     }
     assert [item.document_id for item in phrase_results] == [phrase_document.document.id]
     assert phrase_count == 1

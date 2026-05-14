@@ -41,6 +41,7 @@ _MAX_EVENT_PAGE_SIZE = 1_000
 _FTS_HIGHLIGHT_START = "\x1fH\x1f"
 _FTS_HIGHLIGHT_END = "\x1f/H\x1f"
 _SEARCH_TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
+_SEARCH_TERM_RE = re.compile(r"[\w]+(?:[-\u2010-\u2015/][\w]+)+|[\w]+", re.UNICODE)
 _SEARCH_POSSESSIVE_RE = re.compile(r"(?<=\w)['\u2019]s\b", re.UNICODE)
 
 
@@ -1983,12 +1984,21 @@ def normalize_search_query(query: str, *, phrase: bool = False) -> str:
     parts.extend(_normalize_search_terms("".join(unquoted)))
     if not parts:
         raise ValueError("Invalid search query")
-    return " ".join(parts)
+    return " AND ".join(parts)
 
 
 def _normalize_search_terms(value: str) -> list[str]:
     normalized = _SEARCH_POSSESSIVE_RE.sub("", value.casefold())
-    return _SEARCH_TOKEN_RE.findall(normalized)
+    terms: list[str] = []
+    for raw_term in _SEARCH_TERM_RE.findall(normalized):
+        words = _SEARCH_TOKEN_RE.findall(raw_term)
+        if len(words) <= 1:
+            terms.extend(words)
+            continue
+        compact = "".join(words)
+        separated = " AND ".join(words)
+        terms.append(f"(({separated}) OR {compact})")
+    return terms
 
 
 def _normalize_search_phrase(value: str) -> str:
