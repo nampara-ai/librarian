@@ -163,6 +163,102 @@ def _check_case_results(
             failures.append(f"{path}: {label} case {index} has failure details")
 
 
+def _check_eval_case_metrics(
+    payload: dict[str, Any],
+    path: Path,
+    *,
+    failures: list[str],
+) -> None:
+    cases = payload.get("cases")
+    if not isinstance(cases, list):
+        return
+    for index, item in enumerate(cases, start=1):
+        if not isinstance(item, dict):
+            continue
+        if not isinstance(item.get("name"), str) or not item.get("name"):
+            failures.append(f"{path}: eval case {index} missing name")
+        if not isinstance(item.get("tags"), list):
+            failures.append(f"{path}: eval case {index} missing tags list")
+        if not isinstance(item.get("warnings"), list):
+            failures.append(f"{path}: eval case {index} missing warnings list")
+        if not isinstance(item.get("input_chars"), int | float) or item.get("input_chars", 0) <= 0:
+            failures.append(f"{path}: eval case {index} missing positive input_chars")
+        if (
+            not isinstance(item.get("output_chars"), int | float)
+            or item.get("output_chars", 0) <= 0
+        ):
+            failures.append(f"{path}: eval case {index} missing positive output_chars")
+        ratio = item.get("output_char_ratio")
+        if not isinstance(ratio, int | float) or float(ratio) <= 0:
+            failures.append(f"{path}: eval case {index} missing positive output_char_ratio")
+        duration = item.get("duration_seconds")
+        if not isinstance(duration, int | float) or float(duration) <= 0:
+            failures.append(f"{path}: eval case {index} missing positive duration_seconds")
+        cps = item.get("chars_per_second")
+        if not isinstance(cps, int | float) or float(cps) <= 0:
+            failures.append(f"{path}: eval case {index} missing positive chars_per_second")
+        if not isinstance(item.get("classification_code"), str) or not item.get(
+            "classification_code"
+        ):
+            failures.append(f"{path}: eval case {index} missing classification_code")
+        if not isinstance(item.get("classification_label"), str) or not item.get(
+            "classification_label"
+        ):
+            failures.append(f"{path}: eval case {index} missing classification_label")
+
+
+def _check_corpus_case_metrics(
+    payload: dict[str, Any],
+    path: Path,
+    *,
+    failures: list[str],
+) -> None:
+    cases = payload.get("cases")
+    if not isinstance(cases, list):
+        return
+    for index, item in enumerate(cases, start=1):
+        if not isinstance(item, dict):
+            continue
+        if not isinstance(item.get("name"), str) or not item.get("name"):
+            failures.append(f"{path}: corpus eval case {index} missing name")
+        if not isinstance(item.get("tags"), list):
+            failures.append(f"{path}: corpus eval case {index} missing tags list")
+        for key in ("source_path", "output_path"):
+            if not isinstance(item.get(key), str) or not item.get(key):
+                failures.append(f"{path}: corpus eval case {index} missing {key}")
+        if not isinstance(item.get("input_bytes"), int | float) or item.get("input_bytes", 0) <= 0:
+            failures.append(f"{path}: corpus eval case {index} missing positive input_bytes")
+        if (
+            not isinstance(item.get("output_chars"), int | float)
+            or item.get("output_chars", 0) <= 0
+        ):
+            failures.append(f"{path}: corpus eval case {index} missing positive output_chars")
+        ratio = item.get("output_char_ratio")
+        if not isinstance(ratio, int | float) or float(ratio) <= 0:
+            failures.append(f"{path}: corpus eval case {index} missing positive output_char_ratio")
+        for key in ("conversion_seconds", "peak_memory_bytes"):
+            if not isinstance(item.get(key), int | float) or item.get(key, 0) < 0:
+                failures.append(f"{path}: corpus eval case {index} missing nonnegative {key}")
+        source_counts = item.get("page_source_counts")
+        if not isinstance(source_counts, dict):
+            failures.append(f"{path}: corpus eval case {index} missing page_source_counts")
+        for key in ("ocr_pages", "corrected_pages"):
+            if not isinstance(item.get(key), int) or item.get(key, -1) < 0:
+                failures.append(f"{path}: corpus eval case {index} missing nonnegative {key}")
+        search_recall = item.get("search_recall")
+        if search_recall is not None and (
+            not isinstance(search_recall, int | float)
+            or float(search_recall) < 0
+            or float(search_recall) > 1
+        ):
+            failures.append(f"{path}: corpus eval case {index} invalid search_recall")
+        diagnostics = item.get("search_diagnostics")
+        if not isinstance(diagnostics, list):
+            failures.append(f"{path}: corpus eval case {index} missing search_diagnostics list")
+        elif search_recall is not None and not diagnostics:
+            failures.append(f"{path}: corpus eval case {index} missing search diagnostics")
+
+
 def _check_benchmark_runs(
     runs: Any,
     summary: dict[str, Any],
@@ -182,11 +278,27 @@ def _check_benchmark_runs(
     for index, item in enumerate(runs, start=1):
         if not isinstance(item.get("provider"), str) or not item.get("provider"):
             failures.append(f"{path}: benchmark run {index} missing provider")
+        if not isinstance(item.get("model"), str) or not item.get("model"):
+            failures.append(f"{path}: benchmark run {index} missing model")
         if not isinstance(item.get("input_chars"), int | float) or item.get("input_chars", 0) <= 0:
             failures.append(f"{path}: benchmark run {index} missing positive input_chars")
+        if not isinstance(item.get("chunks"), int) or item.get("chunks", 0) <= 0:
+            failures.append(f"{path}: benchmark run {index} missing positive chunks")
+        for key in ("chunking_seconds", "cleaning_seconds", "total_seconds"):
+            if not isinstance(item.get(key), int | float) or item.get(key, 0) < 0:
+                failures.append(f"{path}: benchmark run {index} missing nonnegative {key}")
         cps = item.get("chars_per_second")
         if not isinstance(cps, int | float) or float(cps) <= 0:
             failures.append(f"{path}: benchmark run {index} missing positive chars_per_second")
+        if not isinstance(item.get("chunk_target_chars"), int) or item.get(
+            "chunk_target_chars", 0
+        ) <= 0:
+            failures.append(f"{path}: benchmark run {index} missing positive chunk_target_chars")
+        overlap = item.get("chunk_overlap_chars")
+        if not isinstance(overlap, int) or overlap < 0:
+            failures.append(
+                f"{path}: benchmark run {index} missing nonnegative chunk_overlap_chars"
+            )
 
 
 def verify_eval(
@@ -233,6 +345,7 @@ def verify_eval(
     _expect(summary.get("case_count", 0) >= 1, f"{path}: eval has no cases", failures)
     _check_pass_counts(summary, path, label="eval", failures=failures)
     _check_case_results(payload, summary, path, label="eval", failures=failures)
+    _check_eval_case_metrics(payload, path, failures=failures)
     _expect(summary.get("failure_count") == 0, f"{path}: eval failures recorded", failures)
     _expect(
         payload.get("cleaning_prompt_version") == "cmos_v2",
@@ -303,6 +416,7 @@ def verify_corpus_eval(
     )
     _check_pass_counts(summary, path, label="corpus eval", failures=failures)
     _check_case_results(payload, summary, path, label="corpus eval", failures=failures)
+    _check_corpus_case_metrics(payload, path, failures=failures)
     _expect(summary.get("failure_count") == 0, f"{path}: corpus eval failures recorded", failures)
     _expect(
         isinstance(average_search_recall, int | float)

@@ -367,8 +367,34 @@ def test_release_evidence_verifier_accepts_passing_artifacts(tmp_path: Path) -> 
           "classification_prompt_version": "dewey_v2",
           "summary": {"case_count": 2, "passed_count": 2, "failed_count": 0, "failure_count": 0},
           "cases": [
-            {"passed": true, "failures": []},
-            {"passed": true, "failures": []}
+            {
+              "name": "case one",
+              "passed": true,
+              "tags": ["provider"],
+              "input_chars": 100,
+              "output_chars": 95,
+              "output_char_ratio": 0.95,
+              "duration_seconds": 1.0,
+              "chars_per_second": 100,
+              "classification_code": "636.1",
+              "classification_label": "Horses",
+              "warnings": [],
+              "failures": []
+            },
+            {
+              "name": "case two",
+              "passed": true,
+              "tags": ["provider"],
+              "input_chars": 120,
+              "output_chars": 110,
+              "output_char_ratio": 0.92,
+              "duration_seconds": 1.2,
+              "chars_per_second": 100,
+              "classification_code": "020",
+              "classification_label": "Library science",
+              "warnings": [],
+              "failures": []
+            }
           ]
         }
         """,
@@ -396,14 +422,246 @@ def test_release_evidence_verifier_accepts_passing_artifacts(tmp_path: Path) -> 
             "total_output_chars": 750
           },
           "cases": [
-            {"passed": true, "failures": []},
-            {"passed": true, "failures": []},
-            {"passed": true, "failures": []},
-            {"passed": true, "failures": []},
-            {"passed": true, "failures": []},
-            {"passed": true, "failures": []},
-            {"passed": true, "failures": []},
-            {"passed": true, "failures": []}
+            {
+              "name": "case one",
+              "passed": true,
+              "tags": ["markdown"],
+              "source_path": "corpus/one.md",
+              "output_path": "converted/one.md",
+              "input_bytes": 125,
+              "output_chars": 100,
+              "output_char_ratio": 0.8,
+              "conversion_seconds": 0.1,
+              "processing_seconds": 0.2,
+              "peak_memory_bytes": 1000,
+              "page_source_counts": {},
+              "ocr_pages": 0,
+              "corrected_pages": 0,
+              "average_ocr_confidence": null,
+              "search_recall": 1.0,
+              "search_diagnostics": [
+                {
+                  "phrase": "anchor",
+                  "hit": true,
+                  "total_results": 1,
+                  "returned_document_ids": ["doc_1"],
+                  "error": null
+                }
+              ],
+              "classification_code": "636.1",
+              "classification_label": "Horses",
+              "failures": []
+            },
+            {
+              "name": "case two",
+              "passed": true,
+              "tags": ["markdown"],
+              "source_path": "corpus/two.md",
+              "output_path": "converted/two.md",
+              "input_bytes": 125,
+              "output_chars": 100,
+              "output_char_ratio": 0.8,
+              "conversion_seconds": 0.1,
+              "processing_seconds": 0.2,
+              "peak_memory_bytes": 1000,
+              "page_source_counts": {},
+              "ocr_pages": 0,
+              "corrected_pages": 0,
+              "average_ocr_confidence": null,
+              "search_recall": 1.0,
+              "search_diagnostics": [
+                {
+                  "phrase": "anchor",
+                  "hit": true,
+                  "total_results": 1,
+                  "returned_document_ids": ["doc_2"],
+                  "error": null
+                }
+              ],
+              "classification_code": "020",
+              "classification_label": "Library science",
+              "failures": []
+            },
+            {
+              "name": "case three",
+              "passed": true,
+              "tags": ["markdown"],
+              "source_path": "corpus/three.md",
+              "output_path": "converted/three.md",
+              "input_bytes": 125,
+              "output_chars": 100,
+              "output_char_ratio": 0.8,
+              "conversion_seconds": 0.1,
+              "processing_seconds": 0.2,
+              "peak_memory_bytes": 1000,
+              "page_source_counts": {},
+              "ocr_pages": 0,
+              "corrected_pages": 0,
+              "average_ocr_confidence": null,
+              "search_recall": 1.0,
+              "search_diagnostics": [
+                {
+                  "phrase": "anchor",
+                  "hit": true,
+                  "total_results": 1,
+                  "returned_document_ids": ["doc_3"],
+                  "error": null
+                }
+              ],
+              "classification_code": "610",
+              "classification_label": "Medicine",
+              "failures": []
+            },
+            {
+              "name": "case four",
+              "passed": true,
+              "tags": ["markdown"],
+              "source_path": "corpus/four.md",
+              "output_path": "converted/four.md",
+              "input_bytes": 125,
+              "output_chars": 100,
+              "output_char_ratio": 0.8,
+              "conversion_seconds": 0.1,
+              "processing_seconds": 0.2,
+              "peak_memory_bytes": 1000,
+              "page_source_counts": {},
+              "ocr_pages": 0,
+              "corrected_pages": 0,
+              "average_ocr_confidence": null,
+              "search_recall": 1.0,
+              "search_diagnostics": [
+                {
+                  "phrase": "anchor",
+                  "hit": true,
+                  "total_results": 1,
+                  "returned_document_ids": ["doc_4"],
+                  "error": null
+                }
+              ],
+              "classification_code": "800",
+              "classification_label": "Literature",
+              "failures": []
+            },
+            {
+              "name": "case five",
+              "passed": true,
+              "tags": ["pdf"],
+              "source_path": "corpus/five.pdf",
+              "output_path": "converted/five.md",
+              "input_bytes": 125,
+              "output_chars": 100,
+              "output_char_ratio": 0.8,
+              "conversion_seconds": 0.1,
+              "processing_seconds": 0.2,
+              "peak_memory_bytes": 1000,
+              "page_source_counts": {"embedded": 1},
+              "ocr_pages": 0,
+              "corrected_pages": 0,
+              "average_ocr_confidence": null,
+              "search_recall": 1.0,
+              "search_diagnostics": [
+                {
+                  "phrase": "anchor",
+                  "hit": true,
+                  "total_results": 1,
+                  "returned_document_ids": ["doc_5"],
+                  "error": null
+                }
+              ],
+              "classification_code": "636.1",
+              "classification_label": "Horses",
+              "failures": []
+            },
+            {
+              "name": "case six",
+              "passed": true,
+              "tags": ["pdf", "ocr"],
+              "source_path": "corpus/six.pdf",
+              "output_path": "converted/six.md",
+              "input_bytes": 125,
+              "output_chars": 100,
+              "output_char_ratio": 0.8,
+              "conversion_seconds": 0.1,
+              "processing_seconds": 0.2,
+              "peak_memory_bytes": 1000,
+              "page_source_counts": {"ocr": 1},
+              "ocr_pages": 1,
+              "corrected_pages": 0,
+              "average_ocr_confidence": 90.0,
+              "search_recall": 1.0,
+              "search_diagnostics": [
+                {
+                  "phrase": "anchor",
+                  "hit": true,
+                  "total_results": 1,
+                  "returned_document_ids": ["doc_6"],
+                  "error": null
+                }
+              ],
+              "classification_code": "610",
+              "classification_label": "Medicine",
+              "failures": []
+            },
+            {
+              "name": "case seven",
+              "passed": true,
+              "tags": ["docx"],
+              "source_path": "corpus/seven.docx",
+              "output_path": "converted/seven.md",
+              "input_bytes": 125,
+              "output_chars": 100,
+              "output_char_ratio": 0.8,
+              "conversion_seconds": 0.1,
+              "processing_seconds": 0.2,
+              "peak_memory_bytes": 1000,
+              "page_source_counts": {},
+              "ocr_pages": 0,
+              "corrected_pages": 0,
+              "average_ocr_confidence": null,
+              "search_recall": 1.0,
+              "search_diagnostics": [
+                {
+                  "phrase": "anchor",
+                  "hit": true,
+                  "total_results": 1,
+                  "returned_document_ids": ["doc_7"],
+                  "error": null
+                }
+              ],
+              "classification_code": "020",
+              "classification_label": "Library science",
+              "failures": []
+            },
+            {
+              "name": "case eight",
+              "passed": true,
+              "tags": ["pdf", "mixed-embedded-scanned"],
+              "source_path": "corpus/eight.pdf",
+              "output_path": "converted/eight.md",
+              "input_bytes": 125,
+              "output_chars": 100,
+              "output_char_ratio": 0.8,
+              "conversion_seconds": 0.1,
+              "processing_seconds": 0.2,
+              "peak_memory_bytes": 1000,
+              "page_source_counts": {"embedded": 1, "ocr": 1},
+              "ocr_pages": 1,
+              "corrected_pages": 0,
+              "average_ocr_confidence": 90.0,
+              "search_recall": 1.0,
+              "search_diagnostics": [
+                {
+                  "phrase": "anchor",
+                  "hit": true,
+                  "total_results": 1,
+                  "returned_document_ids": ["doc_8"],
+                  "error": null
+                }
+              ],
+              "classification_code": "636.1",
+              "classification_label": "Horses",
+              "failures": []
+            }
           ]
         }
         """,
@@ -418,7 +676,20 @@ def test_release_evidence_verifier_accepts_passing_artifacts(tmp_path: Path) -> 
           "librarian_version": "0.1.0a4",
           "cleaning_prompt_version": "cmos_v2",
           "summary": {"run_count": 1, "average_chars_per_second": 1000},
-          "runs": [{"provider": "openai-compatible", "input_chars": 100, "chars_per_second": 1000}]
+          "runs": [
+            {
+              "provider": "openai-compatible",
+              "model": "gpt-4.1-mini",
+              "input_chars": 100,
+              "chunks": 1,
+              "chunking_seconds": 0.01,
+              "cleaning_seconds": 0.09,
+              "total_seconds": 0.1,
+              "chars_per_second": 1000,
+              "chunk_target_chars": 8000,
+              "chunk_overlap_chars": 400
+            }
+          ]
         }
         """,
         encoding="utf-8",
@@ -519,6 +790,46 @@ def test_release_evidence_verifier_rejects_hidden_case_failures(tmp_path: Path) 
     )
 
     assert verifier.main(["--eval", str(eval_path)]) == 1
+
+
+def test_release_evidence_verifier_rejects_incomplete_case_metrics(tmp_path: Path) -> None:
+    verifier = _load_release_evidence_module()
+    eval_path = tmp_path / "eval.json"
+    benchmark_path = tmp_path / "benchmark.json"
+    eval_path.write_text(
+        """
+        {
+          "artifact_type": "librarian-eval-result",
+          "evidence_tier": "real-provider",
+          "passed": true,
+          "provider": "openai-compatible",
+          "model": "gpt-4.1-mini",
+          "generated_at": "2026-05-13T00:00:00+00:00",
+          "librarian_version": "0.1.0a4",
+          "cleaning_prompt_version": "cmos_v2",
+          "classification_prompt_version": "dewey_v2",
+          "summary": {"case_count": 1, "passed_count": 1, "failed_count": 0, "failure_count": 0},
+          "cases": [{"passed": true, "failures": []}]
+        }
+        """,
+        encoding="utf-8",
+    )
+    benchmark_path.write_text(
+        """
+        {
+          "artifact_type": "librarian-benchmark-result",
+          "evidence_tier": "real-provider",
+          "generated_at": "2026-05-13T00:00:00+00:00",
+          "librarian_version": "0.1.0a4",
+          "cleaning_prompt_version": "cmos_v2",
+          "summary": {"run_count": 1, "average_chars_per_second": 1000},
+          "runs": [{"provider": "openai-compatible", "input_chars": 100, "chars_per_second": 1000}]
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    assert verifier.main(["--eval", str(eval_path), "--benchmark", str(benchmark_path)]) == 1
 
 
 def test_release_evidence_verifier_rejects_invalid_result_shape(tmp_path: Path) -> None:

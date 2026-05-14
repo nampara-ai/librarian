@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.0a36 - 2026-05-14
+
+- Tightened release evidence verification so eval, corpus-eval, and benchmark
+  detail records must include complete case names, tags, warnings, classification
+  and search/page diagnostics, benchmark model/chunk/timing metrics, and positive
+  size/throughput measurements before release evidence can pass.
+
 ## 0.1.0a35 - 2026-05-14
 
 - Added explicit corpus-eval assertions for PDF page-source counts, minimum OCR

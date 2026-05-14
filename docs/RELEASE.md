@@ -36,7 +36,9 @@ uv run python .github/scripts/verify_release_evidence.py \
    expected `artifact_type` and an `evidence_tier` that matches the provider (`mock-smoke` for
    deterministic CI artifacts, `real-provider` for hosted provider evidence). The verifier also
    cross-checks summary counts against per-case and per-run details so hidden failures cannot be
-   masked by a green top-level summary.
+   masked by a green top-level summary. Detailed records must include case names, tags, output
+   ratios, timings, classification/search/page diagnostics, benchmark models, chunk counts, and
+   throughput metrics; incomplete detail records are rejected.
 6. Run secret scanning:
 
 ```bash

@@ -115,7 +115,9 @@ Eval JSON results include an `artifact_type`, an `evidence_tier` (`mock-smoke` o
 versions, aggregate pass/throughput/warning/failure summary metrics, and per-case classification,
 warning, output character ratio, and failure details. Release-candidate evidence verification
 rejects artifacts whose tier does not match the recorded provider or whose summary counts do not
-match the per-case and per-run details.
+match the per-case and per-run details. It also rejects incomplete detail records, including missing
+case names, tags, warnings, classification results, positive size/timing metrics, corpus page/search
+diagnostics, benchmark model names, chunk counts, and throughput measurements.
 
 ## Corpus Eval Format
 
