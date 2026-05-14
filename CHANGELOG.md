@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.0a54 - 2026-05-14
+
+- Added required prompt-eval tag coverage to release evidence verification and
+  wired CI, release, and manual release checks to require the shipped
+  classification, transcript, legal, technical, no-summarization, Markdown, and
+  OCR-correction risk tags in per-case evidence.
+
 ## 0.1.0a53 - 2026-05-14
 
 - Added a release evidence floor for prompt eval coverage with

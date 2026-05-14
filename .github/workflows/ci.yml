@@ -64,6 +64,13 @@ jobs:
             --benchmark "$RUNNER_TEMP/ci-benchmark.json" \
             --version "$VERSION" \
             --min-eval-cases 6 \
+            --require-eval-tag classification \
+            --require-eval-tag transcript \
+            --require-eval-tag legal \
+            --require-eval-tag technical \
+            --require-eval-tag no-summarization \
+            --require-eval-tag markdown \
+            --require-eval-tag ocr-correction \
             --min-corpus-cases 13 \
             --min-corpus-search-recall 1.0 \
             --min-corpus-output-ratio 0.05 \

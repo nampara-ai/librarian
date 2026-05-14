@@ -26,9 +26,9 @@ Release-candidate evidence verification recomputes benchmark aggregate input siz
 total duration, average throughput, and fastest throughput from the per-run records. It also
 cross-checks per-record derived metrics, including eval and corpus output character ratios, corpus
 search recall, and benchmark run throughput, against the raw size, timing, and search diagnostics.
-CI and release builds require at least six prompt-eval cases so the shipped transcript, legal,
-technical, Markdown, OCR-correction, classification, and no-summarization fixtures cannot be
-accidentally dropped.
+CI and release builds require at least six prompt-eval cases and verify that the per-case tags cover
+the shipped transcript, legal, technical, Markdown, OCR-correction, classification, and
+no-summarization fixtures so risk coverage cannot be accidentally dropped.
 
 ## Real Provider Run
 

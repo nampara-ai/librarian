@@ -1084,3 +1084,7 @@
   gate requiring the six shipped sanitized prompt-risk cases, and expanded the
   shipped eval-suite coverage test for transcript, legal, technical, Markdown,
   OCR correction, no-summarization, and classification risks.
+- 2026-05-14: Hardened prompt-eval release evidence again by requiring per-case
+  tags for classification, transcript, legal, technical, no-summarization,
+  Markdown, and OCR-correction coverage, so six arbitrary passing eval cases can
+  no longer satisfy CI or release gates.

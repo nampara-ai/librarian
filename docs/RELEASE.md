@@ -27,6 +27,13 @@ uv run python .github/scripts/verify_release_evidence.py \
   --version "v${RELEASE_VERSION}" \
   --require-real-provider \
   --min-eval-cases 6 \
+  --require-eval-tag classification \
+  --require-eval-tag transcript \
+  --require-eval-tag legal \
+  --require-eval-tag technical \
+  --require-eval-tag no-summarization \
+  --require-eval-tag markdown \
+  --require-eval-tag ocr-correction \
   --min-corpus-cases 13 \
   --min-corpus-search-recall 1.0 \
   --min-corpus-output-ratio 0.05

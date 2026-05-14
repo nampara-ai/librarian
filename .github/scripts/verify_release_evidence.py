@@ -226,6 +226,30 @@ def _check_eval_case_metrics(
             failures.append(f"{path}: eval case {index} missing classification_label")
 
 
+def _check_required_eval_tags(
+    payload: dict[str, Any],
+    path: Path,
+    *,
+    required_tags: set[str],
+    failures: list[str],
+) -> None:
+    if not required_tags:
+        return
+    cases = payload.get("cases")
+    if not isinstance(cases, list):
+        return
+    present_tags: set[str] = set()
+    for item in cases:
+        if not isinstance(item, dict):
+            continue
+        tags = item.get("tags")
+        if isinstance(tags, list):
+            present_tags.update(tag for tag in tags if isinstance(tag, str))
+    missing_tags = sorted(required_tags - present_tags)
+    if missing_tags:
+        failures.append(f"{path}: eval missing required tags: {', '.join(missing_tags)}")
+
+
 def _check_eval_aggregate_summary(
     payload: dict[str, Any],
     summary: dict[str, Any],
@@ -602,6 +626,7 @@ def verify_eval(
     *,
     require_real_provider: bool,
     min_cases: int,
+    required_tags: set[str],
     expected_version: str | None,
 ) -> list[str]:
     payload = _load_json(path)
@@ -647,6 +672,7 @@ def verify_eval(
     _check_pass_counts(summary, path, label="eval", failures=failures)
     _check_case_results(payload, summary, path, label="eval", failures=failures)
     _check_eval_case_metrics(payload, path, failures=failures)
+    _check_required_eval_tags(payload, path, required_tags=required_tags, failures=failures)
     _check_eval_aggregate_summary(payload, summary, path, failures=failures)
     _expect(summary.get("failure_count") == 0, f"{path}: eval failures recorded", failures)
     _expect(
@@ -841,6 +867,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-corpus-output-ratio", type=float, default=0.0)
     parser.add_argument("--min-corpus-cases", type=int, default=1)
     parser.add_argument("--min-eval-cases", type=int, default=1)
+    parser.add_argument("--require-eval-tag", action="append", default=[])
     parser.add_argument("--min-benchmark-cps", type=float, default=1.0)
     parser.add_argument("--min-benchmark-runs", type=int, default=1)
     parser.add_argument("--version", help="Expected Librarian release version or tag.")
@@ -854,6 +881,7 @@ def main(argv: list[str] | None = None) -> int:
                     path,
                     require_real_provider=args.require_real_provider,
                     min_cases=args.min_eval_cases,
+                    required_tags=set(args.require_eval_tag),
                     expected_version=args.version,
                 )
             )
