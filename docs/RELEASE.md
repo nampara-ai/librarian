@@ -14,7 +14,7 @@ Releases are built from git tags named `v*`.
 export RELEASE_VERSION="$(uv run python -c 'from librarian.version import __version__; print(__version__)')"
 
 librarian eval examples/eval_cases.json --output docs/results/eval-provider.json
-librarian benchmark --input-path examples/benchmark_text.txt --repeats 3 \
+librarian benchmark --paragraphs 40 --paragraph-chars 1000 --repeats 3 \
   --output docs/results/benchmark-provider.json
 librarian corpus-eval examples/synthetic-corpus/corpus_eval_cases.json \
   --output-dir .librarian/release-corpus-eval \
@@ -48,7 +48,11 @@ uv run python .github/scripts/verify_release_evidence.py \
   --require-corpus-tag srt \
   --require-corpus-tag vtt \
   --min-corpus-search-recall 1.0 \
-  --min-corpus-output-ratio 0.05
+  --min-corpus-output-ratio 0.05 \
+  --min-benchmark-cps 1000 \
+  --min-benchmark-runs 1 \
+  --min-benchmark-input-chars 40000 \
+  --min-benchmark-chunks 4
 ```
 
    Keep private/provider outputs out of Git. Attach sanitized evidence to the release when it is

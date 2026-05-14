@@ -150,7 +150,7 @@ def test_release_workflow_runs_synthetic_corpus_eval_before_build() -> None:
         "librarian corpus-eval examples/synthetic-corpus/corpus_eval_cases.json"
     )
     prompt_eval_index = workflow.index("librarian eval examples/eval_cases.json")
-    benchmark_index = workflow.index("librarian benchmark --input-path examples/benchmark_text.txt")
+    benchmark_index = workflow.index("librarian benchmark --paragraphs 40 --paragraph-chars 1000")
     verifier_index = workflow.index(".github/scripts/verify_release_evidence.py")
     build_index = workflow.index("python -m build")
     assert corpus_eval_index < build_index
@@ -198,6 +198,8 @@ def test_release_workflow_runs_synthetic_corpus_eval_before_build() -> None:
     assert "--min-corpus-output-ratio 0.05" in workflow
     assert "--min-benchmark-cps 1000" in workflow
     assert "--min-benchmark-runs 1" in workflow
+    assert "--min-benchmark-input-chars 40000" in workflow
+    assert "--min-benchmark-chunks 4" in workflow
 
 
 def test_release_docs_use_one_release_version_variable() -> None:
@@ -217,6 +219,8 @@ def test_release_docs_use_one_release_version_variable() -> None:
     ):
         assert f"--require-eval-tag {tag}" in release_doc
     assert "--min-corpus-output-ratio 0.05" in release_doc
+    assert "--min-benchmark-input-chars 40000" in release_doc
+    assert "--min-benchmark-chunks 4" in release_doc
     for tag in (
         "docx",
         "tables",
@@ -826,6 +830,10 @@ def test_release_evidence_verifier_accepts_passing_artifacts(tmp_path: Path) -> 
                 "pdf",
                 "--min-benchmark-cps",
                 "10",
+                "--min-benchmark-input-chars",
+                "100",
+                "--min-benchmark-chunks",
+                "1",
                 "--min-corpus-output-ratio",
                 "0.5",
                 "--version",
@@ -1329,6 +1337,116 @@ def test_release_evidence_verifier_rejects_mismatched_benchmark_run_rate(
                 str(benchmark_path),
                 "--min-benchmark-cps",
                 "10",
+                "--version",
+                "v0.1.0a4",
+            ]
+        )
+        == 1
+    )
+
+
+def test_release_evidence_verifier_rejects_too_small_benchmark_input(
+    tmp_path: Path,
+) -> None:
+    verifier = _load_release_evidence_module()
+    benchmark_path = tmp_path / "benchmark.json"
+    benchmark_path.write_text(
+        """
+        {
+          "artifact_type": "librarian-benchmark-result",
+          "evidence_tier": "real-provider",
+          "generated_at": "2026-05-13T00:00:00+00:00",
+          "librarian_version": "0.1.0a4",
+          "cleaning_prompt_version": "cmos_v2",
+          "summary": {
+            "run_count": 1,
+            "average_chars_per_second": 1000,
+            "fastest_chars_per_second": 1000,
+            "total_input_chars": 100,
+            "total_chunks": 1,
+            "total_seconds": 0.1
+          },
+          "runs": [
+            {
+              "provider": "openai-compatible",
+              "model": "gpt-4.1-mini",
+              "input_chars": 100,
+              "chunks": 1,
+              "chunking_seconds": 0.01,
+              "cleaning_seconds": 0.09,
+              "total_seconds": 0.1,
+              "chars_per_second": 1000,
+              "chunk_target_chars": 8000,
+              "chunk_overlap_chars": 400
+            }
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    assert (
+        verifier.main(
+            [
+                "--benchmark",
+                str(benchmark_path),
+                "--min-benchmark-input-chars",
+                "101",
+                "--version",
+                "v0.1.0a4",
+            ]
+        )
+        == 1
+    )
+
+
+def test_release_evidence_verifier_rejects_too_few_benchmark_chunks(
+    tmp_path: Path,
+) -> None:
+    verifier = _load_release_evidence_module()
+    benchmark_path = tmp_path / "benchmark.json"
+    benchmark_path.write_text(
+        """
+        {
+          "artifact_type": "librarian-benchmark-result",
+          "evidence_tier": "real-provider",
+          "generated_at": "2026-05-13T00:00:00+00:00",
+          "librarian_version": "0.1.0a4",
+          "cleaning_prompt_version": "cmos_v2",
+          "summary": {
+            "run_count": 1,
+            "average_chars_per_second": 1000,
+            "fastest_chars_per_second": 1000,
+            "total_input_chars": 100,
+            "total_chunks": 1,
+            "total_seconds": 0.1
+          },
+          "runs": [
+            {
+              "provider": "openai-compatible",
+              "model": "gpt-4.1-mini",
+              "input_chars": 100,
+              "chunks": 1,
+              "chunking_seconds": 0.01,
+              "cleaning_seconds": 0.09,
+              "total_seconds": 0.1,
+              "chars_per_second": 1000,
+              "chunk_target_chars": 8000,
+              "chunk_overlap_chars": 400
+            }
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    assert (
+        verifier.main(
+            [
+                "--benchmark",
+                str(benchmark_path),
+                "--min-benchmark-chunks",
+                "2",
                 "--version",
                 "v0.1.0a4",
             ]

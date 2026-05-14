@@ -816,6 +816,8 @@ def verify_benchmark(
     require_real_provider: bool,
     min_chars_per_second: float,
     min_runs: int,
+    min_input_chars: int,
+    min_chunks: int,
     expected_version: str | None,
 ) -> list[str]:
     payload = _load_json(path)
@@ -847,6 +849,18 @@ def verify_benchmark(
     _expect(
         isinstance(runs, list) and len(runs) >= min_runs,
         f"{path}: too few benchmark runs",
+        failures,
+    )
+    total_input_chars = summary.get("total_input_chars")
+    _expect(
+        isinstance(total_input_chars, int | float) and int(total_input_chars) >= min_input_chars,
+        f"{path}: benchmark input below {min_input_chars} chars",
+        failures,
+    )
+    total_chunks = summary.get("total_chunks")
+    _expect(
+        isinstance(total_chunks, int) and total_chunks >= min_chunks,
+        f"{path}: benchmark chunks below {min_chunks}",
         failures,
     )
     _check_benchmark_runs(runs, summary, path, failures=failures)
@@ -897,6 +911,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--require-eval-tag", action="append", default=[])
     parser.add_argument("--min-benchmark-cps", type=float, default=1.0)
     parser.add_argument("--min-benchmark-runs", type=int, default=1)
+    parser.add_argument("--min-benchmark-input-chars", type=int, default=1)
+    parser.add_argument("--min-benchmark-chunks", type=int, default=1)
     parser.add_argument("--version", help="Expected Librarian release version or tag.")
     args = parser.parse_args(argv)
 
@@ -937,6 +953,8 @@ def main(argv: list[str] | None = None) -> int:
                     require_real_provider=args.require_real_provider,
                     min_chars_per_second=args.min_benchmark_cps,
                     min_runs=args.min_benchmark_runs,
+                    min_input_chars=args.min_benchmark_input_chars,
+                    min_chunks=args.min_benchmark_chunks,
                     expected_version=args.version,
                 )
             )

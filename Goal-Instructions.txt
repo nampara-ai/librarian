@@ -1092,3 +1092,7 @@
   for DOCX, tables, headers/footers, embedded PDFs, scanned OCR PDFs, noisy OCR,
   mixed embedded/scanned PDFs, and SRT/VTT caption transcripts, so thirteen
   arbitrary passing corpus cases can no longer satisfy CI or release gates.
+- 2026-05-14: Hardened benchmark release evidence by switching CI/release
+  benchmarks from the tiny example text to deterministic multi-chunk synthetic
+  text, and requiring at least 40,000 total input characters and four chunks
+  before benchmark evidence can satisfy CI or release gates.

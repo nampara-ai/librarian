@@ -7,7 +7,7 @@ Performance varies heavily by provider, model, document type, OCR path, and conc
 The mock provider is deterministic and measures framework overhead only:
 
 ```bash
-librarian benchmark --input-path examples/benchmark_text.txt --repeats 3 --output bench-mock.json
+librarian benchmark --paragraphs 40 --paragraph-chars 1000 --repeats 3 --output bench-mock.json
 librarian corpus-eval examples/corpus_eval_cases.json \
   --output-dir .librarian/corpus-eval \
   --output corpus-eval-mock.json \
@@ -26,7 +26,7 @@ export LIBRARIAN_LLM_MODEL=gpt-4.1-mini
 export OPENAI_API_KEY=...
 
 librarian eval examples/eval_cases.json --output eval-provider.json
-librarian benchmark --input-path examples/benchmark_text.txt --repeats 3 --output bench-provider.json
+librarian benchmark --paragraphs 40 --paragraph-chars 1000 --repeats 3 --output bench-provider.json
 librarian corpus-eval examples/corpus_eval_cases.json \
   --output-dir .librarian/corpus-eval-provider \
   --output corpus-eval-provider.json \
@@ -87,6 +87,6 @@ search, and memory numbers for regression comparisons.
 
 ## Current Status
 
-No real-provider baseline is committed for `v0.1.0a55` because this repository does not include
+No real-provider baseline is committed for `v0.1.0a56` because this repository does not include
 provider credentials. The harness and release checklist are in place so maintainers can generate and
 attach sanitized baselines to later release candidates.

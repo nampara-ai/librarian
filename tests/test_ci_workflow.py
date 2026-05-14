@@ -97,7 +97,7 @@ def test_ci_runs_and_verifies_example_evidence() -> None:
     workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
 
     assert "librarian eval examples/eval_cases.json" in workflow
-    assert "librarian benchmark --input-path examples/benchmark_text.txt" in workflow
+    assert "librarian benchmark --paragraphs 40 --paragraph-chars 1000" in workflow
     assert "--repeats 1" in workflow
     assert '--output "$RUNNER_TEMP/ci-eval.json"' in workflow
     assert '--output "$RUNNER_TEMP/ci-benchmark.json"' in workflow
@@ -136,6 +136,8 @@ def test_ci_runs_and_verifies_example_evidence() -> None:
     assert "--min-corpus-output-ratio 0.05" in workflow
     assert "--min-benchmark-cps 1000" in workflow
     assert "--min-benchmark-runs 1" in workflow
+    assert "--min-benchmark-input-chars 40000" in workflow
+    assert "--min-benchmark-chunks 4" in workflow
     verifier_index = workflow.index(".github/scripts/verify_release_evidence.py")
     build_index = workflow.index("python -m build")
     assert verifier_index < build_index

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a56 - 2026-05-14
+
+- Strengthened benchmark release evidence by moving CI/release benchmarks to a
+  deterministic multi-chunk synthetic workload and adding verifier floors for
+  minimum benchmark input characters and chunk count.
+
 ## 0.1.0a55 - 2026-05-14
 
 - Added required corpus-eval tag coverage to release evidence verification and

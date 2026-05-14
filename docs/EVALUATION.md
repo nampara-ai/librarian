@@ -7,9 +7,9 @@ Librarian has two complementary harnesses:
 - `librarian corpus-eval`: end-to-end conversion/import/process/search checks over sanitized
   source files.
 
-Both commands use the configured provider stack. CI uses `LIBRARIAN_LLM_PROVIDER=mock` and runs the
-shipped benchmark text plus `examples/corpus_eval_cases.json` as end-to-end CLI smoke tests;
-provider benchmarks should be run manually with real credentials.
+Both commands use the configured provider stack. CI uses `LIBRARIAN_LLM_PROVIDER=mock` and runs a
+deterministic multi-chunk synthetic benchmark plus `examples/corpus_eval_cases.json` as end-to-end
+CLI smoke tests; provider benchmarks should be run manually with real credentials.
 When `--output` is used, eval, benchmark, corpus-eval, and export result files are written through
 atomic same-directory replacements and output paths that are symlinks or cross symlinked parents are
 rejected.
@@ -21,7 +21,8 @@ Eval suite JSON files are capped at 10 MiB, corpus-eval JSON metadata is capped 
 benchmark `--input-path` files are capped at 100 MiB. Benchmark repeat counts and synthetic input
 dimensions must be positive both in the CLI and the application harness.
 Benchmark JSON results include Librarian version, generation timestamp, cleaning prompt version,
-aggregate throughput/size/chunk summary metrics, and per-run timing details.
+aggregate throughput/size/chunk summary metrics, and per-run timing details. CI and release builds
+require benchmark evidence with at least 40,000 total input characters and four chunks.
 Release-candidate evidence verification recomputes benchmark aggregate input size, chunk count,
 total duration, average throughput, and fastest throughput from the per-run records. It also
 cross-checks per-record derived metrics, including eval and corpus output character ratios, corpus
@@ -40,7 +41,7 @@ export LIBRARIAN_LLM_MODEL=gpt-4.1-mini
 export OPENAI_API_KEY=...
 
 librarian eval examples/eval_cases.json --output eval-openai.json
-librarian benchmark --input-path examples/benchmark_text.txt --repeats 3 --output bench-openai.json
+librarian benchmark --paragraphs 40 --paragraph-chars 1000 --repeats 3 --output bench-openai.json
 librarian corpus-eval examples/corpus_eval_cases.json \
   --output-dir .librarian/corpus-eval \
   --output corpus-eval-openai.json \
