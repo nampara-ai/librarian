@@ -9,6 +9,7 @@ from librarian.application import corpus_eval
 from librarian.application.corpus_eval import (
     CorpusEvalCase,
     CorpusEvalSuite,
+    TextOrderExpectation,
     corpus_eval_result_json,
     load_corpus_eval_suite,
     run_corpus_eval_suite,
@@ -128,6 +129,46 @@ async def test_corpus_eval_fails_performance_budgets(tmp_path: Path) -> None:
     assert "conversion_seconds" in failures
     assert "max_processing_seconds requires process=true" in failures
     assert "peak_memory_bytes" in failures
+
+
+@pytest.mark.asyncio
+async def test_corpus_eval_checks_expected_text_order(tmp_path: Path) -> None:
+    source = tmp_path / "order.md"
+    source.write_text(
+        "# Order Fixture\n\nSecond topic appears first.\n\nFirst topic appears later.",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    container = await build_container(settings)
+    suite = CorpusEvalSuite(
+        cases=[
+            CorpusEvalCase(
+                name="order fixture",
+                source_path=source,
+                process=False,
+                expected_text_order=[
+                    TextOrderExpectation(
+                        before="First topic",
+                        after="Second topic",
+                    )
+                ],
+            )
+        ]
+    )
+
+    result = await run_corpus_eval_suite(
+        container,
+        suite,
+        output_dir=tmp_path / "converted",
+    )
+
+    assert not result.passed
+    assert result.cases[0].failures == (
+        "order check failed: 'First topic' does not appear before 'Second topic'",
+    )
 
 
 @pytest.mark.asyncio

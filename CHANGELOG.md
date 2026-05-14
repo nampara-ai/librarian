@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.0a45 - 2026-05-14
+
+- Added `expected_text_order` to corpus-eval cases so sanitized evaluation
+  suites can catch reading-order regressions in converted transcripts,
+  multi-column documents, and OCR output after whitespace normalization.
+- Enabled order assertions in the shipped corpus-eval example.
+
 ## 0.1.0a44 - 2026-05-14
 
 - Added timestamped transcript normalization utilities and a

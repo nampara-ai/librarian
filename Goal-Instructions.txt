@@ -1047,3 +1047,7 @@
   parsing, sentence-like segment merging with abbreviation/decimal safeguards,
   speaker preservation, and Markdown/text/SRT/CSV rendering through the
   `librarian transcript-normalize` CLI command.
+- 2026-05-14: Added olmOCR-inspired corpus-eval reading-order assertions via
+  `expected_text_order`, giving release and local evaluation suites a direct way
+  to catch source order regressions in transcripts, multi-column conversions,
+  and OCR output instead of relying only on presence/search checks.

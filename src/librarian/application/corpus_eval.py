@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import tracemalloc
 from dataclasses import dataclass
@@ -24,6 +25,14 @@ from librarian.version import __version__
 _MAX_CORPUS_EVAL_JSON_BYTES = 10 * 1024 * 1024
 
 
+class TextOrderExpectation(BaseModel):
+    """Assert that one text fragment appears before another in converted output."""
+
+    before: str = Field(min_length=1)
+    after: str = Field(min_length=1)
+    case_sensitive: bool = False
+
+
 class CorpusEvalCase(BaseModel):
     """One source-file evaluation case."""
 
@@ -34,6 +43,9 @@ class CorpusEvalCase(BaseModel):
     process: bool = True
     expected_contains: list[str] = Field(default_factory=list)
     forbidden_contains: list[str] = Field(default_factory=list)
+    expected_text_order: list[TextOrderExpectation] = Field(
+        default_factory=lambda: cast(list[TextOrderExpectation], [])
+    )
     expected_search_phrases: list[str] = Field(default_factory=list)
     expected_classification_prefix: str | None = None
     expected_page_count: int | None = Field(default=None, ge=1)
@@ -450,12 +462,51 @@ def _check_converted_text(
     for forbidden in case.forbidden_contains:
         if forbidden.lower() in lower_output:
             failures.append(f"found forbidden text: {forbidden}")
+    _check_expected_text_order(case.expected_text_order, converted_text, failures)
     if case.require_markdown_headings and "\n# " not in f"\n{converted_text}":
         failures.append("missing Markdown heading")
     if case.require_no_context_markers:
         for marker in ("[previous context]", "[next context]", "as an ai language model"):
             if marker in lower_output:
                 failures.append(f"found context/assistant artifact: {marker}")
+
+
+def _check_expected_text_order(
+    expectations: list[TextOrderExpectation],
+    converted_text: str,
+    failures: list[str],
+) -> None:
+    for expectation in expectations:
+        haystack = _normalize_order_text(
+            converted_text,
+            case_sensitive=expectation.case_sensitive,
+        )
+        before = _normalize_order_text(
+            expectation.before,
+            case_sensitive=expectation.case_sensitive,
+        )
+        after = _normalize_order_text(
+            expectation.after,
+            case_sensitive=expectation.case_sensitive,
+        )
+        before_index = haystack.find(before)
+        after_index = haystack.find(after)
+        if before_index < 0:
+            failures.append(f"order check missing before text: {expectation.before}")
+            continue
+        if after_index < 0:
+            failures.append(f"order check missing after text: {expectation.after}")
+            continue
+        if before_index >= after_index:
+            failures.append(
+                "order check failed: "
+                f"{expectation.before!r} does not appear before {expectation.after!r}"
+            )
+
+
+def _normalize_order_text(value: str, *, case_sensitive: bool) -> str:
+    normalized = re.sub(r"\s+", " ", value).strip()
+    return normalized if case_sensitive else normalized.lower()
 
 
 def _check_conversion_budget(

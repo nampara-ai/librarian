@@ -7,6 +7,10 @@
       "format": "md",
       "process": true,
       "expected_contains": ["canter transitions", "saddle fit", "groundwork"],
+      "expected_text_order": [
+        {"before": "canter transitions", "after": "saddle fit"},
+        {"before": "saddle fit", "after": "groundwork"}
+      ],
       "expected_search_phrases": ["canter transitions", "saddle fit"],
       "expected_classification_prefix": "636",
       "min_output_char_ratio": 0.5,

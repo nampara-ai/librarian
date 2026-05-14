@@ -140,6 +140,9 @@ Corpus eval cases point at real sanitized source files, relative to the suite JS
       "format": "md",
       "process": true,
       "expected_contains": ["canter transitions"],
+      "expected_text_order": [
+        {"before": "warm-up notes", "after": "canter transitions"}
+      ],
       "expected_search_phrases": ["canter transitions"],
       "expected_classification_prefix": "636",
       "expected_page_count": 12,
@@ -164,6 +167,8 @@ non-negative with `max_output_char_ratio >= min_output_char_ratio`. Optional
 conversion sidecar page-source summary. Optional `min_ocr_pages`, `min_corrected_pages`,
 `max_conversion_seconds`, `max_processing_seconds`, and `max_peak_memory_bytes` budgets must be
 positive when set, except OCR minimums may be zero; budget overruns fail the case.
+`expected_text_order` checks converted output after whitespace normalization and can be used to
+catch reading-order regressions in transcripts, multi-column documents, and OCR output.
 
 The JSON result records Librarian version, generation timestamp, provider/model settings, prompt
 versions, aggregate pass/failure/search/size/OCR/memory summary metrics, conversion time,
