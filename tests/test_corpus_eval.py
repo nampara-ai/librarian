@@ -82,6 +82,9 @@ async def test_corpus_eval_runs_conversion_processing_and_search(tmp_path: Path)
     assert rendered["summary"]["failure_case_count"] == 0
     assert rendered["summary"]["total_input_bytes"] == source.stat().st_size
     assert rendered["summary"]["total_output_chars"] == result.cases[0].output_chars
+    assert rendered["summary"]["total_page_attempts"] == 0
+    assert rendered["summary"]["total_failed_pages"] == 0
+    assert rendered["summary"]["max_page_duration_ms"] is None
     assert rendered["summary"]["average_search_recall"] == 1
     assert rendered["summary"]["total_search_phrases"] == 1
     assert rendered["summary"]["total_search_hits"] == 1
@@ -141,15 +144,23 @@ async def test_corpus_eval_fails_page_source_and_ocr_expectations(tmp_path: Path
                 "pages": [
                     {
                         "page_number": 1,
+                        "status": "succeeded",
                         "source": "embedded",
                         "chars": 12,
                         "corrected": False,
+                        "warnings": [],
+                        "attempts": 0,
+                        "duration_ms": None,
                     },
                     {
                         "page_number": 2,
+                        "status": "pending",
                         "source": "empty",
                         "chars": 0,
                         "corrected": False,
+                        "warnings": ["missing-ocr-confidence"],
+                        "attempts": 2,
+                        "duration_ms": 15.0,
                     },
                 ],
             }
@@ -188,6 +199,17 @@ async def test_corpus_eval_fails_page_source_and_ocr_expectations(tmp_path: Path
     assert "page source 'ocr' count 0 != expected 1" in failures
     assert "ocr_pages 0 < minimum 1" in failures
     assert "corrected_pages 0 < minimum 1" in failures
+    rendered = json.loads(corpus_eval_result_json(result))
+    assert rendered["cases"][0]["page_status_counts"] == {
+        "pending": 1,
+        "succeeded": 1,
+    }
+    assert rendered["cases"][0]["page_warning_counts"] == {
+        "missing-ocr-confidence": 1,
+    }
+    assert rendered["cases"][0]["page_attempts"] == 2
+    assert rendered["cases"][0]["max_page_duration_ms"] == 15.0
+    assert rendered["summary"]["total_page_attempts"] == 2
 
 
 @pytest.mark.asyncio

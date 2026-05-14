@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a38 - 2026-05-14
+
+- Added page status counts, OCR warning counts, retry attempts, and max page
+  duration metrics to corpus-eval evidence, and made the release verifier
+  require those page-level diagnostics in every corpus-eval case.
+
 ## 0.1.0a37 - 2026-05-14
 
 - Made SQLite FTS result ordering deterministic by adding newest-document and

@@ -160,9 +160,10 @@ positive when set, except OCR minimums may be zero; budget overruns fail the cas
 
 The JSON result records Librarian version, generation timestamp, provider/model settings, prompt
 versions, aggregate pass/failure/search/size/OCR/memory summary metrics, conversion time,
-processing time, peak traced memory, output character ratio, page count, per-page extraction source
-counts, OCR page count, corrected OCR page count, average OCR confidence, search recall, per-phrase
-search diagnostics with total matches and returned document IDs, and classification result.
+processing time, peak traced memory, output character ratio, page count, per-page extraction status
+and source counts, OCR warning counts, retry attempts, max page duration, OCR page count, corrected
+OCR page count, average OCR confidence, search recall, per-phrase search diagnostics with total
+matches and returned document IDs, and classification result.
 Local `docs/results/` outputs are ignored by Git and Docker build context; commit only sanitized
 summaries intentionally, or attach large generated artifacts to the release.
 

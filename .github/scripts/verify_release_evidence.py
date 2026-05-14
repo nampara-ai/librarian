@@ -239,12 +239,24 @@ def _check_corpus_case_metrics(
         for key in ("conversion_seconds", "peak_memory_bytes"):
             if not isinstance(item.get(key), int | float) or item.get(key, 0) < 0:
                 failures.append(f"{path}: corpus eval case {index} missing nonnegative {key}")
+        status_counts = item.get("page_status_counts")
+        if not isinstance(status_counts, dict):
+            failures.append(f"{path}: corpus eval case {index} missing page_status_counts")
         source_counts = item.get("page_source_counts")
         if not isinstance(source_counts, dict):
             failures.append(f"{path}: corpus eval case {index} missing page_source_counts")
-        for key in ("ocr_pages", "corrected_pages"):
+        warning_counts = item.get("page_warning_counts")
+        if not isinstance(warning_counts, dict):
+            failures.append(f"{path}: corpus eval case {index} missing page_warning_counts")
+        for key in ("page_attempts", "ocr_pages", "corrected_pages"):
             if not isinstance(item.get(key), int) or item.get(key, -1) < 0:
                 failures.append(f"{path}: corpus eval case {index} missing nonnegative {key}")
+        max_page_duration = item.get("max_page_duration_ms")
+        if max_page_duration is not None and (
+            not isinstance(max_page_duration, int | float)
+            or float(max_page_duration) < 0
+        ):
+            failures.append(f"{path}: corpus eval case {index} invalid max_page_duration_ms")
         search_recall = item.get("search_recall")
         if search_recall is not None and (
             not isinstance(search_recall, int | float)

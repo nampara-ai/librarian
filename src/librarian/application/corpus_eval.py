@@ -82,7 +82,11 @@ class CorpusEvalCaseResult:
     processing_seconds: float | None
     peak_memory_bytes: int
     page_count: int | None
+    page_status_counts: dict[str, int]
     page_source_counts: dict[str, int]
+    page_warning_counts: dict[str, int]
+    page_attempts: int
+    max_page_duration_ms: float | None
     ocr_pages: int
     corrected_pages: int
     average_ocr_confidence: float | None
@@ -116,7 +120,11 @@ class CorpusEvalRunResult:
 class PageMetrics:
     """Summary of page-level extraction metadata."""
 
+    status_counts: dict[str, int]
     source_counts: dict[str, int]
+    warning_counts: dict[str, int]
+    attempts: int
+    max_duration_ms: float | None
     ocr_pages: int
     corrected_pages: int
     average_ocr_confidence: float | None
@@ -222,7 +230,11 @@ async def _run_corpus_case(
             processing_seconds=None,
             peak_memory_bytes=peak_memory,
             page_count=None,
+            page_status_counts={},
             page_source_counts={},
+            page_warning_counts={},
+            page_attempts=0,
+            max_page_duration_ms=None,
             ocr_pages=0,
             corrected_pages=0,
             average_ocr_confidence=None,
@@ -302,7 +314,11 @@ async def _run_corpus_case(
         processing_seconds=processing_seconds,
         peak_memory_bytes=peak_memory,
         page_count=page_count,
+        page_status_counts=page_metrics.status_counts,
         page_source_counts=page_metrics.source_counts,
+        page_warning_counts=page_metrics.warning_counts,
+        page_attempts=page_metrics.attempts,
+        max_page_duration_ms=page_metrics.max_duration_ms,
         ocr_pages=page_metrics.ocr_pages,
         corrected_pages=page_metrics.corrected_pages,
         average_ocr_confidence=page_metrics.average_ocr_confidence,
@@ -343,7 +359,11 @@ def corpus_eval_result_json(result: CorpusEvalRunResult) -> str:
                     "processing_seconds": item.processing_seconds,
                     "peak_memory_bytes": item.peak_memory_bytes,
                     "page_count": item.page_count,
+                    "page_status_counts": item.page_status_counts,
                     "page_source_counts": item.page_source_counts,
+                    "page_warning_counts": item.page_warning_counts,
+                    "page_attempts": item.page_attempts,
+                    "max_page_duration_ms": item.max_page_duration_ms,
                     "ocr_pages": item.ocr_pages,
                     "corrected_pages": item.corrected_pages,
                     "average_ocr_confidence": item.average_ocr_confidence,
@@ -386,9 +406,19 @@ def _corpus_eval_summary(result: CorpusEvalRunResult) -> dict[str, object]:
         "pass_rate": (sum(1 for item in cases if item.passed) / len(cases) if cases else 0.0),
         "total_input_bytes": sum(item.input_bytes for item in cases),
         "total_output_chars": sum(item.output_chars for item in cases),
+        "total_page_attempts": sum(item.page_attempts for item in cases),
+        "total_failed_pages": sum(item.page_status_counts.get("failed", 0) for item in cases),
         "total_ocr_pages": sum(item.ocr_pages for item in cases),
         "total_corrected_pages": sum(item.corrected_pages for item in cases),
         "max_peak_memory_bytes": max((item.peak_memory_bytes for item in cases), default=0),
+        "max_page_duration_ms": max(
+            (
+                item.max_page_duration_ms
+                for item in cases
+                if item.max_page_duration_ms is not None
+            ),
+            default=None,
+        ),
         "average_search_recall": (
             sum(search_recalls) / len(search_recalls) if search_recalls else None
         ),
@@ -565,12 +595,20 @@ def _page_metrics(extraction: dict[str, object]) -> PageMetrics:
     pages_obj = extraction.get("pages")
     if not isinstance(pages_obj, list):
         return PageMetrics(
+            status_counts={},
             source_counts={},
+            warning_counts={},
+            attempts=0,
+            max_duration_ms=None,
             ocr_pages=0,
             corrected_pages=0,
             average_ocr_confidence=None,
         )
+    status_counts: dict[str, int] = {}
     source_counts: dict[str, int] = {}
+    warning_counts: dict[str, int] = {}
+    attempts = 0
+    durations: list[float] = []
     corrected_pages = 0
     ocr_pages = 0
     confidences: list[float] = []
@@ -578,8 +616,21 @@ def _page_metrics(extraction: dict[str, object]) -> PageMetrics:
         if not isinstance(page_obj, dict):
             continue
         page = cast(dict[str, object], page_obj)
+        status = str(page.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
         source = str(page.get("source") or "unknown")
         source_counts[source] = source_counts.get(source, 0) + 1
+        page_attempts = page.get("attempts")
+        if isinstance(page_attempts, int) and page_attempts >= 0:
+            attempts += page_attempts
+        duration_ms = page.get("duration_ms")
+        if isinstance(duration_ms, int | float) and duration_ms >= 0:
+            durations.append(float(duration_ms))
+        warnings = page.get("warnings")
+        if isinstance(warnings, list):
+            for warning in cast(list[object], warnings):
+                if isinstance(warning, str) and warning:
+                    warning_counts[warning] = warning_counts.get(warning, 0) + 1
         if source == "ocr":
             ocr_pages += 1
         if page.get("corrected") is True:
@@ -588,7 +639,11 @@ def _page_metrics(extraction: dict[str, object]) -> PageMetrics:
         if isinstance(confidence, int | float):
             confidences.append(float(confidence))
     return PageMetrics(
+        status_counts=status_counts,
         source_counts=source_counts,
+        warning_counts=warning_counts,
+        attempts=attempts,
+        max_duration_ms=max(durations) if durations else None,
         ocr_pages=ocr_pages,
         corrected_pages=corrected_pages,
         average_ocr_confidence=(
