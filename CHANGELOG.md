@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a28 - 2026-05-14
+
+- Improved broad SQLite FTS query normalization so possessive apostrophes in user searches
+  such as `children's hospital` and `horse’s gait` do not require a standalone `s` token,
+  while preserving explicit quoted/phrase query behavior.
+
 ## 0.1.0a27 - 2026-05-14
 
 - Sanitized remaining CLI exception-detail surfaces for database/workspace maintenance,

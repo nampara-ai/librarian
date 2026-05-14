@@ -374,6 +374,10 @@ def test_normalize_search_query_preserves_safe_quoted_phrases() -> None:
     assert normalize_search_query('"follow-up care" horse?!') == '"follow up care" horse'
     assert normalize_search_query("follow-up care", phrase=True) == '"follow up care"'
     assert normalize_search_query('horse "follow-up') == "horse follow up"
+    assert normalize_search_query("children's hospital horse\u2019s gait") == (
+        "children hospital horse gait"
+    )
+    assert normalize_search_query('"children\u2019s hospital"') == '"children s hospital"'
     with pytest.raises(ValueError, match="Invalid search query"):
         normalize_search_query('"')
     with pytest.raises(ValueError, match="Search query exceeds configured limit"):
@@ -449,6 +453,31 @@ async def test_sqlite_search_snippets_escape_source_markup(tmp_path: Path) -> No
     assert "<script>" not in snippet
     assert "</script>" not in snippet
     assert "<mark>not trusted</mark>" not in snippet
+
+
+@pytest.mark.asyncio
+async def test_sqlite_search_broad_query_ignores_possessive_suffixes(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    container = await build_container(settings)
+    plain_source = tmp_path / "plain.txt"
+    possessive_source = tmp_path / "possessive.txt"
+    plain_source.write_text("Children hospital discharge guidance.", encoding="utf-8")
+    possessive_source.write_text("Children's hospital intake guidance.", encoding="utf-8")
+    plain_document = await container.ingest_document.execute(plain_source)
+    possessive_document = await container.ingest_document.execute(possessive_source)
+
+    results = await container.repository.search_results("children's hospital", scope="raw")
+    result_ids = {result.document_id for result in results}
+
+    assert result_ids == {
+        plain_document.document.id,
+        possessive_document.document.id,
+    }
 
 
 @pytest.mark.asyncio
