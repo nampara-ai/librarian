@@ -79,6 +79,7 @@ _SECURITY_HEADERS = {
 _MAX_UPLOAD_FILENAME_BYTES = 255
 _READ_SCOPE_RESTRICTED_PATHS = frozenset({"/config", "/metrics", "/metrics/prometheus"})
 _OPENAPI_ERROR_STATUS_CODES = ("400", "401", "403", "404", "413", "422", "429", "500", "503")
+_PRIVATE_INGEST_ERROR_DETAIL = "Document ingest failed"
 @dataclass(frozen=True, slots=True)
 class ApiCredential:
     """One configured API credential and its effective scope."""
@@ -923,9 +924,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     )
                 )
                 continue
-            except Exception as exc:
+            except Exception:
                 failed_count += 1
-                detail = sanitize_error_message(exc)
+                detail = _PRIVATE_INGEST_ERROR_DETAIL
                 items.append(
                     BatchDocumentItemResponse(
                         filename=filename,
@@ -1728,7 +1729,7 @@ async def _ingest_upload(
         ingested = await container.ingest_document.execute(destination)
     except Exception as exc:
         await _cleanup_upload(destination)
-        raise HTTPException(status_code=400, detail=sanitize_error_message(exc)) from exc
+        raise HTTPException(status_code=400, detail=_public_ingest_error_detail(exc)) from exc
     if ingested.duplicate:
         await _cleanup_upload(destination)
     return _document_response(ingested.document)
@@ -1741,6 +1742,17 @@ def _run_event_response(event: RunEvent) -> RunEventResponse:
         message=event.message,
         created_at=event.created_at.isoformat(),
     )
+
+
+def _public_ingest_error_detail(exc: Exception) -> str:
+    detail = sanitize_error_message(exc)
+    if "Unsupported file extension" in detail:
+        return detail
+    if "appears to be binary" in detail:
+        return "Uploaded file appears to be binary"
+    if "exceeds" in detail and "bytes" in detail:
+        return "Uploaded file exceeds configured size limit"
+    return _PRIVATE_INGEST_ERROR_DETAIL
 
 
 def _parse_document_status(value: str | None) -> DocumentStatus | None:

@@ -881,7 +881,7 @@ def test_api_batch_upload_rejects_too_many_bytes_before_ingest(tmp_path: Path) -
     assert not list((tmp_path / ".librarian" / "uploads").glob("*"))
 
 
-def test_api_batch_upload_item_errors_are_redacted(
+def test_api_batch_upload_item_errors_do_not_expose_private_exception_text(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -892,7 +892,9 @@ def test_api_batch_upload_item_errors_are_redacted(
 
     async def fail_ingest_upload(*args: object, **kwargs: object) -> None:
         del args, kwargs
-        raise RuntimeError("provider failed api_key=abc123 sk-testSECRET123")
+        raise RuntimeError(
+            "provider failed api_key=abc123 sk-testSECRET123 source=PRIVATE HORSE SOURCE"
+        )
 
     monkeypatch.setattr(api_app, "_ingest_upload", fail_ingest_upload)
 
@@ -907,13 +909,13 @@ def test_api_batch_upload_item_errors_are_redacted(
     error = payload["documents"][0]["error"]
     assert payload["failed"] == 1
     assert error["code"] == "bad_request"
-    assert "api_key=[REDACTED]" in error["detail"]
-    assert "[REDACTED]" in error["detail"]
+    assert error["detail"] == "Document ingest failed"
     assert "abc123" not in error["detail"]
     assert "sk-testSECRET123" not in error["detail"]
+    assert "PRIVATE HORSE SOURCE" not in error["detail"]
 
 
-def test_api_single_upload_ingest_errors_are_redacted(
+def test_api_single_upload_ingest_errors_do_not_expose_private_exception_text(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -925,7 +927,9 @@ def test_api_single_upload_ingest_errors_are_redacted(
     class FailingIngest:
         async def execute(self, path: Path) -> None:
             del path
-            raise RuntimeError('ingest failed {"api_key":"abc123"} sk-testSECRET123')
+            raise RuntimeError(
+                'ingest failed {"api_key":"abc123"} sk-testSECRET123 PRIVATE HORSE SOURCE'
+            )
 
     class FakeContainer:
         ingest_document = FailingIngest()
@@ -944,10 +948,10 @@ def test_api_single_upload_ingest_errors_are_redacted(
 
     assert response.status_code == 400
     detail = response.json()["detail"]
-    assert '{"api_key":"[REDACTED]"}' in detail
-    assert "[REDACTED]" in detail
+    assert detail == "Document ingest failed"
     assert "abc123" not in detail
     assert "sk-testSECRET123" not in detail
+    assert "PRIVATE HORSE SOURCE" not in detail
 
 
 def test_api_document_list_uses_paginated_response_metadata(tmp_path: Path) -> None:

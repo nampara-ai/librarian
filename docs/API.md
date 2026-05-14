@@ -11,12 +11,16 @@ Requests above `LIBRARIAN_API_MAX_REQUEST_BYTES` are rejected before routing, ei
   symlinked parents before persisting files. Known archive/container extensions are rejected before
   upload bytes are written, and common archive signatures are rejected on the first upload chunk
   before any upload bytes are persisted. Supported ZIP-container document types such as `.docx`,
-  `.pptx`, `.xlsx`, and `.epub` remain accepted by extension.
+  `.pptx`, `.xlsx`, and `.epub` remain accepted by extension. Unsupported types and size/binary
+  validation errors return specific messages, but unexpected ingest failures return a generic
+  `Document ingest failed` detail so private document text from provider/extractor exceptions is not
+  reflected to clients.
 - `POST /documents/batch`: upload multiple files in one request. Each file returns either a
   `document` object or an `error` object; one failed file does not roll back successful ingests.
   Batch size is capped by `LIBRARIAN_API_MAX_BATCH_FILES` and
   `LIBRARIAN_API_MAX_BATCH_BYTES`. Per-file result filenames are normalized the same way as stored
-  upload filenames, including failed items.
+  upload filenames, including failed items. Unexpected per-file ingest exceptions use the same
+  generic private-error detail as single-file uploads.
 - `GET /documents?limit=100&offset=0`: list documents.
 - `GET /documents/{id}`: document metadata.
 - `DELETE /documents/{id}`: delete a document and dependent records. Owned upload-file cleanup is

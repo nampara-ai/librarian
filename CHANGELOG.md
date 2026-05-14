@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a68 - 2026-05-14
+
+- Stopped reflecting unexpected single-file and batch upload ingest exception details to API
+  clients, preventing extractor/provider errors that contain private source text from leaking
+  through upload error responses while keeping safe validation details specific.
+
 ## 0.1.0a67 - 2026-05-14
 
 - Made API document-delete owned-upload cleanup side-effect free for non-upload sources, so cleanup

@@ -14,7 +14,7 @@
   conversion/OCR adapters, versioned prompts, CLI/API parity, CI, CodeQL,
   Docker, and release automation.
 
-  Current public release: `v0.1.0a67`.
+  Current public release: `v0.1.0a68`.
 
   High-level code tour:
 
@@ -173,7 +173,7 @@
   persists runs and outputs in SQLite; and exposes the same workflow through
   both a CLI and FastAPI API.
 
-  Current release: v0.1.0a67
+  Current release: v0.1.0a68
   Repo: https://github.com/nampara-ai/librarian
 
   Codebase Tour
@@ -225,12 +225,12 @@
 
   The repo is in solid alpha shape:
 
-  - Latest release: v0.1.0a67
+  - Latest release: v0.1.0a68
   - CI passes.
   - CodeQL passes.
   - Release workflow passes.
   - Docker image published.
-  - Local tests: 491 passed, 3 skipped as of the v0.1.0a67 full gate.
+  - Local tests: 491 passed, 3 skipped as of the v0.1.0a68 full gate.
   - Large PDF smoke test was run manually on a 561-page PDF:
       - 560 embedded-text pages
       - 1 OCR page
@@ -1140,3 +1140,7 @@
 - 2026-05-14: Made API document-delete owned-upload cleanup side-effect free
   for non-upload sources. Deleting a manually ingested document now removes the
   document records and raw blobs without creating an empty upload directory.
+- 2026-05-14: Hardened API upload privacy by replacing unexpected single-file
+  and batch ingest exception details with a generic client-facing error. Safe
+  validation messages remain actionable, but private source text embedded in
+  extractor/provider exceptions is no longer reflected to clients.
