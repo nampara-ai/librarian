@@ -144,6 +144,22 @@ def test_redact_secrets_handles_multiple_assignment_names() -> None:
     )
 
 
+def test_redact_secrets_handles_colon_separated_secret_names() -> None:
+    assert redact_secrets(
+        "provider failed api_key: abc123 token:tok secret : hidden password : pass"
+    ) == (
+        "provider failed api_key: [REDACTED] token:[REDACTED] "
+        "secret : [REDACTED] password : [REDACTED]"
+    )
+
+
+def test_redact_secrets_handles_api_key_header_name() -> None:
+    message = redact_secrets("request failed x-api-key: abc123")
+
+    assert message == "request failed x-api-key: [REDACTED]"
+    assert "abc123" not in message
+
+
 def test_sanitize_error_message_redacts_and_truncates() -> None:
     message = sanitize_error_message(
         "provider failed api_key=abc123 " + ("private transcript text " * 20),

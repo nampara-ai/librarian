@@ -13,7 +13,10 @@ from types import TracebackType
 from typing import Any
 
 _SECRET_REPLACEMENTS = (
-    (re.compile(r"(?i)\b(api[_-]?key|token|secret|password)=([^\s,;]+)"), r"\1=[REDACTED]"),
+    (
+        re.compile(r"(?i)\b(api[_-]?key|token|secret|password)(\s*[:=]\s*)([^\s,;]+)"),
+        r"\1\2[REDACTED]",
+    ),
     (re.compile(r"(?i)\b(authorization:\s*bearer\s+)([^\s,;]+)"), r"\1[REDACTED]"),
     (re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b"), "[REDACTED]"),
 )

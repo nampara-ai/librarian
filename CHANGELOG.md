@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a24 - 2026-05-14
+
+- Extended shared secret redaction to colon-separated API key, token, secret, and password
+  formats, including header-like `x-api-key: ...` messages, so logs and sanitized error
+  payloads cover more provider and gateway failure shapes.
+
 ## 0.1.0a23 - 2026-05-13
 
 - Redacted OpenAI-compatible provider failures before surfacing them from the LLM adapter,
