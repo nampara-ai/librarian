@@ -271,7 +271,7 @@ def _check_corpus_case_metrics(
             failures.append(f"{path}: corpus eval case {index} missing search diagnostics")
 
 
-def _check_corpus_page_summary(
+def _check_corpus_aggregate_summary(
     payload: dict[str, Any],
     summary: dict[str, Any],
     path: Path,
@@ -281,10 +281,51 @@ def _check_corpus_page_summary(
     cases = payload.get("cases")
     if not isinstance(cases, list) or not all(isinstance(item, dict) for item in cases):
         return
+    total_input_bytes = 0
+    total_output_chars = 0
+    total_ocr_pages = 0
+    total_corrected_pages = 0
+    peak_memory_values: list[float] = []
+    search_recalls: list[float] = []
+    total_search_phrases = 0
+    total_search_hits = 0
+    failure_count = 0
+    failure_case_count = 0
     total_attempts = 0
     total_failed_pages = 0
     durations: list[float] = []
     for item in cases:
+        input_bytes = item.get("input_bytes")
+        if isinstance(input_bytes, int | float) and input_bytes >= 0:
+            total_input_bytes += int(input_bytes)
+        output_chars = item.get("output_chars")
+        if isinstance(output_chars, int | float) and output_chars >= 0:
+            total_output_chars += int(output_chars)
+        ocr_pages = item.get("ocr_pages")
+        if isinstance(ocr_pages, int) and ocr_pages >= 0:
+            total_ocr_pages += ocr_pages
+        corrected_pages = item.get("corrected_pages")
+        if isinstance(corrected_pages, int) and corrected_pages >= 0:
+            total_corrected_pages += corrected_pages
+        peak_memory = item.get("peak_memory_bytes")
+        if isinstance(peak_memory, int | float) and peak_memory >= 0:
+            peak_memory_values.append(float(peak_memory))
+        search_recall = item.get("search_recall")
+        if isinstance(search_recall, int | float) and 0 <= float(search_recall) <= 1:
+            search_recalls.append(float(search_recall))
+        diagnostics = item.get("search_diagnostics")
+        if isinstance(diagnostics, list):
+            total_search_phrases += len(diagnostics)
+            total_search_hits += sum(
+                1
+                for diagnostic in diagnostics
+                if isinstance(diagnostic, dict) and diagnostic.get("hit") is True
+            )
+        failures_obj = item.get("failures")
+        if isinstance(failures_obj, list):
+            failure_count += len(failures_obj)
+            if failures_obj:
+                failure_case_count += 1
         attempts = item.get("page_attempts")
         if isinstance(attempts, int) and attempts >= 0:
             total_attempts += attempts
@@ -297,6 +338,37 @@ def _check_corpus_page_summary(
         if isinstance(duration, int | float) and float(duration) >= 0:
             durations.append(float(duration))
 
+    if summary.get("total_input_bytes") != total_input_bytes:
+        failures.append(f"{path}: corpus eval total_input_bytes does not match cases")
+    if summary.get("total_output_chars") != total_output_chars:
+        failures.append(f"{path}: corpus eval total_output_chars does not match cases")
+    if summary.get("total_ocr_pages") != total_ocr_pages:
+        failures.append(f"{path}: corpus eval total_ocr_pages does not match cases")
+    if summary.get("total_corrected_pages") != total_corrected_pages:
+        failures.append(f"{path}: corpus eval total_corrected_pages does not match cases")
+    expected_peak_memory = max(peak_memory_values, default=0.0)
+    if summary.get("max_peak_memory_bytes") != expected_peak_memory:
+        failures.append(f"{path}: corpus eval max_peak_memory_bytes does not match cases")
+    expected_search_recall = (
+        sum(search_recalls) / len(search_recalls) if search_recalls else None
+    )
+    actual_search_recall = summary.get("average_search_recall")
+    if expected_search_recall is None:
+        if actual_search_recall is not None:
+            failures.append(f"{path}: corpus eval average_search_recall does not match cases")
+    elif (
+        not isinstance(actual_search_recall, int | float)
+        or abs(float(actual_search_recall) - expected_search_recall) > 1e-9
+    ):
+        failures.append(f"{path}: corpus eval average_search_recall does not match cases")
+    if summary.get("total_search_phrases") != total_search_phrases:
+        failures.append(f"{path}: corpus eval total_search_phrases does not match cases")
+    if summary.get("total_search_hits") != total_search_hits:
+        failures.append(f"{path}: corpus eval total_search_hits does not match cases")
+    if summary.get("failure_count") != failure_count:
+        failures.append(f"{path}: corpus eval failure_count does not match cases")
+    if summary.get("failure_case_count") != failure_case_count:
+        failures.append(f"{path}: corpus eval failure_case_count does not match cases")
     if summary.get("total_page_attempts") != total_attempts:
         failures.append(f"{path}: corpus eval total_page_attempts does not match cases")
     if summary.get("total_failed_pages") != total_failed_pages:
@@ -471,7 +543,7 @@ def verify_corpus_eval(
     _check_pass_counts(summary, path, label="corpus eval", failures=failures)
     _check_case_results(payload, summary, path, label="corpus eval", failures=failures)
     _check_corpus_case_metrics(payload, path, failures=failures)
-    _check_corpus_page_summary(payload, summary, path, failures=failures)
+    _check_corpus_aggregate_summary(payload, summary, path, failures=failures)
     _expect(summary.get("failure_count") == 0, f"{path}: corpus eval failures recorded", failures)
     _expect(
         isinstance(average_search_recall, int | float)

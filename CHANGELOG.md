@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a40 - 2026-05-14
+
+- Expanded corpus-eval release evidence verification to recompute aggregate
+  size, OCR, correction, peak-memory, search, failure, and page-diagnostic
+  summary metrics from per-case records.
+
 ## 0.1.0a39 - 2026-05-14
 
 - Strengthened release evidence verification to recompute corpus-eval page
