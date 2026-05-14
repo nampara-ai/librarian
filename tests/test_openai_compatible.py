@@ -120,6 +120,112 @@ async def test_openai_provider_retries_transient_errors(monkeypatch: pytest.Monk
 
 
 @pytest.mark.asyncio
+async def test_openai_provider_redacts_non_retriable_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = httpx.Request("POST", "https://api.example.test")
+
+    class FakeCompletions:
+        async def create(self, **kwargs: object) -> object:
+            del kwargs
+            raise openai.AuthenticationError(
+                "bad auth api_key=abc123 sk-testSECRET123",
+                response=httpx.Response(401, request=request),
+                body=None,
+            )
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeClient:
+        chat = FakeChat()
+
+    def fake_async_openai(**kwargs: object) -> FakeClient:
+        del kwargs
+        return FakeClient()
+
+    monkeypatch.setenv("LIBRARIAN_TEST_API_KEY", "test")
+    monkeypatch.setattr("librarian.llm.openai_compatible.AsyncOpenAI", fake_async_openai)
+    provider = OpenAICompatibleProvider(
+        api_key_env="LIBRARIAN_TEST_API_KEY",
+        base_url=None,
+        timeout_seconds=1,
+        max_concurrency=1,
+        max_retries=0,
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await provider.complete(
+            system_prompt="system",
+            user_prompt="user",
+            model="model",
+            max_tokens=8,
+            temperature=0,
+        )
+
+    message = str(exc_info.value)
+    assert message == "LLM provider request failed: bad auth api_key=[REDACTED] [REDACTED]"
+    assert "abc123" not in message
+    assert "sk-testSECRET123" not in message
+    assert exc_info.value.__cause__ is None
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_redacts_retry_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = httpx.Request("POST", "https://api.example.test")
+
+    class FakeCompletions:
+        async def create(self, **kwargs: object) -> object:
+            del kwargs
+            raise openai.RateLimitError(
+                "rate limited token=abc123 sk-testSECRET123",
+                response=httpx.Response(429, request=request),
+                body=None,
+            )
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeClient:
+        chat = FakeChat()
+
+    def fake_async_openai(**kwargs: object) -> FakeClient:
+        del kwargs
+        return FakeClient()
+
+    monkeypatch.setenv("LIBRARIAN_TEST_API_KEY", "test")
+    monkeypatch.setattr("librarian.llm.openai_compatible.AsyncOpenAI", fake_async_openai)
+    monkeypatch.setattr("librarian.llm.openai_compatible.asyncio.sleep", _no_sleep)
+    provider = OpenAICompatibleProvider(
+        api_key_env="LIBRARIAN_TEST_API_KEY",
+        base_url=None,
+        timeout_seconds=1,
+        max_concurrency=1,
+        max_retries=1,
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await provider.complete(
+            system_prompt="system",
+            user_prompt="user",
+            model="model",
+            max_tokens=8,
+            temperature=0,
+        )
+
+    message = str(exc_info.value)
+    assert (
+        message
+        == "LLM provider request failed after retries: rate limited token=[REDACTED] [REDACTED]"
+    )
+    assert "abc123" not in message
+    assert "sk-testSECRET123" not in message
+    assert exc_info.value.__cause__ is None
+
+
+@pytest.mark.asyncio
 async def test_openai_provider_records_token_usage(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeChoice:
         class Message:

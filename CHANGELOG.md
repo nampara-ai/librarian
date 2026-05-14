@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a23 - 2026-05-13
+
+- Redacted OpenAI-compatible provider failures before surfacing them from the LLM adapter,
+  including non-retriable provider errors and retry-exhaustion errors, without chaining raw
+  provider exceptions that may include API keys or tokens.
+
 ## 0.1.0a22 - 2026-05-13
 
 - Redacted MarkItDown broad-format child-process failures before returning them across the worker

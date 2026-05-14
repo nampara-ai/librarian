@@ -17,6 +17,8 @@ from openai import (
 )
 from openai.types.chat import ChatCompletion
 
+from librarian.observability import sanitize_error_message
+
 
 class LLMUsageMetrics(Protocol):
     """Metrics sink for provider token usage."""
@@ -108,10 +110,15 @@ class OpenAICompatibleProvider:
                 )
             except Exception as exc:
                 if not is_retriable_openai_error(exc):
-                    raise
+                    raise RuntimeError(
+                        f"LLM provider request failed: {sanitize_error_message(exc)}"
+                    ) from None
                 last_error = exc
                 if attempt >= self._max_retries:
-                    raise
+                    raise RuntimeError(
+                        "LLM provider request failed after retries: "
+                        f"{sanitize_error_message(exc)}"
+                    ) from None
                 delay = min(
                     self._retry_base_delay_seconds * (2**attempt),
                     self._retry_max_delay_seconds,
@@ -120,7 +127,10 @@ class OpenAICompatibleProvider:
                 await asyncio.sleep(delay + jitter)
 
         if last_error is not None:
-            raise last_error
+            raise RuntimeError(
+                "LLM provider request failed after retries: "
+                f"{sanitize_error_message(last_error)}"
+            ) from None
         raise RuntimeError("LLM completion failed without an exception")
 
     def _record_usage(self, response: ChatCompletion, *, model: str) -> None:
