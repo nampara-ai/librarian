@@ -7,7 +7,7 @@ From a downloaded release wheel:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install "nampara_librarian-0.1.0a63-py3-none-any.whl[all]"
+pip install "nampara_librarian-0.1.0a64-py3-none-any.whl[all]"
 librarian init
 librarian doctor
 ```
@@ -34,6 +34,7 @@ librarian list
 librarian search "library processing"
 librarian status run_... --event-limit 500 --event-offset 0
 librarian queue --limit 100 --offset 0
+librarian delete doc_... --yes
 ```
 
 Normalize timestamped transcripts before import when you want stable Markdown, SRT, or CSV

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a64 - 2026-05-14
+
+- Added `librarian delete` for local document deletion without the API server,
+  including confirmation by default, dependent SQLite/FTS/raw/cache cleanup,
+  and owned-upload file removal guarded against symlinked workspace paths.
+
 ## 0.1.0a63 - 2026-05-14
 
 - Added document creation timestamps to detailed cleaned/raw search results in

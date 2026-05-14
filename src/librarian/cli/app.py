@@ -978,6 +978,34 @@ def show(
     asyncio.run(run())
 
 
+@app.command("delete")
+def delete_document(
+    document_id: Annotated[str, typer.Argument(help="Document ID to delete.")],
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Delete without an interactive confirmation prompt."),
+    ] = False,
+) -> None:
+    """Delete a document and dependent local records."""
+
+    async def run() -> None:
+        container = await build_ingest_container()
+        document = await container.repository.get_document(DocumentId(document_id))
+        if document is None:
+            raise typer.BadParameter(f"Document not found: {document_id}")
+        if not yes:
+            confirmed = typer.confirm(
+                f"Delete document {document.id} ({document.source.filename}) and dependent records?"
+            )
+            if not confirmed:
+                raise typer.Abort()
+        await container.repository.delete_document(document.id)
+        await _cleanup_owned_upload_file(container.settings, document.source.path)
+        console.print(f"Deleted {document.id}")
+
+    asyncio.run(run())
+
+
 @app.command()
 def status(
     run_id: Annotated[str, typer.Argument(help="Run ID to inspect.")],
@@ -1961,6 +1989,28 @@ def _path_crosses_symlink(path: Path) -> bool:
         if current.exists() and current.is_symlink():
             return True
     return False
+
+
+async def _cleanup_owned_upload_file(settings: Settings, path: Path) -> None:
+    expanded_data_dir = settings.data_dir.expanduser()
+    if _path_crosses_symlink(expanded_data_dir):
+        return
+    data_dir = expanded_data_dir.resolve()
+    upload_root = data_dir / "uploads"
+    if not upload_root.exists() or upload_root.is_symlink():
+        return
+    resolved_root = upload_root.resolve()
+    try:
+        resolved_path = await asyncio.to_thread(lambda: path.expanduser().resolve())
+    except OSError:
+        return
+    if not _is_relative_to(resolved_path, resolved_root):
+        return
+    await asyncio.to_thread(resolved_path.unlink, missing_ok=True)
+    try:
+        await asyncio.to_thread(resolved_path.parent.rmdir)
+    except OSError:
+        pass
 
 
 def _workspace_database_archive_path(*, data_dir: Path, database_path: Path) -> str:

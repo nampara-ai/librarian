@@ -14,7 +14,7 @@
   conversion/OCR adapters, versioned prompts, CLI/API parity, CI, CodeQL,
   Docker, and release automation.
 
-  Current public release: `v0.1.0a63`.
+  Current public release: `v0.1.0a64`.
 
   High-level code tour:
 
@@ -173,7 +173,7 @@
   persists runs and outputs in SQLite; and exposes the same workflow through
   both a CLI and FastAPI API.
 
-  Current release: v0.1.0a63
+  Current release: v0.1.0a64
   Repo: https://github.com/nampara-ai/librarian
 
   Codebase Tour
@@ -225,7 +225,7 @@
 
   The repo is in solid alpha shape:
 
-  - Latest release: v0.1.0a63
+  - Latest release: v0.1.0a64
   - CI passes.
   - CodeQL passes.
   - Release workflow passes.
@@ -1127,3 +1127,7 @@
   CLI `librarian search --details` output. Operators can now audit the
   recency-aware ranking tiebreaker and paginated result windows without an
   extra document lookup.
+- 2026-05-14: Added local `librarian delete` support so users can remove
+  documents, dependent SQLite/FTS/raw/cache records, and owned upload files
+  without running the API server. The command confirms by default and refuses
+  to clean upload paths through symlinked workspace boundaries.

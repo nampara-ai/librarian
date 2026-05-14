@@ -167,4 +167,6 @@ Example:
 - `librarian run-retry` maps to `POST /runs/{id}/retry`.
 - `librarian search` maps to `POST /search`; `--details` maps to `POST /search/results`
   and prints the same total/limit/offset pagination metadata. `--phrase` maps to `phrase: true`.
+- `librarian delete` deletes local document records and owned upload files, equivalent to
+  `DELETE /documents/{id}` without requiring the API server.
 - `librarian export` maps to `GET /documents/{id}/export`.

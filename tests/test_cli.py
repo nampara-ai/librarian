@@ -10,8 +10,10 @@ import pytest
 from typer.testing import CliRunner
 
 from librarian.application.factory import build_container
+from librarian.application.ingest_document import raw_text_key
 from librarian.cli.app import app
 from librarian.config import Settings
+from librarian.domain.ids import DocumentId
 from librarian.domain.models import RunStage, RunStatus
 from librarian.storage.sqlite import SQLiteRunQueue
 
@@ -204,6 +206,57 @@ def test_cli_search_details_reports_total_without_changing_id_output(tmp_path: P
     assert "Created" in _strip_ansi(details.output)
     assert phrase.exit_code == 0
     assert "Showing 1 of 1 results (offset=0, limit=20)" in _strip_ansi(phrase.output)
+
+
+def test_cli_delete_removes_document_records_and_owned_upload(tmp_path: Path) -> None:
+    async def setup() -> tuple[str, str]:
+        settings = Settings(
+            data_dir=tmp_path / ".librarian",
+            database_path=tmp_path / ".librarian" / "librarian.sqlite",
+            chunk_target_chars=200,
+            chunk_overlap_chars=20,
+        )
+        upload_dir = tmp_path / ".librarian" / "uploads" / "manual"
+        upload_dir.mkdir(parents=True)
+        source = upload_dir / "source.txt"
+        source.write_text("Horse CLI delete private transcript.", encoding="utf-8")
+        container = await build_container(settings)
+        ingested = await container.ingest_document.execute(source)
+        run = await container.process_document.execute(ingested.document.id)
+        assert run.status == RunStatus.SUCCEEDED
+        return str(ingested.document.id), str(source)
+
+    import asyncio
+
+    document_id, source_path = asyncio.run(setup())
+    runner = CliRunner()
+    env = {
+        "LIBRARIAN_DATA_DIR": str(tmp_path / ".librarian"),
+        "LIBRARIAN_DATABASE_PATH": str(tmp_path / ".librarian" / "librarian.sqlite"),
+    }
+
+    deleted = runner.invoke(app, ["delete", document_id, "--yes"], env=env)
+    search = runner.invoke(app, ["search", "Horse CLI delete", "--scope", "raw"], env=env)
+    show = runner.invoke(app, ["show", document_id], env=env)
+
+    assert deleted.exit_code == 0
+    assert f"Deleted {document_id}" in _strip_ansi(deleted.output)
+    assert search.exit_code == 0
+    assert document_id not in search.output
+    assert show.exit_code != 0
+    assert "Document not found" in show.output
+    assert not Path(source_path).exists()
+
+    async def verify_raw_blob_deleted() -> None:
+        settings = Settings(
+            data_dir=tmp_path / ".librarian",
+            database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        )
+        container = await build_container(settings)
+        with pytest.raises(KeyError):
+            await container.repository.get_text(raw_text_key(DocumentId(document_id)))
+
+    asyncio.run(verify_raw_blob_deleted())
 
 
 def test_cli_transcript_normalize_writes_requested_format(tmp_path: Path) -> None:
