@@ -14,7 +14,7 @@
   conversion/OCR adapters, versioned prompts, CLI/API parity, CI, CodeQL,
   Docker, and release automation.
 
-  Current public release: `v0.1.0a65`.
+  Current public release: `v0.1.0a66`.
 
   High-level code tour:
 
@@ -173,7 +173,7 @@
   persists runs and outputs in SQLite; and exposes the same workflow through
   both a CLI and FastAPI API.
 
-  Current release: v0.1.0a65
+  Current release: v0.1.0a66
   Repo: https://github.com/nampara-ai/librarian
 
   Codebase Tour
@@ -225,12 +225,12 @@
 
   The repo is in solid alpha shape:
 
-  - Latest release: v0.1.0a65
+  - Latest release: v0.1.0a66
   - CI passes.
   - CodeQL passes.
   - Release workflow passes.
   - Docker image published.
-  - Local tests: 488 passed, 3 skipped as of the v0.1.0a65 full gate.
+  - Local tests: 490 passed, 3 skipped as of the v0.1.0a66 full gate.
   - Large PDF smoke test was run manually on a 561-page PDF:
       - 560 embedded-text pages
       - 1 OCR page
@@ -1134,3 +1134,6 @@
 - 2026-05-14: Added CLI delete regression coverage proving owned-upload
   cleanup refuses both symlinked upload roots and symlinked data directories
   while still deleting the document records and dependent blobs.
+- 2026-05-14: Added API document-delete regression coverage for the same
+  symlinked upload-root and symlinked data-dir cleanup boundaries, preserving
+  API/CLI parity for document record deletion and owned-upload safety.

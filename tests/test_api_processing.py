@@ -1267,6 +1267,75 @@ def test_api_delete_removes_raw_blob_and_owned_upload(tmp_path: Path) -> None:
     assert not list((tmp_path / ".librarian" / "uploads").glob("*/notes.txt"))
 
 
+def test_api_delete_does_not_remove_upload_through_symlinked_upload_root(tmp_path: Path) -> None:
+    data_dir = tmp_path / ".librarian"
+    actual_uploads = tmp_path / "outside-uploads"
+    upload_dir = actual_uploads / "manual"
+    upload_dir.mkdir(parents=True)
+    data_dir.mkdir()
+    (data_dir / "uploads").symlink_to(actual_uploads, target_is_directory=True)
+    source = data_dir / "uploads" / "manual" / "notes.txt"
+    source.write_text("Horse API delete symlinked upload root.", encoding="utf-8")
+    settings = Settings(
+        data_dir=data_dir,
+        database_path=data_dir / "librarian.sqlite",
+    )
+
+    async def setup() -> str:
+        container = await build_container(settings)
+        ingested = await container.ingest_document.execute(source)
+        return str(ingested.document.id)
+
+    document_id = asyncio.run(setup())
+    resolved_source = actual_uploads / "manual" / "notes.txt"
+
+    with TestClient(create_app(settings)) as client:
+        deleted = client.delete(f"/documents/{document_id}")
+        lookup = client.get(f"/documents/{document_id}")
+
+    assert deleted.status_code == 200
+    assert deleted.json() == {"status": "deleted", "document_id": document_id}
+    assert lookup.status_code == 404
+    assert resolved_source.exists()
+    container = asyncio.run(build_container(settings))
+    with pytest.raises(KeyError):
+        asyncio.run(container.repository.get_text(raw_text_key(DocumentId(document_id))))
+
+
+def test_api_delete_does_not_remove_upload_through_symlinked_data_dir(tmp_path: Path) -> None:
+    real_data_dir = tmp_path / "real-librarian"
+    upload_dir = real_data_dir / "uploads" / "manual"
+    upload_dir.mkdir(parents=True)
+    data_dir = tmp_path / ".librarian"
+    data_dir.symlink_to(real_data_dir, target_is_directory=True)
+    source = data_dir / "uploads" / "manual" / "notes.txt"
+    source.write_text("Horse API delete symlinked data dir.", encoding="utf-8")
+    settings = Settings(
+        data_dir=data_dir,
+        database_path=data_dir / "librarian.sqlite",
+    )
+
+    async def setup() -> str:
+        container = await build_container(settings)
+        ingested = await container.ingest_document.execute(source)
+        return str(ingested.document.id)
+
+    document_id = asyncio.run(setup())
+    resolved_source = real_data_dir / "uploads" / "manual" / "notes.txt"
+
+    with TestClient(create_app(settings)) as client:
+        deleted = client.delete(f"/documents/{document_id}")
+        lookup = client.get(f"/documents/{document_id}")
+
+    assert deleted.status_code == 200
+    assert deleted.json() == {"status": "deleted", "document_id": document_id}
+    assert lookup.status_code == 404
+    assert resolved_source.exists()
+    container = asyncio.run(build_container(settings))
+    with pytest.raises(KeyError):
+        asyncio.run(container.repository.get_text(raw_text_key(DocumentId(document_id))))
+
+
 def test_api_upload_rejects_symlinked_upload_directory(tmp_path: Path) -> None:
     data_dir = tmp_path / ".librarian"
     data_dir.mkdir()

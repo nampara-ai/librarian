@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a66 - 2026-05-14
+
+- Added API document-delete regression coverage proving owned-upload cleanup leaves files in place
+  when the workspace data directory or upload root crosses a symlink boundary, while still deleting
+  document records and dependent blobs.
+
 ## 0.1.0a65 - 2026-05-14
 
 - Added CLI delete regression coverage proving owned-upload cleanup leaves files in place when the

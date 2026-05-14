@@ -19,7 +19,8 @@ Requests above `LIBRARIAN_API_MAX_REQUEST_BYTES` are rejected before routing, ei
   upload filenames, including failed items.
 - `GET /documents?limit=100&offset=0`: list documents.
 - `GET /documents/{id}`: document metadata.
-- `DELETE /documents/{id}`: delete a document and dependent records.
+- `DELETE /documents/{id}`: delete a document and dependent records. Owned upload-file cleanup is
+  guarded by the same symlinked `data_dir`/`uploads` boundary checks as upload storage.
 - `POST /documents/{id}/reprocess`: create a new processing run.
 - `GET /documents/{id}/content?offset=0&limit=...`: latest cleaned output as a bounded JSON page.
   When `limit` is omitted, the response is capped by `LIBRARIAN_API_MAX_CONTENT_CHARS`; full
@@ -168,5 +169,6 @@ Example:
 - `librarian search` maps to `POST /search`; `--details` maps to `POST /search/results`
   and prints the same total/limit/offset pagination metadata. `--phrase` maps to `phrase: true`.
 - `librarian delete` deletes local document records and owned upload files, equivalent to
-  `DELETE /documents/{id}` without requiring the API server.
+  `DELETE /documents/{id}` without requiring the API server. Both surfaces refuse owned-upload
+  cleanup through symlinked workspace boundaries.
 - `librarian export` maps to `GET /documents/{id}/export`.
