@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.0a51 - 2026-05-14
+
+- Added top-level lifecycle summaries and schema versioning to PDF page
+  extraction manifests so large OCR runs expose status, retry, source,
+  warning, confidence, and duration diagnostics without scanning raw page text.
+- Tightened CI and release evidence verification to require all 13 shipped
+  synthetic corpus-eval cases, including the SRT/VTT caption fixtures.
+
 ## 0.1.0a50 - 2026-05-14
 
 - Added sanitized SRT/VTT caption fixtures to the synthetic corpus generator

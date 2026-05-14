@@ -149,6 +149,9 @@ can audit raw-vs-corrected output after long runs. If conversion is retried with
 OCR settings, completed pages are reused instead of OCRed again. Recursive conversion/import treats
 these manifests as Librarian metadata and skips them. Existing page manifests are capped at 256 MiB
 when read for resume or inspection.
+Page manifests also carry `schema_version` and a top-level `summary` with lifecycle status, page
+status/source/warning counts, retry attempts, OCR/correction counts, confidence, and max page
+duration so operators can inspect large runs without scanning raw page text.
 When `LIBRARIAN_OCR_PRESERVE_PAGE_IMAGES=true`, OCR page records also include `image_path` values
 pointing at same-directory raster image artifacts for visual debugging.
 Scanned pages are written as `pending` before OCR begins; failed pages retain the error, warning

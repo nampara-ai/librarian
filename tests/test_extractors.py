@@ -472,6 +472,19 @@ async def test_pdf_extractor_writes_and_reuses_page_manifest(
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert calls == 1
     assert payload["artifact_type"] == "pdf-page-extraction-manifest"
+    assert payload["schema_version"] == 1
+    assert payload["summary"] == {
+        "status": "succeeded",
+        "status_counts": {"failed": 0, "pending": 0, "succeeded": 2},
+        "source_counts": {"embedded": 1, "ocr": 1},
+        "warning_counts": {"missing-ocr-confidence": 1},
+        "attempts": 1,
+        "ocr_pages": 1,
+        "corrected_pages": 0,
+        "average_ocr_confidence": None,
+        "max_page_duration_ms": payload["summary"]["max_page_duration_ms"],
+    }
+    assert isinstance(payload["summary"]["max_page_duration_ms"], float)
     assert payload["pages"][1]["text"] == "OCR page 2"
     assert payload["pages"][1]["raw_text"] == "OCR page 2"
     assert payload["pages"][1]["corrected_text"] is None
@@ -534,6 +547,12 @@ async def test_pdf_extractor_page_manifest_tracks_pending_failed_and_retry_attem
         calls += 1
         if calls == 1:
             pending_payload = json.loads(manifest.read_text(encoding="utf-8"))
+            assert pending_payload["summary"]["status"] == "pending"
+            assert pending_payload["summary"]["status_counts"] == {
+                "failed": 0,
+                "pending": 1,
+                "succeeded": 1,
+            }
             assert pending_payload["pages"][1]["source"] == "pending"
             assert pending_payload["pages"][1]["status"] == "pending"
             assert pending_payload["pages"][1]["attempts"] == 0
@@ -561,6 +580,13 @@ async def test_pdf_extractor_page_manifest_tracks_pending_failed_and_retry_attem
     )
     assert "abc123" not in failed_payload["pages"][1]["error"]
     assert "sk-testSECRET123" not in failed_payload["pages"][1]["error"]
+    assert failed_payload["summary"]["status"] == "failed"
+    assert failed_payload["summary"]["status_counts"] == {
+        "failed": 1,
+        "pending": 0,
+        "succeeded": 1,
+    }
+    assert failed_payload["summary"]["warning_counts"] == {"ocr-page-failed": 1}
     assert failed_payload["pages"][1]["attempts"] == 1
     assert isinstance(failed_payload["pages"][1]["duration_ms"], float)
 
@@ -572,6 +598,8 @@ async def test_pdf_extractor_page_manifest_tracks_pending_failed_and_retry_attem
     retried_payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert calls == 2
     assert "OCR page 2 after retry" in text
+    assert retried_payload["summary"]["status"] == "succeeded"
+    assert retried_payload["summary"]["attempts"] == 2
     assert retried_payload["pages"][1]["status"] == "succeeded"
     assert retried_payload["pages"][1]["attempts"] == 2
     assert retried_payload["pages"][1]["text"] == "OCR page 2 after retry"

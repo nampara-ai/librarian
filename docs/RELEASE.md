@@ -26,7 +26,7 @@ uv run python .github/scripts/verify_release_evidence.py \
   --corpus-eval docs/results/corpus-eval-provider.json \
   --version "v${RELEASE_VERSION}" \
   --require-real-provider \
-  --min-corpus-cases 11 \
+  --min-corpus-cases 13 \
   --min-corpus-search-recall 1.0 \
   --min-corpus-output-ratio 0.05
 ```

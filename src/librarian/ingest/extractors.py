@@ -1174,15 +1174,73 @@ async def _write_pdf_page_manifest(
         {
             "generated_by": "librarian",
             "artifact_type": "pdf-page-extraction-manifest",
+            "schema_version": 1,
             "source_path": str(source_path),
             "source_sha256": source_sha256,
             "extraction_config": extraction_config,
             "page_count": page_count,
+            "summary": _pdf_page_manifest_summary(records),
             "pages": records,
         },
         indent=2,
     )
     await asyncio.to_thread(_write_text_atomic, path, payload)
+
+
+def _pdf_page_manifest_summary(records: Sequence[dict[str, object]]) -> dict[str, object]:
+    status_counts: dict[str, int] = {"succeeded": 0, "failed": 0, "pending": 0}
+    source_counts: dict[str, int] = {}
+    warning_counts: dict[str, int] = {}
+    attempts = 0
+    ocr_pages = 0
+    corrected_pages = 0
+    confidence_values: list[float] = []
+    max_duration_ms: float | None = None
+    for record in records:
+        status = str(record.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+        source = str(record.get("source") or "unknown")
+        source_counts[source] = source_counts.get(source, 0) + 1
+        if source == "ocr":
+            ocr_pages += 1
+        if record.get("corrected") is True:
+            corrected_pages += 1
+        attempt_count = record.get("attempts")
+        if isinstance(attempt_count, int) and attempt_count >= 0:
+            attempts += attempt_count
+        confidence = record.get("confidence")
+        if isinstance(confidence, int | float):
+            confidence_values.append(float(confidence))
+        duration_ms = record.get("duration_ms")
+        if isinstance(duration_ms, int | float):
+            duration = float(duration_ms)
+            max_duration_ms = (
+                duration if max_duration_ms is None else max(max_duration_ms, duration)
+            )
+        warnings = record.get("warnings")
+        if isinstance(warnings, list):
+            for warning in cast(list[object], warnings):
+                if isinstance(warning, str) and warning:
+                    warning_counts[warning] = warning_counts.get(warning, 0) + 1
+    if status_counts.get("failed", 0) > 0:
+        status = "failed"
+    elif status_counts.get("pending", 0) > 0:
+        status = "pending"
+    else:
+        status = "succeeded"
+    return {
+        "status": status,
+        "status_counts": dict(sorted(status_counts.items())),
+        "source_counts": dict(sorted(source_counts.items())),
+        "warning_counts": dict(sorted(warning_counts.items())),
+        "attempts": attempts,
+        "ocr_pages": ocr_pages,
+        "corrected_pages": corrected_pages,
+        "average_ocr_confidence": (
+            sum(confidence_values) / len(confidence_values) if confidence_values else None
+        ),
+        "max_page_duration_ms": max_duration_ms,
+    }
 
 
 def _pdf_page_status(page: PdfPageExtraction) -> str:

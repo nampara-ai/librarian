@@ -1072,3 +1072,7 @@
   shipped SRT/VTT caption fixtures, including cue-markup/voice-label coverage,
   expected text order, search phrases, and classification expectations so
   release evidence exercises the transcript-caption ingestion path.
+- 2026-05-14: Strengthened PDF page extraction manifests with schema versioning
+  and top-level lifecycle summaries for status, source, warning, retry,
+  confidence, OCR/correction, and duration diagnostics. Tightened CI and
+  release evidence gates to require all 13 shipped synthetic corpus-eval cases.
