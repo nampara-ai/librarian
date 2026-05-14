@@ -36,7 +36,11 @@ from librarian.application.corpus_eval import (
     run_corpus_eval_suite,
 )
 from librarian.application.eval import eval_result_json, load_eval_suite, run_eval_suite
-from librarian.application.export_document import ExportedDocument, ExportFormat
+from librarian.application.export_document import (
+    ExportedDocument,
+    ExportFormat,
+    transcript_citation_for_document,
+)
 from librarian.application.factory import build_container, build_ingest_container
 from librarian.application.import_library import (
     ImportLibrary,
@@ -1183,6 +1187,10 @@ def export(
     document_id: Annotated[str, typer.Argument(help="Document ID to export.")],
     output: Annotated[Path | None, typer.Option(help="Optional output path.")] = None,
     format: Annotated[str, typer.Option(help="Export format: txt, md, json.")] = "txt",
+    citation_quote: Annotated[
+        str | None,
+        typer.Option(help="Optional transcript quote to include as source citation evidence."),
+    ] = None,
 ) -> None:
     """Export cleaned text and metadata for a document."""
 
@@ -1198,7 +1206,16 @@ def export(
         if cleaned is None:
             raise typer.BadParameter(f"Cleaned output not found: {document_id}")
         classification = await container.repository.get_classification(DocumentId(document_id))
-        rendered = ExportedDocument(document, cleaned, classification).render(export_format)
+        try:
+            transcript_citation = transcript_citation_for_document(document, citation_quote)
+        except ValueError as exc:
+            raise typer.BadParameter(sanitize_error_message(exc)) from exc
+        rendered = ExportedDocument(
+            document,
+            cleaned,
+            classification,
+            transcript_citation=transcript_citation,
+        ).render(export_format)
         if output:
             await asyncio.to_thread(_write_cli_output_atomic, output, rendered)
             console.print(f"Exported {document.id} to {output}")

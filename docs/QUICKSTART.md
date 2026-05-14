@@ -7,7 +7,7 @@ From a downloaded release wheel:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install "nampara_librarian-0.1.0a69-py3-none-any.whl[all]"
+pip install "nampara_librarian-0.1.0a70-py3-none-any.whl[all]"
 librarian init
 librarian doctor
 ```
@@ -51,6 +51,7 @@ Export a cleaned document:
 
 ```bash
 librarian export doc_... --format md --output cleaned.md
+librarian export doc_... --format json --citation-quote "quoted source phrase"
 ```
 
 ## Docker

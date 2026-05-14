@@ -33,8 +33,10 @@ Requests above `LIBRARIAN_API_MAX_REQUEST_BYTES` are rejected before routing, ei
 - `GET /documents/{id}/export?format=json|txt|md`: export latest output. JSON exports return
   `document_id`, `filename`, `classification`, and `text`; `txt` and `md` exports return
   `text/plain` and `text/markdown` bodies respectively. Export responses include sanitized
-  `Content-Disposition` filenames with UTF-8 `filename*` values for download clients. Unsupported
-  `format` values return `code: "bad_request"` before document lookup.
+  `Content-Disposition` filenames with UTF-8 `filename*` values for download clients. Add
+  `citation_quote` when the original source is a timestamped transcript to include optional
+  quote-grounded `transcript_citation` evidence in JSON and Markdown exports. Unsupported `format`
+  values return `code: "bad_request"` before document lookup.
 
 ## Imports
 
@@ -179,4 +181,4 @@ Example:
 - `librarian delete` deletes local document records and owned upload files, equivalent to
   `DELETE /documents/{id}` without requiring the API server. Both surfaces refuse owned-upload
   cleanup through symlinked workspace boundaries.
-- `librarian export` maps to `GET /documents/{id}/export`.
+- `librarian export` maps to `GET /documents/{id}/export`, including `--citation-quote`.

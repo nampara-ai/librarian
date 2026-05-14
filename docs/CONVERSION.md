@@ -52,6 +52,9 @@ which is useful for citation checks before importing or publishing cleaned trans
 Detailed search results reuse the same citation matcher when the original source file is still
 available and parseable as a timestamped transcript. `librarian search --details` shows the matched
 time range, and API `/search/results` returns the full optional `transcript_citation` object.
+Document exports can also bundle citation evidence for a selected quote:
+`librarian export doc_... --format json --citation-quote "quoted source phrase"` or
+`GET /documents/{id}/export?citation_quote=quoted%20source%20phrase`.
 
 Local conversion and import paths enforce configurable input limits before expensive parsing:
 `LIBRARIAN_MAX_SOURCE_BYTES`, `LIBRARIAN_TEXT_MAX_INPUT_BYTES`,

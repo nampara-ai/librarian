@@ -14,7 +14,7 @@
   conversion/OCR adapters, versioned prompts, CLI/API parity, CI, CodeQL,
   Docker, and release automation.
 
-  Current public release: `v0.1.0a69`.
+  Current public release: `v0.1.0a70`.
 
   High-level code tour:
 
@@ -173,7 +173,7 @@
   persists runs and outputs in SQLite; and exposes the same workflow through
   both a CLI and FastAPI API.
 
-  Current release: v0.1.0a69
+  Current release: v0.1.0a70
   Repo: https://github.com/nampara-ai/librarian
 
   Codebase Tour
@@ -225,12 +225,12 @@
 
   The repo is in solid alpha shape:
 
-  - Latest release: v0.1.0a69
+  - Latest release: v0.1.0a70
   - CI passes.
   - CodeQL passes.
   - Release workflow passes.
   - Docker image published.
-  - Local tests: 494 passed, 3 skipped as of the v0.1.0a69 full gate.
+  - Local tests: 496 passed, 3 skipped as of the v0.1.0a70 full gate.
   - Large PDF smoke test was run manually on a 561-page PDF:
       - 560 embedded-text pages
       - 1 OCR page
@@ -1149,3 +1149,8 @@
   and `librarian search --details` now surface optional start/end seconds,
   segment indexes, match strategy, confidence, and matched text when the
   original source can map the query back to SRT/VTT-style transcript segments.
+- 2026-05-14: Added optional transcript citation bundles to document exports.
+  CLI `librarian export --citation-quote ...` and API
+  `/documents/{id}/export?citation_quote=...` can now attach selected
+  quote-grounded transcript timestamp evidence to JSON and Markdown exports,
+  while plain-text exports remain clean text for downstream consumers.

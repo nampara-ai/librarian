@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.0a70 - 2026-05-14
+
+- Added optional transcript citation bundles to document exports. CLI
+  `librarian export --citation-quote ...` and API
+  `/documents/{id}/export?citation_quote=...` can now map a requested quote
+  back to timestamped SRT/VTT-style source evidence in JSON and Markdown
+  exports while leaving plain-text exports as clean text.
+
 ## 0.1.0a69 - 2026-05-14
 
 - Added timestamp citation evidence to detailed search results for timestamped transcript sources.

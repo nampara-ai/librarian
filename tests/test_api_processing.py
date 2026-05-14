@@ -248,6 +248,54 @@ def test_api_search_results_include_transcript_citation(tmp_path: Path) -> None:
     }
 
 
+def test_api_export_can_include_transcript_citation(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    body = (
+        b"1\n"
+        b"00:00:08,000 --> 00:00:12,000\n"
+        b"The follow up care plan starts tomorrow.\n"
+    )
+
+    with TestClient(create_app(settings)) as client:
+        upload = client.post(
+            "/documents",
+            files={"file": ("captions.srt", body, "text/plain")},
+        )
+        assert upload.status_code == 200
+        document_id = upload.json()["id"]
+        run = client.post("/runs", json={"document_id": document_id})
+        assert run.status_code == 200
+        _wait_for_run(client, run.json()["id"])
+
+        exported = client.get(
+            f"/documents/{document_id}/export",
+            params={"citation_quote": "follow up care plan"},
+        )
+        exported_md = client.get(
+            f"/documents/{document_id}/export",
+            params={"format": "md", "citation_quote": "follow up care plan"},
+        )
+
+    assert exported.status_code == 200
+    assert exported.json()["transcript_citation"] == {
+        "matched_text": "The follow up care plan starts tomorrow.",
+        "start_seconds": 8.0,
+        "end_seconds": 12.0,
+        "start_segment_index": 0,
+        "end_segment_index": 0,
+        "strategy": "exact-normalized",
+        "confidence": 1.0,
+    }
+    assert exported_md.status_code == 200
+    assert "## Source Citation" in exported_md.text
+    assert "8.000s-12.000s" in exported_md.text
+
+
 def test_api_export_uses_safe_content_disposition_filename(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",

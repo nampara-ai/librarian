@@ -1302,6 +1302,44 @@ def test_cli_export_rejects_symlink_output(tmp_path: Path) -> None:
     assert outside.read_text(encoding="utf-8") == "keep"
 
 
+def test_cli_export_can_include_transcript_citation(tmp_path: Path) -> None:
+    async def setup() -> str:
+        settings = Settings(
+            data_dir=tmp_path / ".librarian",
+            database_path=tmp_path / ".librarian" / "librarian.sqlite",
+            chunk_target_chars=200,
+            chunk_overlap_chars=20,
+        )
+        container = await build_container(settings)
+        source = tmp_path / "captions.srt"
+        source.write_text(
+            "1\n"
+            "00:00:08,000 --> 00:00:12,000\n"
+            "The follow up care plan starts tomorrow.\n",
+            encoding="utf-8",
+        )
+        ingested = await container.ingest_document.execute(source)
+        await container.process_document.execute(ingested.document.id)
+        return str(ingested.document.id)
+
+    import asyncio
+
+    document_id = asyncio.run(setup())
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["export", document_id, "--format", "json", "--citation-quote", "follow up care plan"],
+        env={
+            "LIBRARIAN_DATA_DIR": str(tmp_path / ".librarian"),
+            "LIBRARIAN_DATABASE_PATH": str(tmp_path / ".librarian" / "librarian.sqlite"),
+        },
+    )
+
+    assert result.exit_code == 0
+    assert '"transcript_citation"' in result.output
+    assert '"start_seconds": 8.0' in result.output
+
+
 def test_cli_eval_rejects_symlink_output(tmp_path: Path) -> None:
     runner = CliRunner()
     suite = tmp_path / "eval.json"

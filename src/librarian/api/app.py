@@ -34,7 +34,11 @@ from librarian.application.convert_document import (
     conversion_output_exclusions,
     iter_supported_files,
 )
-from librarian.application.export_document import ExportedDocument, ExportFormat
+from librarian.application.export_document import (
+    ExportedDocument,
+    ExportFormat,
+    transcript_citation_for_document,
+)
 from librarian.application.factory import build_container, build_ingest_container
 from librarian.application.import_library import ImportLibrary, ImportProcessingMode
 from librarian.application.jobs import InProcessJobRunner
@@ -241,11 +245,22 @@ class ContentResponse(BaseModel):
     truncated: bool
 
 
+class SearchTranscriptCitationResponse(BaseModel):
+    matched_text: str
+    start_seconds: float
+    end_seconds: float
+    start_segment_index: int
+    end_segment_index: int
+    strategy: str
+    confidence: float
+
+
 class ExportDocumentResponse(BaseModel):
     document_id: str
     filename: str
     classification: str | None
     text: str
+    transcript_citation: SearchTranscriptCitationResponse | None = None
 
 
 class SearchRequest(BaseModel):
@@ -268,16 +283,6 @@ class SearchResponse(BaseModel):
     total: int
     limit: int
     offset: int
-
-
-class SearchTranscriptCitationResponse(BaseModel):
-    matched_text: str
-    start_seconds: float
-    end_seconds: float
-    start_segment_index: int
-    end_segment_index: int
-    strategy: str
-    confidence: float
 
 
 class SearchResultResponse(BaseModel):
@@ -1069,7 +1074,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
         },
     )
-    async def export_document(document_id: str, format: str = "json"):
+    async def export_document(
+        document_id: str,
+        format: str = "json",
+        citation_quote: str | None = None,
+    ):
         export_format = _normalize_export_format(format)
         container = await build_ingest_container(settings)
         document = await container.repository.get_document(DocumentId(document_id))
@@ -1079,10 +1088,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if output is None:
             raise HTTPException(status_code=404, detail="Cleaned output not found")
         classification = await container.repository.get_classification(DocumentId(document_id))
+        try:
+            transcript_citation = transcript_citation_for_document(document, citation_quote)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=sanitize_error_message(exc)) from exc
         exported = ExportedDocument(
             document=document,
             output=output,
             classification=classification,
+            transcript_citation=transcript_citation,
         )
         return _export_response(exported, export_format)
 

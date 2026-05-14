@@ -6,7 +6,7 @@ This repository is the production rewrite of an earlier prototype. The architect
 
 ## Status
 
-`v0.1.0a69` is the latest public alpha. It includes local CLI workflows, a FastAPI service,
+`v0.1.0a70` is the latest public alpha. It includes local CLI workflows, a FastAPI service,
 file and directory conversion/import, durable SQLite-backed processing runs, page-aware OCR and
 broad-format extraction, direct SRT/VTT transcript conversion, the upgraded v2 prompt stack,
 search/export with detailed result timestamps and transcript citation evidence, privacy-hardened
@@ -21,7 +21,7 @@ From a downloaded release wheel:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install "nampara_librarian-0.1.0a69-py3-none-any.whl[all]"
+pip install "nampara_librarian-0.1.0a70-py3-none-any.whl[all]"
 ```
 
 From a source checkout:
@@ -66,6 +66,7 @@ librarian search "horse training" --classification-prefix 636 --details
 librarian search "horse training" --limit 20 --offset 20 --created-after 2026-01-01T00:00:00Z
 librarian export doc_... --output cleaned.txt
 librarian export doc_... --format md --output cleaned.md
+librarian export doc_... --format json --citation-quote "quoted source phrase"
 librarian benchmark --paragraphs 40 --paragraph-chars 1000 --repeats 3 --output benchmark.json
 librarian eval examples/eval_cases.json --output eval.json
 librarian generate-corpus --output-dir .librarian/synthetic-corpus --include-docx --include-pdf --include-scanned-pdf
@@ -158,7 +159,7 @@ For direct image runs, also set an import root because the image binds publicly 
 docker run --rm -p 8080:8080 \
   -e LIBRARIAN_API_KEY=change-me \
   -e LIBRARIAN_API_IMPORT_ROOT=/data/imports \
-  ghcr.io/nampara-ai/librarian:v0.1.0a69
+  ghcr.io/nampara-ai/librarian:v0.1.0a70
 ```
 
 ## Privacy
