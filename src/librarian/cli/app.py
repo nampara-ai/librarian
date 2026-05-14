@@ -1128,7 +1128,14 @@ def search(
                 "Snippet",
             )
             for result in results:
-                table.add_row(
+                snippet = result.snippet
+                if result.transcript_citation:
+                    citation = (
+                        f"{format_compact_timestamp(result.transcript_citation.start_seconds)}-"
+                        f"{format_compact_timestamp(result.transcript_citation.end_seconds)}"
+                    )
+                    snippet = f"[{citation}] {snippet}"
+                row = [
                     str(result.document_id),
                     result.source,
                     str(result.run_id) if result.run_id else "",
@@ -1136,9 +1143,18 @@ def search(
                     result.created_at.isoformat(),
                     result.classification_code or "",
                     f"{result.score:.3f}",
-                    result.snippet,
-                )
+                    snippet,
+                ]
+                table.add_row(*row)
             console.print(table)
+            for result in results:
+                if not result.transcript_citation:
+                    continue
+                citation = (
+                    f"{format_compact_timestamp(result.transcript_citation.start_seconds)}-"
+                    f"{format_compact_timestamp(result.transcript_citation.end_seconds)}"
+                )
+                console.print(f"{result.document_id} transcript citation: {citation}")
             return
         try:
             ids = await container.search_library.search(

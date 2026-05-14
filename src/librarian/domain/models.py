@@ -140,6 +140,19 @@ class RunEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class TranscriptCitation:
+    """Timestamp evidence for a transcript quote match."""
+
+    matched_text: str
+    start_seconds: float
+    end_seconds: float
+    start_segment_index: int
+    end_segment_index: int
+    strategy: str
+    confidence: float
+
+
+@dataclass(frozen=True, slots=True)
 class SearchResult:
     """One ranked full-text search result."""
 
@@ -153,6 +166,7 @@ class SearchResult:
     score: float
     classification_code: str | None = None
     classification_label: str | None = None
+    transcript_citation: TranscriptCitation | None = None
 
 
 @dataclass(frozen=True, slots=True)

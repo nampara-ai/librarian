@@ -49,6 +49,9 @@ voice labels as speakers, and unescapes caption entities; use `--no-merge-senten
 original segment granularity. Output formats are `md`, `txt`, `srt`, `vtt`, and `csv`.
 `transcript-find` maps an exact or fuzzy quote back to transcript timestamps and segment indexes,
 which is useful for citation checks before importing or publishing cleaned transcript excerpts.
+Detailed search results reuse the same citation matcher when the original source file is still
+available and parseable as a timestamped transcript. `librarian search --details` shows the matched
+time range, and API `/search/results` returns the full optional `transcript_citation` object.
 
 Local conversion and import paths enforce configurable input limits before expensive parsing:
 `LIBRARIAN_MAX_SOURCE_BYTES`, `LIBRARIAN_TEXT_MAX_INPUT_BYTES`,

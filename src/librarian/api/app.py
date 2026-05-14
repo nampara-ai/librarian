@@ -270,6 +270,16 @@ class SearchResponse(BaseModel):
     offset: int
 
 
+class SearchTranscriptCitationResponse(BaseModel):
+    matched_text: str
+    start_seconds: float
+    end_seconds: float
+    start_segment_index: int
+    end_segment_index: int
+    strategy: str
+    confidence: float
+
+
 class SearchResultResponse(BaseModel):
     document_id: str
     run_id: str | None
@@ -281,6 +291,7 @@ class SearchResultResponse(BaseModel):
     score: float
     classification_code: str | None = None
     classification_label: str | None = None
+    transcript_citation: SearchTranscriptCitationResponse | None = None
 
 
 class SearchResultsResponse(BaseModel):
@@ -1557,6 +1568,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     score=result.score,
                     classification_code=result.classification_code,
                     classification_label=result.classification_label,
+                    transcript_citation=(
+                        SearchTranscriptCitationResponse(
+                            matched_text=result.transcript_citation.matched_text,
+                            start_seconds=result.transcript_citation.start_seconds,
+                            end_seconds=result.transcript_citation.end_seconds,
+                            start_segment_index=result.transcript_citation.start_segment_index,
+                            end_segment_index=result.transcript_citation.end_segment_index,
+                            strategy=result.transcript_citation.strategy,
+                            confidence=result.transcript_citation.confidence,
+                        )
+                        if result.transcript_citation
+                        else None
+                    ),
                 )
                 for result in results
             ],

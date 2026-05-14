@@ -113,6 +113,9 @@ validated before conversion starts and must not be symlinks or cross symlinked p
   source metadata, document `created_at`, classification metadata, `source`, `snippet`, and
   `score`. Raw-source search results use `source: "raw"` and `run_id: null`. Snippets escape source
   markup and preserve Librarian-owned `<mark>...</mark>` match highlights.
+  When the original source still parses as a timestamped transcript, matching results may include
+  `transcript_citation` with matched text, start/end seconds, segment indexes, match strategy, and
+  confidence so clients can jump from a search hit back to source media time.
   Results are ordered by BM25 relevance score, then newest document creation time, then document ID
   so paged result windows remain deterministic when scores tie.
   Responses include the same `total`, `limit`, and `offset` pagination metadata as `/search`.

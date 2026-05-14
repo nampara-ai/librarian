@@ -17,6 +17,7 @@ from typing import LiteralString
 from librarian.application.clean_chunks import CleanedChunk
 from librarian.application.jobs import QueuedRun, QueueStatus
 from librarian.application.ports import SearchScope
+from librarian.application.transcripts import find_quote_in_transcript, parse_transcript
 from librarian.domain.ids import ChunkId, DocumentId, RunId
 from librarian.domain.models import (
     Chunk,
@@ -32,6 +33,7 @@ from librarian.domain.models import (
     SearchFacetValue,
     SearchResult,
     SourceFile,
+    TranscriptCitation,
     utc_now,
 )
 
@@ -1501,6 +1503,7 @@ class SQLiteRepository:
                     SELECT
                       cleaned_outputs_fts.document_id,
                       cleaned_outputs_fts.run_id,
+                      documents.source_path,
                       documents.filename,
                       documents.status AS document_status,
                       documents.created_at,
@@ -1555,6 +1558,10 @@ class SQLiteRepository:
                     str(row["classification_label"])
                     if row["classification_label"] is not None
                     else None
+                ),
+                transcript_citation=_transcript_citation_for_query(
+                    query,
+                    source_path=Path(str(row["source_path"])),
                 ),
             )
             for row in rows
@@ -1657,6 +1664,7 @@ class SQLiteRepository:
                     """
                     SELECT
                       raw_content_fts.document_id,
+                      documents.source_path,
                       documents.filename,
                       documents.status AS document_status,
                       documents.created_at,
@@ -1701,6 +1709,10 @@ class SQLiteRepository:
                     str(row["classification_label"])
                     if row["classification_label"] is not None
                     else None
+                ),
+                transcript_citation=_transcript_citation_for_query(
+                    query,
+                    source_path=Path(str(row["source_path"])),
                 ),
             )
             for row in rows
@@ -2102,6 +2114,41 @@ def _render_search_snippet(value: str) -> str:
         _FTS_HIGHLIGHT_END,
         "</mark>",
     )
+
+
+def _transcript_citation_for_query(query: str, *, source_path: Path) -> TranscriptCitation | None:
+    """Return timestamp evidence when the source still parses as a transcript."""
+    if not source_path.exists() or not source_path.is_file():
+        return None
+    try:
+        segments = parse_transcript(source_path.read_text(encoding="utf-8"))
+        if not segments:
+            return None
+        match = find_quote_in_transcript(
+            segments,
+            _citation_quote_from_query(query),
+            min_confidence=0.82,
+        )
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    if match is None:
+        return None
+    return TranscriptCitation(
+        matched_text=match.matched_text,
+        start_seconds=match.start_seconds,
+        end_seconds=match.end_seconds,
+        start_segment_index=match.start_segment_index,
+        end_segment_index=match.end_segment_index,
+        strategy=match.strategy,
+        confidence=match.confidence,
+    )
+
+
+def _citation_quote_from_query(query: str) -> str:
+    quoted = re.findall(r'"([^"]+)"', query)
+    if quoted:
+        return max(quoted, key=len)
+    return query
 
 
 def _escape_like(value: str) -> str:

@@ -254,6 +254,40 @@ async def test_search_supports_quoted_exact_phrases(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_search_results_include_transcript_timestamp_citation(tmp_path: Path) -> None:
+    source = tmp_path / "captions.srt"
+    source.write_text(
+        "1\n"
+        "00:00:05,000 --> 00:00:08,000\n"
+        "Ada: Opening remarks about saddle fit.\n\n"
+        "2\n"
+        "00:00:08,000 --> 00:00:12,000\n"
+        "The follow up care plan starts tomorrow.\n",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    container = await build_container(settings)
+    ingested = await container.ingest_document.execute(source)
+
+    results = await container.repository.search_results(
+        '"follow up care plan"',
+        scope="raw",
+    )
+
+    assert results[0].document_id == ingested.document.id
+    assert results[0].transcript_citation is not None
+    assert results[0].transcript_citation.start_seconds == 8.0
+    assert results[0].transcript_citation.end_seconds == 12.0
+    assert results[0].transcript_citation.strategy == "exact-normalized"
+    assert "follow up care plan" in results[0].transcript_citation.matched_text
+
+
+@pytest.mark.asyncio
 async def test_identical_chunks_from_different_documents_do_not_collide(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",

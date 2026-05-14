@@ -12,6 +12,7 @@
 - Docker Compose deployment.
 - Eval and benchmark harnesses.
 - Direct SRT/VTT transcript normalization, quote matching, and conversion.
+- Transcript timestamp citation evidence in detailed search results.
 - Release evidence gates for prompt eval, corpus eval, benchmark, and semantic
   corpus tag coverage.
 - External repository review for Dolphin, olmOCR, and LongCut upgrade paths.
@@ -28,7 +29,7 @@
   rotation retry, fallback diagnostics, and provider cost/page metrics.
 - Corpus-eval extensions for table relations, math/formula preservation,
   footnotes, formatting, and repeated-tail hallucination checks.
-- Transcript quote/citation evidence in search results and exports.
+- Transcript quote/citation evidence in exports.
 
 ## v0.3
 

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.0a69 - 2026-05-14
+
+- Added timestamp citation evidence to detailed search results for timestamped transcript sources.
+  Raw or cleaned search hits whose original SRT/VTT-style source can map the query back to a
+  transcript segment now expose start/end seconds, segment indexes, match strategy, confidence, and
+  matched text through the SQLite result model, API `/search/results`, and CLI details table.
+
 ## 0.1.0a68 - 2026-05-14
 
 - Stopped reflecting unexpected single-file and batch upload ingest exception details to API

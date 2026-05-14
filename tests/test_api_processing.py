@@ -207,6 +207,47 @@ def test_api_upload_run_and_get_content(tmp_path: Path) -> None:
         assert "# notes" in exported_md.text
 
 
+def test_api_search_results_include_transcript_citation(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    body = (
+        b"1\n"
+        b"00:00:05,000 --> 00:00:08,000\n"
+        b"Opening remarks about saddle fit.\n\n"
+        b"2\n"
+        b"00:00:08,000 --> 00:00:12,000\n"
+        b"The follow up care plan starts tomorrow.\n"
+    )
+
+    with TestClient(create_app(settings)) as client:
+        upload = client.post(
+            "/documents",
+            files={"file": ("captions.srt", body, "text/plain")},
+        )
+        assert upload.status_code == 200
+        document_id = upload.json()["id"]
+
+        search = client.post(
+            "/search/results",
+            json={"query": "\"follow up care plan\"", "scope": "raw"},
+        )
+
+    assert search.status_code == 200
+    result = search.json()["results"][0]
+    assert result["document_id"] == document_id
+    assert result["transcript_citation"] == {
+        "matched_text": "The follow up care plan starts tomorrow.",
+        "start_seconds": 8.0,
+        "end_seconds": 12.0,
+        "start_segment_index": 1,
+        "end_segment_index": 1,
+        "strategy": "exact-normalized",
+        "confidence": 1.0,
+    }
+
+
 def test_api_export_uses_safe_content_disposition_filename(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",

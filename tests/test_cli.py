@@ -208,6 +208,40 @@ def test_cli_search_details_reports_total_without_changing_id_output(tmp_path: P
     assert "Showing 1 of 1 results (offset=0, limit=20)" in _strip_ansi(phrase.output)
 
 
+def test_cli_search_details_reports_transcript_citation(tmp_path: Path) -> None:
+    async def setup() -> None:
+        settings = Settings(
+            data_dir=tmp_path / ".librarian",
+            database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        )
+        container = await build_container(settings)
+        source = tmp_path / "captions.srt"
+        source.write_text(
+            "1\n"
+            "00:00:08,000 --> 00:00:12,000\n"
+            "The follow up care plan starts tomorrow.\n",
+            encoding="utf-8",
+        )
+        await container.ingest_document.execute(source)
+
+    import asyncio
+
+    asyncio.run(setup())
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["search", "\"follow up care plan\"", "--scope", "raw", "--details"],
+        env={
+            "LIBRARIAN_DATA_DIR": str(tmp_path / ".librarian"),
+            "LIBRARIAN_DATABASE_PATH": str(tmp_path / ".librarian" / "librarian.sqlite"),
+        },
+    )
+
+    output = _strip_ansi(result.output)
+    assert result.exit_code == 0
+    assert "00:08-00:12" in output
+
+
 def test_cli_delete_removes_document_records_and_owned_upload(tmp_path: Path) -> None:
     async def setup() -> tuple[str, str]:
         settings = Settings(
