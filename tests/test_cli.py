@@ -204,6 +204,29 @@ def test_cli_search_details_reports_total_without_changing_id_output(tmp_path: P
     assert phrase.exit_code == 0
     assert "Showing 1 of 1 results (offset=0, limit=20)" in _strip_ansi(phrase.output)
 
+def test_cli_search_redacts_validation_details(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FailingSearchLibrary:
+        async def search(self, *_args: object, **_kwargs: object) -> list[str]:
+            raise ValueError('search failed {"api_key":"abc123"} sk-testSECRET123')
+
+    class Container:
+        search_library = FailingSearchLibrary()
+
+    async def build_failing_container() -> Container:
+        return Container()
+
+    monkeypatch.setattr("librarian.cli.app.build_ingest_container", build_failing_container)
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["search", "horse"])
+
+    output = _strip_ansi(result.output)
+    assert result.exit_code != 0
+    assert "search failed" in output
+    assert '"api_key":"[REDACTED]"' in output
+    assert "abc123" not in output
+    assert "sk-testSECRET123" not in output
+
 
 def test_cli_init_rejects_symlinked_config_path(tmp_path: Path) -> None:
     runner = CliRunner()
@@ -248,6 +271,31 @@ def test_cli_db_check_verifies_sqlite_database(tmp_path: Path) -> None:
     assert "SQLite verification complete" in result.output
     assert "integrity_ok=True" in result.output
     assert "foreign_key_violations=0" in result.output
+
+
+def test_cli_db_check_redacts_exception_details(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fail_verify(self: object) -> object:
+        del self
+        raise FileNotFoundError("db missing api_key=abc123 sk-testSECRET123")
+
+    monkeypatch.setattr("librarian.cli.app.SQLiteDatabase.verify", fail_verify)
+    runner = CliRunner()
+    env = {
+        "LIBRARIAN_DATA_DIR": str(tmp_path / ".librarian"),
+        "LIBRARIAN_DATABASE_PATH": str(tmp_path / ".librarian" / "librarian.sqlite"),
+    }
+
+    result = runner.invoke(app, ["db-check"], env=env)
+
+    output = _strip_ansi(result.output)
+    assert result.exit_code != 0
+    assert "db missing" in output
+    assert "api_key=[REDACTED]" in output
+    assert "abc123" not in output
+    assert "sk-testSECRET123" not in output
 
 
 def test_cli_db_stats_reports_machine_readable_storage_sizing(tmp_path: Path) -> None:
@@ -1469,6 +1517,32 @@ def test_cli_page_manifest_rejects_unexpected_artifact(tmp_path: Path) -> None:
 
     assert result.exit_code != 0
     assert "unexpected artifact_type" in _strip_ansi(result.output)
+
+
+def test_cli_page_manifest_redacts_validation_details(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_read_manifest(path: Path) -> tuple[dict[str, object], list[dict[str, object]]]:
+        del path
+        raise ValueError("manifest failed token: abc123 sk-testSECRET123")
+
+    manifest = tmp_path / "fixture.md.pages.json"
+    manifest.write_text(
+        json.dumps({"artifact_type": "pdf-page-extraction-manifest", "pages": []}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("librarian.cli.app._read_pdf_page_manifest", fail_read_manifest)
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["page-manifest", str(manifest)])
+
+    output = _strip_ansi(result.output)
+    assert result.exit_code != 0
+    assert "manifest failed" in output
+    assert "token: [REDACTED]" in output
+    assert "abc123" not in output
+    assert "sk-testSECRET123" not in output
 
 
 def test_cli_page_manifest_rejects_symlink_path(tmp_path: Path) -> None:

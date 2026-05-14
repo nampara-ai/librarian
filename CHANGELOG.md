@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.0a27 - 2026-05-14
+
+- Sanitized remaining CLI exception-detail surfaces for database/workspace maintenance,
+  import/report validation, search validation, synthetic corpus generation, page manifests,
+  and directory-output validation so CLI errors preserve useful context without leaking
+  credentials or provider/parser payloads.
+
 ## 0.1.0a26 - 2026-05-14
 
 - Sanitized API exception details for readiness, imports, page-manifest reads, upload ingestion,

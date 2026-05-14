@@ -164,7 +164,7 @@ def db_check() -> None:
         try:
             result = await database.verify()
         except FileNotFoundError as exc:
-            console.print(str(exc))
+            console.print(sanitize_error_message(exc))
             raise typer.Exit(1) from exc
         console.print(
             "SQLite verification complete: "
@@ -323,7 +323,7 @@ def db_backup(
         try:
             result = await database.backup(output, overwrite=overwrite)
         except (FileExistsError, FileNotFoundError, ValueError) as exc:
-            console.print(str(exc))
+            console.print(sanitize_error_message(exc))
             raise typer.Exit(1) from exc
         console.print(
             "SQLite backup complete: "
@@ -353,7 +353,7 @@ def db_restore(
         try:
             result = await database.restore(backup)
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
-            console.print(str(exc))
+            console.print(sanitize_error_message(exc))
             raise typer.Exit(1) from exc
         console.print(
             "SQLite restore complete: "
@@ -393,7 +393,7 @@ def workspace_backup(
                     db_backup_path=db_backup.destination_path,
                 )
         except (FileExistsError, FileNotFoundError, RuntimeError, ValueError) as exc:
-            console.print(str(exc))
+            console.print(sanitize_error_message(exc))
             raise typer.Exit(1) from exc
         console.print(
             "Workspace backup complete: "
@@ -441,7 +441,7 @@ def workspace_restore(
                     max_expanded_bytes=max_expanded_bytes,
                 )
         except (FileNotFoundError, RuntimeError, ValueError, zipfile.BadZipFile) as exc:
-            console.print(str(exc))
+            console.print(sanitize_error_message(exc))
             raise typer.Exit(1) from exc
         console.print(
             "Workspace restore complete: "
@@ -653,12 +653,12 @@ def import_directory(
                 write_sidecar=sidecar_metadata,
             )
         except ValueError as exc:
-            raise typer.BadParameter(str(exc)) from exc
+            raise typer.BadParameter(sanitize_error_message(exc)) from exc
         if report:
             try:
                 await write_import_report(report.expanduser(), result)
             except ValueError as exc:
-                raise typer.BadParameter(str(exc)) from exc
+                raise typer.BadParameter(sanitize_error_message(exc)) from exc
         table = Table("Status", "Source", "Converted", "Document", "Run", "Error")
         for item in result.items:
             table.add_row(
@@ -1002,7 +1002,7 @@ def search(
                     phrase=phrase,
                 )
             except ValueError as exc:
-                raise typer.BadParameter(str(exc)) from exc
+                raise typer.BadParameter(sanitize_error_message(exc)) from exc
             console.print(
                 f"Showing {len(results)} of {total} results (offset={offset}, limit={limit})"
             )
@@ -1033,7 +1033,7 @@ def search(
                 phrase=phrase,
             )
         except ValueError as exc:
-            raise typer.BadParameter(str(exc)) from exc
+            raise typer.BadParameter(sanitize_error_message(exc)) from exc
         for document_id in ids:
             console.print(document_id)
 
@@ -1211,7 +1211,7 @@ def generate_corpus(
             overwrite=overwrite,
         )
     except (FileExistsError, ValueError) as exc:
-        raise typer.BadParameter(str(exc)) from exc
+        raise typer.BadParameter(sanitize_error_message(exc)) from exc
     console.print(f"Generated {len(result.files)} synthetic document(s)")
     console.print(f"Corpus: {result.corpus_dir}")
     console.print(f"Suite: {result.suite_path}")
@@ -1236,7 +1236,7 @@ def page_manifest(
     try:
         payload, pages = _read_pdf_page_manifest(path.expanduser())
     except (OSError, ValueError) as exc:
-        raise typer.BadParameter(str(exc)) from exc
+        raise typer.BadParameter(sanitize_error_message(exc)) from exc
     visible_pages = [
         page
         for page in pages
@@ -1414,7 +1414,7 @@ def _validate_cli_directory_output(
         if output_mode == DirectoryOutputMode.NEW_DIRECTORY and output_dir is not None:
             _reject_symlinked_cli_output_path(output_dir / ".librarian-output-probe")
     except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
+        raise typer.BadParameter(sanitize_error_message(exc)) from exc
 
 
 def _document_status_filter(value: str | None) -> DocumentStatus | None:
