@@ -1267,6 +1267,36 @@ def test_api_delete_removes_raw_blob_and_owned_upload(tmp_path: Path) -> None:
     assert not list((tmp_path / ".librarian" / "uploads").glob("*/notes.txt"))
 
 
+def test_api_delete_non_upload_source_does_not_create_upload_root(tmp_path: Path) -> None:
+    source = tmp_path / "manual-source.txt"
+    source.write_text("Horse API delete non-upload source.", encoding="utf-8")
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+
+    async def setup() -> str:
+        container = await build_container(settings)
+        ingested = await container.ingest_document.execute(source)
+        return str(ingested.document.id)
+
+    document_id = asyncio.run(setup())
+    assert not (tmp_path / ".librarian" / "uploads").exists()
+
+    with TestClient(create_app(settings)) as client:
+        deleted = client.delete(f"/documents/{document_id}")
+        lookup = client.get(f"/documents/{document_id}")
+
+    assert deleted.status_code == 200
+    assert deleted.json() == {"status": "deleted", "document_id": document_id}
+    assert lookup.status_code == 404
+    assert source.exists()
+    assert not (tmp_path / ".librarian" / "uploads").exists()
+    container = asyncio.run(build_container(settings))
+    with pytest.raises(KeyError):
+        asyncio.run(container.repository.get_text(raw_text_key(DocumentId(document_id))))
+
+
 def test_api_delete_does_not_remove_upload_through_symlinked_upload_root(tmp_path: Path) -> None:
     data_dir = tmp_path / ".librarian"
     actual_uploads = tmp_path / "outside-uploads"

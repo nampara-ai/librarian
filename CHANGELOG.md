@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a67 - 2026-05-14
+
+- Made API document-delete owned-upload cleanup side-effect free for non-upload sources, so cleanup
+  no longer creates an empty `uploads/` directory just to decide that no owned upload should be
+  removed.
+
 ## 0.1.0a66 - 2026-05-14
 
 - Added API document-delete regression coverage proving owned-upload cleanup leaves files in place

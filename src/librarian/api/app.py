@@ -2086,8 +2086,10 @@ async def _cleanup_upload(destination: Path) -> None:
 
 async def _cleanup_owned_upload(settings: Settings, path: Path) -> None:
     try:
-        upload_root = await asyncio.to_thread(_ensure_upload_root, settings)
+        upload_root = await asyncio.to_thread(_existing_upload_root, settings)
     except HTTPException:
+        return
+    if upload_root is None:
         return
     try:
         resolved = await asyncio.to_thread(_resolve_path, path)
@@ -2105,13 +2107,7 @@ def _resolve_path(path: Path) -> Path:
 
 
 def _ensure_upload_root(settings: Settings) -> Path:
-    expanded_data_dir = settings.data_dir.expanduser()
-    if _path_crosses_symlink(expanded_data_dir):
-        raise HTTPException(
-            status_code=400,
-            detail="Upload data_dir must not be or cross a symlink",
-        )
-    data_dir = expanded_data_dir.resolve()
+    data_dir = _resolved_upload_data_dir(settings)
     upload_root = data_dir / "uploads"
     data_dir.mkdir(parents=True, exist_ok=True)
     if upload_root.exists() and upload_root.is_symlink():
@@ -2126,6 +2122,34 @@ def _ensure_upload_root(settings: Settings) -> Path:
             detail="Upload directory must stay under data_dir",
         ) from exc
     return resolved
+
+
+def _existing_upload_root(settings: Settings) -> Path | None:
+    data_dir = _resolved_upload_data_dir(settings)
+    upload_root = data_dir / "uploads"
+    if not upload_root.exists():
+        return None
+    if upload_root.is_symlink():
+        raise HTTPException(status_code=400, detail="Upload directory must not be a symlink")
+    resolved = upload_root.resolve()
+    try:
+        resolved.relative_to(data_dir)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Upload directory must stay under data_dir",
+        ) from exc
+    return resolved
+
+
+def _resolved_upload_data_dir(settings: Settings) -> Path:
+    expanded_data_dir = settings.data_dir.expanduser()
+    if _path_crosses_symlink(expanded_data_dir):
+        raise HTTPException(
+            status_code=400,
+            detail="Upload data_dir must not be or cross a symlink",
+        )
+    return expanded_data_dir.resolve()
 
 
 def _verify_writable_data_dir(settings: Settings) -> None:

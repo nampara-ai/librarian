@@ -6,13 +6,13 @@ This repository is the production rewrite of an earlier prototype. The architect
 
 ## Status
 
-`v0.1.0a66` is the latest public alpha. It includes local CLI workflows, a FastAPI service,
+`v0.1.0a67` is the latest public alpha. It includes local CLI workflows, a FastAPI service,
 file and directory conversion/import, durable SQLite-backed processing runs, page-aware OCR and
 broad-format extraction, direct SRT/VTT transcript conversion, the upgraded v2 prompt stack,
-search/export with detailed result timestamps, CLI/API document deletion with symlink-guarded
-cleanup coverage, release automation, OSS governance files, OCR correction quality warnings,
-repeated-tail output validation, and an external capability review for Dolphin, olmOCR, and LongCut
-upgrade paths.
+search/export with detailed result timestamps, CLI/API document deletion with side-effect-free
+symlink-guarded cleanup coverage, release automation, OSS governance files, OCR correction quality
+warnings, repeated-tail output validation, and an external capability review for Dolphin, olmOCR,
+and LongCut upgrade paths.
 
 ## Install
 
@@ -21,7 +21,7 @@ From a downloaded release wheel:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install "nampara_librarian-0.1.0a66-py3-none-any.whl[all]"
+pip install "nampara_librarian-0.1.0a67-py3-none-any.whl[all]"
 ```
 
 From a source checkout:
@@ -158,7 +158,7 @@ For direct image runs, also set an import root because the image binds publicly 
 docker run --rm -p 8080:8080 \
   -e LIBRARIAN_API_KEY=change-me \
   -e LIBRARIAN_API_IMPORT_ROOT=/data/imports \
-  ghcr.io/nampara-ai/librarian:v0.1.0a66
+  ghcr.io/nampara-ai/librarian:v0.1.0a67
 ```
 
 ## Privacy

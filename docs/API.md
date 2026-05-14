@@ -20,7 +20,8 @@ Requests above `LIBRARIAN_API_MAX_REQUEST_BYTES` are rejected before routing, ei
 - `GET /documents?limit=100&offset=0`: list documents.
 - `GET /documents/{id}`: document metadata.
 - `DELETE /documents/{id}`: delete a document and dependent records. Owned upload-file cleanup is
-  guarded by the same symlinked `data_dir`/`uploads` boundary checks as upload storage.
+  guarded by the same symlinked `data_dir`/`uploads` boundary checks as upload storage, and cleanup
+  does not create an `uploads/` directory when deleting documents that came from non-upload sources.
 - `POST /documents/{id}/reprocess`: create a new processing run.
 - `GET /documents/{id}/content?offset=0&limit=...`: latest cleaned output as a bounded JSON page.
   When `limit` is omitted, the response is capped by `LIBRARIAN_API_MAX_CONTENT_CHARS`; full
