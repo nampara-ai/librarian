@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import re
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from enum import StrEnum
 from pathlib import Path
 
@@ -32,6 +34,27 @@ class TranscriptSegment:
     def end_seconds(self) -> float:
         """Return the segment end timestamp."""
         return self.start_seconds + self.duration_seconds
+
+
+@dataclass(frozen=True, slots=True)
+class TranscriptMatch:
+    """A quote match mapped back to transcript segment timestamps."""
+
+    quote: str
+    matched_text: str
+    start_seconds: float
+    end_seconds: float
+    start_segment_index: int
+    end_segment_index: int
+    strategy: str
+    confidence: float
+
+
+@dataclass(frozen=True, slots=True)
+class _SegmentBoundary:
+    segment_index: int
+    start_pos: int
+    end_pos: int
 
 
 _TIMESTAMP_TOKEN = r"(?:\d{1,2}:)?\d{1,2}:\d{2}(?:[\.,]\d{1,3})?"  # noqa: S105
@@ -84,6 +107,7 @@ _COMMON_ABBREVIATIONS = {
 _MAX_SENTENCE_DURATION_SECONDS = 24.0
 _MAX_SENTENCE_WORDS = 80
 _MAX_SEGMENTS_PER_SENTENCE = 20
+_MAX_QUOTE_MATCH_WINDOW_SEGMENTS = 12
 
 
 def parse_timestamp(value: str) -> float:
@@ -277,6 +301,66 @@ def normalize_transcript_file(
     return len(segments)
 
 
+def find_quote_in_transcript(
+    segments: list[TranscriptSegment],
+    quote: str,
+    *,
+    min_confidence: float = 0.78,
+) -> TranscriptMatch | None:
+    """Find a quote and map it back to transcript timestamps."""
+    normalized_quote = _normalize_for_matching(quote)
+    if not normalized_quote:
+        raise ValueError("quote must contain searchable text")
+    if not 0 <= min_confidence <= 1:
+        raise ValueError("min_confidence must be between 0 and 1")
+
+    exact_match = _find_exact_quote_match(segments, quote, normalized_quote)
+    if exact_match is not None:
+        return exact_match
+    return _find_fuzzy_quote_match(
+        segments,
+        quote,
+        normalized_quote,
+        min_confidence=min_confidence,
+    )
+
+
+def find_quote_in_transcript_file(
+    input_path: Path,
+    quote: str,
+    *,
+    min_confidence: float = 0.78,
+) -> TranscriptMatch | None:
+    """Parse a transcript file and find a quote in it."""
+    segments = parse_transcript(input_path.read_text(encoding="utf-8"))
+    if not segments:
+        raise ValueError("No timestamped transcript segments found")
+    return find_quote_in_transcript(
+        segments,
+        quote,
+        min_confidence=min_confidence,
+    )
+
+
+def transcript_match_json(match: TranscriptMatch) -> str:
+    """Render a quote match as stable JSON."""
+    return json.dumps(
+        {
+            "quote": match.quote,
+            "matched_text": match.matched_text,
+            "start": format_compact_timestamp(match.start_seconds),
+            "end": format_compact_timestamp(match.end_seconds),
+            "start_seconds": match.start_seconds,
+            "end_seconds": match.end_seconds,
+            "start_segment_index": match.start_segment_index,
+            "end_segment_index": match.end_segment_index,
+            "strategy": match.strategy,
+            "confidence": match.confidence,
+        },
+        indent=2,
+    )
+
+
 def _infer_missing_durations(segments: list[TranscriptSegment]) -> list[TranscriptSegment]:
     if not segments:
         return []
@@ -298,6 +382,151 @@ def _infer_missing_durations(segments: list[TranscriptSegment]) -> list[Transcri
         else:
             inferred.append(segment)
     return inferred
+
+
+def _find_exact_quote_match(
+    segments: list[TranscriptSegment],
+    quote: str,
+    normalized_quote: str,
+) -> TranscriptMatch | None:
+    normalized_text, boundaries = _normalized_transcript_index(segments)
+    match_start = normalized_text.find(normalized_quote)
+    if match_start < 0:
+        return None
+    match_end = match_start + len(normalized_quote)
+    start_index, end_index = _map_normalized_span_to_segments(
+        boundaries,
+        match_start,
+        match_end,
+    )
+    return _build_transcript_match(
+        segments,
+        quote=quote,
+        start_index=start_index,
+        end_index=end_index,
+        strategy="exact-normalized",
+        confidence=1.0,
+    )
+
+
+def _find_fuzzy_quote_match(
+    segments: list[TranscriptSegment],
+    quote: str,
+    normalized_quote: str,
+    *,
+    min_confidence: float,
+) -> TranscriptMatch | None:
+    best: tuple[float, int, int] | None = None
+    for start_index in range(len(segments)):
+        window_text = ""
+        upper = min(len(segments), start_index + _MAX_QUOTE_MATCH_WINDOW_SEGMENTS)
+        for end_index in range(start_index, upper):
+            if window_text:
+                window_text += " "
+            window_text += segments[end_index].text
+            normalized_window = _normalize_for_matching(window_text)
+            if not normalized_window:
+                continue
+            confidence = _quote_match_confidence(normalized_quote, normalized_window)
+            if best is None or confidence > best[0]:
+                best = (confidence, start_index, end_index)
+    if best is None or best[0] < min_confidence:
+        return None
+    confidence, start_index, end_index = best
+    return _build_transcript_match(
+        segments,
+        quote=quote,
+        start_index=start_index,
+        end_index=end_index,
+        strategy="fuzzy-window",
+        confidence=round(confidence, 6),
+    )
+
+
+def _normalized_transcript_index(
+    segments: list[TranscriptSegment],
+) -> tuple[str, list[_SegmentBoundary]]:
+    parts: list[str] = []
+    boundaries: list[_SegmentBoundary] = []
+    cursor = 0
+    for index, segment in enumerate(segments):
+        normalized = _normalize_for_matching(segment.text)
+        if parts:
+            parts.append(" ")
+            cursor += 1
+        start_pos = cursor
+        parts.append(normalized)
+        cursor += len(normalized)
+        boundaries.append(
+            _SegmentBoundary(
+                segment_index=index,
+                start_pos=start_pos,
+                end_pos=cursor,
+            )
+        )
+    return "".join(parts), boundaries
+
+
+def _map_normalized_span_to_segments(
+    boundaries: list[_SegmentBoundary],
+    match_start: int,
+    match_end: int,
+) -> tuple[int, int]:
+    start_index = boundaries[0].segment_index
+    end_index = boundaries[-1].segment_index
+    for boundary in boundaries:
+        if boundary.start_pos <= match_start < boundary.end_pos:
+            start_index = boundary.segment_index
+            break
+    for boundary in boundaries:
+        if boundary.start_pos < match_end <= boundary.end_pos:
+            end_index = boundary.segment_index
+            break
+        if match_end > boundary.end_pos:
+            end_index = boundary.segment_index
+    return start_index, end_index
+
+
+def _build_transcript_match(
+    segments: list[TranscriptSegment],
+    *,
+    quote: str,
+    start_index: int,
+    end_index: int,
+    strategy: str,
+    confidence: float,
+) -> TranscriptMatch:
+    selected = segments[start_index : end_index + 1]
+    return TranscriptMatch(
+        quote=quote,
+        matched_text=_normalize_segment_text(" ".join(segment.text for segment in selected)),
+        start_seconds=selected[0].start_seconds,
+        end_seconds=max(segment.end_seconds for segment in selected),
+        start_segment_index=start_index,
+        end_segment_index=end_index,
+        strategy=strategy,
+        confidence=confidence,
+    )
+
+
+def _quote_match_confidence(normalized_quote: str, normalized_window: str) -> float:
+    sequence_ratio = SequenceMatcher(None, normalized_quote, normalized_window).ratio()
+    quote_tokens = set(normalized_quote.split())
+    window_tokens = set(normalized_window.split())
+    if not quote_tokens or not window_tokens:
+        return sequence_ratio
+    token_overlap = len(quote_tokens & window_tokens) / len(quote_tokens)
+    length_penalty = min(len(normalized_quote), len(normalized_window)) / max(
+        len(normalized_quote),
+        len(normalized_window),
+    )
+    return (sequence_ratio * 0.55) + (token_overlap * 0.35) + (length_penalty * 0.10)
+
+
+def _normalize_for_matching(value: str) -> str:
+    lowered = value.lower()
+    lowered = re.sub(r"[^\w\s]", " ", lowered)
+    return re.sub(r"\s+", " ", lowered).strip()
 
 
 def _strip_vtt_settings(value: str) -> str:

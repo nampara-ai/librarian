@@ -4,6 +4,7 @@ import pytest
 
 from librarian.application.transcripts import (
     TranscriptFormat,
+    find_quote_in_transcript,
     format_compact_timestamp,
     format_srt_timestamp,
     merge_transcript_sentences,
@@ -11,6 +12,7 @@ from librarian.application.transcripts import (
     parse_timestamp,
     parse_transcript,
     render_transcript,
+    transcript_match_json,
 )
 
 
@@ -101,3 +103,53 @@ def test_normalize_transcript_file_rejects_empty_or_existing_output(tmp_path: Pa
     )
     assert count == 1
     assert output.read_text(encoding="utf-8") == "- [00:00] Hello."
+
+
+def test_find_quote_in_transcript_maps_exact_match_to_timestamps() -> None:
+    segments = parse_transcript(
+        """[00:00] Ada: This is the first sentence.
+[00:04] The second point spans
+[00:06] two transcript segments.
+[00:09] Final note."""
+    )
+
+    match = find_quote_in_transcript(segments, "second point spans two transcript segments")
+
+    assert match is not None
+    assert match.start_seconds == 4
+    assert match.end_seconds == 9
+    assert match.start_segment_index == 1
+    assert match.end_segment_index == 2
+    assert match.strategy == "exact-normalized"
+    assert match.confidence == 1
+    assert match.matched_text == "The second point spans two transcript segments."
+
+
+def test_find_quote_in_transcript_uses_bounded_fuzzy_match() -> None:
+    segments = parse_transcript(
+        """[00:00] The rider softened the rein through the corner.
+[00:04] Then the horse relaxed and lengthened."""
+    )
+
+    match = find_quote_in_transcript(
+        segments,
+        "rider softens reins in the corner",
+        min_confidence=0.55,
+    )
+
+    assert match is not None
+    assert match.strategy == "fuzzy-window"
+    assert match.start_segment_index == 0
+    assert match.end_segment_index == 0
+    assert match.confidence >= 0.55
+
+
+def test_transcript_match_json_is_stable() -> None:
+    segments = parse_transcript("[00:00] Hello source evidence.")
+    match = find_quote_in_transcript(segments, "hello source")
+
+    assert match is not None
+    rendered = transcript_match_json(match)
+
+    assert '"start": "00:00"' in rendered
+    assert '"strategy": "exact-normalized"' in rendered

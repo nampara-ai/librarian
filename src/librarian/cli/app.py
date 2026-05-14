@@ -46,7 +46,13 @@ from librarian.application.import_library import (
 from librarian.application.jobs import QueueWorker
 from librarian.application.ports import SearchScope
 from librarian.application.synthetic_corpus import generate_synthetic_corpus
-from librarian.application.transcripts import TranscriptFormat, normalize_transcript_file
+from librarian.application.transcripts import (
+    TranscriptFormat,
+    find_quote_in_transcript_file,
+    format_compact_timestamp,
+    normalize_transcript_file,
+    transcript_match_json,
+)
 from librarian.config import Settings
 from librarian.domain.ids import DocumentId, RunId, digest_text
 from librarian.domain.models import DocumentStatus, RunStage, RunStatus
@@ -602,6 +608,46 @@ def transcript_normalize(
         console.print(sanitize_error_message(exc))
         raise typer.Exit(1) from exc
     console.print(f"Normalized {segment_count} transcript segment(s) -> {output.resolve()}")
+
+
+@app.command("transcript-find")
+def transcript_find(
+    path: Annotated[Path, typer.Argument(exists=True, readable=True, dir_okay=False)],
+    quote: Annotated[str, typer.Argument(help="Quote or phrase to locate.")],
+    min_confidence: Annotated[
+        float,
+        typer.Option(help="Minimum fuzzy-match confidence.", min=0.0, max=1.0),
+    ] = 0.78,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Render match evidence as JSON."),
+    ] = False,
+) -> None:
+    """Find a quote in a timestamped transcript and print source evidence."""
+    try:
+        match = find_quote_in_transcript_file(
+            path.resolve(),
+            quote,
+            min_confidence=min_confidence,
+        )
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        console.print(sanitize_error_message(exc))
+        raise typer.Exit(1) from exc
+    if match is None:
+        console.print("No transcript quote match found")
+        raise typer.Exit(1)
+    if json_output:
+        console.print(transcript_match_json(match))
+        return
+    table = Table("Start", "End", "Strategy", "Confidence", "Matched Text")
+    table.add_row(
+        format_compact_timestamp(match.start_seconds),
+        format_compact_timestamp(match.end_seconds),
+        match.strategy,
+        f"{match.confidence:.3f}",
+        match.matched_text,
+    )
+    console.print(table)
 
 
 @app.command("import")

@@ -235,6 +235,34 @@ def test_cli_transcript_normalize_writes_requested_format(tmp_path: Path) -> Non
     assert "Ada: This is the first sentence." in rendered
 
 
+def test_cli_transcript_find_reports_timestamp_evidence(tmp_path: Path) -> None:
+    source = tmp_path / "transcript.txt"
+    source.write_text(
+        """[00:00] Ada: This is the first sentence.
+[00:03] The source quote lands here.
+[00:06] The final sentence.""",
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "transcript-find",
+            str(source),
+            "source quote lands",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["start"] == "00:03"
+    assert payload["end"] == "00:06"
+    assert payload["strategy"] == "exact-normalized"
+    assert payload["matched_text"] == "The source quote lands here."
+
+
 def test_cli_search_redacts_validation_details(monkeypatch: pytest.MonkeyPatch) -> None:
     class FailingSearchLibrary:
         async def search(self, *_args: object, **_kwargs: object) -> list[str]:

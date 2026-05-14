@@ -39,12 +39,15 @@ Normalize a timestamped transcript without calling an LLM:
 librarian transcript-normalize ./input/captions.srt --format md --output ./output/captions.md
 librarian transcript-normalize ./input/captions.vtt --format srt --output ./output/captions.srt
 librarian transcript-normalize ./input/transcript.txt --format csv --output ./output/transcript.csv
+librarian transcript-find ./input/captions.srt "quoted source phrase" --json
 ```
 
 `transcript-normalize` accepts SRT/VTT-style timestamp ranges and line-oriented timestamp
 prefixes. By default it merges short timestamp segments into sentence-like spans while preserving
 speaker labels and source timestamps; use `--no-merge-sentences` to keep original segment
 granularity. Output formats are `md`, `txt`, `srt`, and `csv`.
+`transcript-find` maps an exact or fuzzy quote back to transcript timestamps and segment indexes,
+which is useful for citation checks before importing or publishing cleaned transcript excerpts.
 
 Local conversion and import paths enforce configurable input limits before expensive parsing:
 `LIBRARIAN_MAX_SOURCE_BYTES`, `LIBRARIAN_TEXT_MAX_INPUT_BYTES`,

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a46 - 2026-05-14
+
+- Added transcript quote matching and the `librarian transcript-find` CLI command
+  to map exact or fuzzy quote matches back to timestamp and segment evidence in
+  SRT/VTT-style or timestamp-prefixed transcript files.
+
 ## 0.1.0a45 - 2026-05-14
 
 - Added `expected_text_order` to corpus-eval cases so sanitized evaluation

@@ -1051,3 +1051,7 @@
   `expected_text_order`, giving release and local evaluation suites a direct way
   to catch source order regressions in transcripts, multi-column conversions,
   and OCR output instead of relying only on presence/search checks.
+- 2026-05-14: Added transcript quote-to-timestamp matching through
+  `librarian transcript-find`, with exact normalized matching and bounded fuzzy
+  fallback so transcript excerpts can be mapped back to source segment and
+  timestamp evidence before import, search, or publication.
