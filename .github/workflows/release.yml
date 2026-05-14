@@ -120,7 +120,7 @@ jobs:
           "$RUNNER_TEMP/librarian-wheel-smoke/bin/python" -m pip install -c constraints.txt "$WHEEL[all]"
           "$RUNNER_TEMP/librarian-wheel-smoke/bin/librarian" version
       - name: Attest distributions
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: "dist/*"
       - name: Generate SBOM
@@ -130,7 +130,7 @@ jobs:
       - name: Verify checksums
         run: sha256sum --check SHA256SUMS.txt
       - name: Attest release metadata
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             sbom.json
@@ -187,7 +187,7 @@ jobs:
             --format '{{json .Manifest.Digest}}' | tr -d '"')"
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
       - name: Attest image
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: "ghcr.io/${{ github.repository }}"
           subject-digest: "${{ steps.image-digest.outputs.digest }}"
