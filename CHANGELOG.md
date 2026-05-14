@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.0a60 - 2026-05-14
+
+- Added an external repository capability review covering Dolphin, olmOCR, and
+  LongCut, including licensing constraints, reusable capabilities, and
+  implementation strategies for optional visual parsing, VLM page OCR, richer
+  corpus evals, transcript citations, notes, and grounded Q&A.
+- Updated the roadmap with the review-derived v0.2/v0.3 priorities.
+
 ## 0.1.0a59 - 2026-05-14
 
 - Extended corpus-eval release evidence semantic checks so DOCX/table/header

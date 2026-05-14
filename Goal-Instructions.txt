@@ -14,7 +14,7 @@
   conversion/OCR adapters, versioned prompts, CLI/API parity, CI, CodeQL,
   Docker, and release automation.
 
-  Current public release: `v0.1.0a6`.
+  Current public release: `v0.1.0a60`.
 
   High-level code tour:
 
@@ -173,7 +173,7 @@
   persists runs and outputs in SQLite; and exposes the same workflow through
   both a CLI and FastAPI API.
 
-  Current release: v0.1.0a6
+  Current release: v0.1.0a60
   Repo: https://github.com/nampara-ai/librarian
 
   Codebase Tour
@@ -225,7 +225,7 @@
 
   The repo is in solid alpha shape:
 
-  - Latest release: v0.1.0a6
+  - Latest release: v0.1.0a60
   - CI passes.
   - CodeQL passes.
   - Release workflow passes.
@@ -1106,3 +1106,11 @@
 - 2026-05-14: Extended corpus-eval release evidence semantic checks so DOCX,
   table/header/footer, embedded-text, and transcript-caption/SRT/VTT tags must
   match source paths and diagnostics instead of only appearing as tag strings.
+- 2026-05-14: Completed a fresh deep review of local `Dolphin-master`,
+  `olmocr-main`, and `longcut-main` checkouts and captured the integration
+  strategy in `docs/EXTERNAL_REPO_REVIEW.md`. Prioritized Apache-2.0
+  olmOCR-derived VLM page OCR, anchor prompts, rotation/retry diagnostics,
+  table/math/footnote evals, and repeat-tail validation for v0.2; marked
+  Dolphin as a licensing-sensitive layout-parser research reference; and marked
+  LongCut as AGPL-licensed product inspiration for transcript citations, notes,
+  and grounded Q&A.

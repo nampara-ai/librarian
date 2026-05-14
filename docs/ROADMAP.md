@@ -1,6 +1,6 @@
 # Roadmap
 
-## v0.1.0a3
+## v0.1 Alpha
 
 - Local CLI and FastAPI service.
 - Universal conversion to Markdown/plain text.
@@ -11,6 +11,10 @@
 - SQLite-backed persistence and worker queue.
 - Docker Compose deployment.
 - Eval and benchmark harnesses.
+- Direct SRT/VTT transcript normalization, quote matching, and conversion.
+- Release evidence gates for prompt eval, corpus eval, benchmark, and semantic
+  corpus tag coverage.
+- External repository review for Dolphin, olmOCR, and LongCut upgrade paths.
 
 ## v0.2
 
@@ -20,6 +24,11 @@
 - Batch import API hardening for hosted deployments.
 - More real-world conversion fixtures.
 - Provider-specific performance baselines.
+- Optional olmOCR-inspired VLM page OCR adapter with anchor-text prompts,
+  rotation retry, fallback diagnostics, and provider cost/page metrics.
+- Corpus-eval extensions for table relations, math/formula preservation,
+  footnotes, formatting, and repeated-tail hallucination checks.
+- Transcript quote/citation evidence in search results and exports.
 
 ## v0.3
 
@@ -27,9 +36,15 @@
 - Stronger auth model: users, tokens, RBAC, tenant boundaries.
 - Networked queue/database adapter for horizontal deployments.
 - Admin UI for imports, runs, failures, and exports.
+- Local notes/annotations linked to documents, selected text, timestamps, and
+  classifications.
+- Grounded Q&A over processed documents with Librarian-validated citations.
+- Hosted-mode request throttling and audit controls.
 
 ## Later
 
 - Plugin system for custom taxonomies and conversion adapters.
 - Native desktop packaging.
 - Managed cloud deployment template.
+- Optional visual layout parser plugin interface with Dolphin-like typed element
+  parsing and layout visualization artifacts.
