@@ -96,6 +96,7 @@ async def test_search_library_delegates_filters_to_configured_index() -> None:
         limit=5,
         offset=2,
         classification_code="636.1",
+        classification_prefix="636",
         document_status=DocumentStatus.READY,
         filename_contains="notes",
         created_after=created_after,
@@ -108,6 +109,7 @@ async def test_search_library_delegates_filters_to_configured_index() -> None:
         limit=5,
         offset=2,
         classification_code="636.1",
+        classification_prefix="636",
         document_status=DocumentStatus.READY,
         filename_contains="notes",
         created_after=created_after,
@@ -118,6 +120,7 @@ async def test_search_library_delegates_filters_to_configured_index() -> None:
     count = await service.count(
         "follow-up care",
         classification_code="636.1",
+        classification_prefix="636",
         document_status=DocumentStatus.READY,
         filename_contains="notes",
         created_after=created_after,
@@ -128,6 +131,7 @@ async def test_search_library_delegates_filters_to_configured_index() -> None:
     facets = await service.facets(
         "follow-up care",
         classification_code="636.1",
+        classification_prefix="636",
         document_status=DocumentStatus.READY,
         filename_contains="notes",
         created_after=created_after,
@@ -137,6 +141,7 @@ async def test_search_library_delegates_filters_to_configured_index() -> None:
     )
     expected_filters = {
         "classification_code": "636.1",
+        "classification_prefix": "636",
         "document_status": DocumentStatus.READY,
         "filename_contains": "notes",
         "created_after": created_after,

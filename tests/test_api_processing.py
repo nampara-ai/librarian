@@ -72,6 +72,7 @@ def test_api_upload_run_and_get_content(tmp_path: Path) -> None:
             json={
                 "query": "Horse transcript",
                 "classification_code": "636.1",
+                "classification_prefix": "636",
                 "document_status": "ready",
                 "filename_contains": "notes",
             },
@@ -81,6 +82,13 @@ def test_api_upload_run_and_get_content(tmp_path: Path) -> None:
         assert filtered.json()["limit"] == 20
         assert filtered.json()["offset"] == 0
         assert filtered.json()["document_ids"] == [document_id]
+        prefix_filtered = client.post(
+            "/search",
+            json={"query": "Horse transcript", "classification_prefix": "636"},
+        )
+        assert prefix_filtered.status_code == 200
+        assert prefix_filtered.json()["total"] == 1
+        assert prefix_filtered.json()["document_ids"] == [document_id]
         paged_out = client.post(
             "/search",
             json={"query": "Horse transcript", "limit": 1, "offset": 1},
@@ -129,7 +137,7 @@ def test_api_upload_run_and_get_content(tmp_path: Path) -> None:
             "/search/facets",
             json={
                 "query": "Horse transcript",
-                "classification_code": "000.0",
+                "classification_prefix": "000",
                 "document_status": "ready",
                 "filename_contains": "notes",
             },

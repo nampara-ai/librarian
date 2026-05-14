@@ -586,6 +586,7 @@ class SQLiteRepository:
         limit: int = 20,
         offset: int = 0,
         classification_code: str | None = None,
+        classification_prefix: str | None = None,
         document_status: DocumentStatus | None = None,
         filename_contains: str | None = None,
         created_after: datetime | None = None,
@@ -600,6 +601,7 @@ class SQLiteRepository:
             limit,
             offset,
             classification_code,
+            classification_prefix,
             document_status,
             filename_contains,
             created_after,
@@ -615,6 +617,7 @@ class SQLiteRepository:
         limit: int = 20,
         offset: int = 0,
         classification_code: str | None = None,
+        classification_prefix: str | None = None,
         document_status: DocumentStatus | None = None,
         filename_contains: str | None = None,
         created_after: datetime | None = None,
@@ -629,6 +632,7 @@ class SQLiteRepository:
             limit,
             offset,
             classification_code,
+            classification_prefix,
             document_status,
             filename_contains,
             created_after,
@@ -642,6 +646,7 @@ class SQLiteRepository:
         query: str,
         *,
         classification_code: str | None = None,
+        classification_prefix: str | None = None,
         document_status: DocumentStatus | None = None,
         filename_contains: str | None = None,
         created_after: datetime | None = None,
@@ -654,6 +659,7 @@ class SQLiteRepository:
             self._search_count_sync,
             query,
             classification_code,
+            classification_prefix,
             document_status,
             filename_contains,
             created_after,
@@ -667,6 +673,7 @@ class SQLiteRepository:
         query: str,
         *,
         classification_code: str | None = None,
+        classification_prefix: str | None = None,
         document_status: DocumentStatus | None = None,
         filename_contains: str | None = None,
         created_after: datetime | None = None,
@@ -679,6 +686,7 @@ class SQLiteRepository:
             self._search_facets_sync,
             query,
             classification_code,
+            classification_prefix,
             document_status,
             filename_contains,
             created_after,
@@ -1316,6 +1324,7 @@ class SQLiteRepository:
         limit: int,
         offset: int = 0,
         classification_code: str | None = None,
+        classification_prefix: str | None = None,
         document_status: DocumentStatus | None = None,
         filename_contains: str | None = None,
         created_after: datetime | None = None,
@@ -1330,6 +1339,7 @@ class SQLiteRepository:
                 limit,
                 offset,
                 classification_code,
+                classification_prefix,
                 document_status,
                 filename_contains,
                 created_after,
@@ -1343,6 +1353,7 @@ class SQLiteRepository:
         self,
         query: str,
         classification_code: str | None = None,
+        classification_prefix: str | None = None,
         document_status: DocumentStatus | None = None,
         filename_contains: str | None = None,
         created_after: datetime | None = None,
@@ -1354,6 +1365,7 @@ class SQLiteRepository:
             return self._raw_search_count_sync(
                 query,
                 classification_code,
+                classification_prefix,
                 document_status,
                 filename_contains,
                 created_after,
@@ -1362,11 +1374,16 @@ class SQLiteRepository:
             )
         match_query = normalize_search_query(query, phrase=phrase)
         filename_pattern = f"%{_escape_like(filename_contains)}%" if filename_contains else None
+        classification_prefix_pattern = (
+            f"{_escape_like(classification_prefix)}%" if classification_prefix else None
+        )
         parameters: tuple[object, ...] = (
             match_query,
             RunStatus.SUCCEEDED.value,
             classification_code,
             classification_code,
+            classification_prefix_pattern,
+            classification_prefix_pattern,
             document_status.value if document_status else None,
             document_status.value if document_status else None,
             filename_pattern,
@@ -1397,6 +1414,7 @@ class SQLiteRepository:
                         WHERE latest.document_id = cleaned_outputs.document_id
                       )
                       AND (? IS NULL OR classifications.code = ?)
+                      AND (? IS NULL OR classifications.code LIKE ? ESCAPE '~')
                       AND (? IS NULL OR documents.status = ?)
                       AND (? IS NULL OR documents.filename LIKE ? ESCAPE '~')
                       AND (? IS NULL OR documents.created_at >= ?)
@@ -1414,6 +1432,7 @@ class SQLiteRepository:
         limit: int,
         offset: int = 0,
         classification_code: str | None = None,
+        classification_prefix: str | None = None,
         document_status: DocumentStatus | None = None,
         filename_contains: str | None = None,
         created_after: datetime | None = None,
@@ -1431,6 +1450,7 @@ class SQLiteRepository:
                 limit,
                 offset,
                 classification_code,
+                classification_prefix,
                 document_status,
                 filename_contains,
                 created_after,
@@ -1439,6 +1459,9 @@ class SQLiteRepository:
             )
         match_query = normalize_search_query(query, phrase=phrase)
         filename_pattern = f"%{_escape_like(filename_contains)}%" if filename_contains else None
+        classification_prefix_pattern = (
+            f"{_escape_like(classification_prefix)}%" if classification_prefix else None
+        )
         parameters: tuple[object, ...] = (
             _FTS_HIGHLIGHT_START,
             _FTS_HIGHLIGHT_END,
@@ -1446,6 +1469,8 @@ class SQLiteRepository:
             RunStatus.SUCCEEDED.value,
             classification_code,
             classification_code,
+            classification_prefix_pattern,
+            classification_prefix_pattern,
             document_status.value if document_status else None,
             document_status.value if document_status else None,
             filename_pattern,
@@ -1486,6 +1511,7 @@ class SQLiteRepository:
                         WHERE latest.document_id = cleaned_outputs.document_id
                       )
                       AND (? IS NULL OR classifications.code = ?)
+                      AND (? IS NULL OR classifications.code LIKE ? ESCAPE '~')
                       AND (? IS NULL OR documents.status = ?)
                       AND (? IS NULL OR documents.filename LIKE ? ESCAPE '~')
                       AND (? IS NULL OR documents.created_at >= ?)
@@ -1524,6 +1550,7 @@ class SQLiteRepository:
         self,
         query: str,
         classification_code: str | None,
+        classification_prefix: str | None,
         document_status: DocumentStatus | None,
         filename_contains: str | None,
         created_after: datetime | None,
@@ -1532,10 +1559,15 @@ class SQLiteRepository:
     ) -> int:
         match_query = normalize_search_query(query, phrase=phrase)
         filename_pattern = f"%{_escape_like(filename_contains)}%" if filename_contains else None
+        classification_prefix_pattern = (
+            f"{_escape_like(classification_prefix)}%" if classification_prefix else None
+        )
         parameters: tuple[object, ...] = (
             match_query,
             classification_code,
             classification_code,
+            classification_prefix_pattern,
+            classification_prefix_pattern,
             document_status.value if document_status else None,
             document_status.value if document_status else None,
             filename_pattern,
@@ -1556,6 +1588,7 @@ class SQLiteRepository:
                       ON classifications.document_id = raw_content_fts.document_id
                     WHERE raw_content_fts MATCH ?
                       AND (? IS NULL OR classifications.code = ?)
+                      AND (? IS NULL OR classifications.code LIKE ? ESCAPE '~')
                       AND (? IS NULL OR documents.status = ?)
                       AND (? IS NULL OR documents.filename LIKE ? ESCAPE '~')
                       AND (? IS NULL OR documents.created_at >= ?)
@@ -1573,6 +1606,7 @@ class SQLiteRepository:
         limit: int,
         offset: int,
         classification_code: str | None,
+        classification_prefix: str | None,
         document_status: DocumentStatus | None,
         filename_contains: str | None,
         created_after: datetime | None,
@@ -1581,12 +1615,17 @@ class SQLiteRepository:
     ) -> list[SearchResult]:
         match_query = normalize_search_query(query, phrase=phrase)
         filename_pattern = f"%{_escape_like(filename_contains)}%" if filename_contains else None
+        classification_prefix_pattern = (
+            f"{_escape_like(classification_prefix)}%" if classification_prefix else None
+        )
         parameters: tuple[object, ...] = (
             _FTS_HIGHLIGHT_START,
             _FTS_HIGHLIGHT_END,
             match_query,
             classification_code,
             classification_code,
+            classification_prefix_pattern,
+            classification_prefix_pattern,
             document_status.value if document_status else None,
             document_status.value if document_status else None,
             filename_pattern,
@@ -1616,6 +1655,7 @@ class SQLiteRepository:
                       ON classifications.document_id = raw_content_fts.document_id
                     WHERE raw_content_fts MATCH ?
                       AND (? IS NULL OR classifications.code = ?)
+                      AND (? IS NULL OR classifications.code LIKE ? ESCAPE '~')
                       AND (? IS NULL OR documents.status = ?)
                       AND (? IS NULL OR documents.filename LIKE ? ESCAPE '~')
                       AND (? IS NULL OR documents.created_at >= ?)
@@ -1654,6 +1694,7 @@ class SQLiteRepository:
         self,
         query: str,
         classification_code: str | None,
+        classification_prefix: str | None,
         document_status: DocumentStatus | None,
         filename_contains: str | None,
         created_after: datetime | None,
@@ -1665,6 +1706,7 @@ class SQLiteRepository:
             return self._raw_search_facets_sync(
                 query,
                 classification_code,
+                classification_prefix,
                 document_status,
                 filename_contains,
                 created_after,
@@ -1673,11 +1715,16 @@ class SQLiteRepository:
             )
         match_query = normalize_search_query(query, phrase=phrase)
         filename_pattern = f"%{_escape_like(filename_contains)}%" if filename_contains else None
+        classification_prefix_pattern = (
+            f"{_escape_like(classification_prefix)}%" if classification_prefix else None
+        )
         filter_parameters: tuple[object, ...] = (
             match_query,
             RunStatus.SUCCEEDED.value,
             classification_code,
             classification_code,
+            classification_prefix_pattern,
+            classification_prefix_pattern,
             document_status.value if document_status else None,
             document_status.value if document_status else None,
             filename_pattern,
@@ -1709,6 +1756,7 @@ class SQLiteRepository:
                         WHERE latest.document_id = cleaned_outputs.document_id
                       )
                       AND (? IS NULL OR classifications.code = ?)
+                      AND (? IS NULL OR classifications.code LIKE ? ESCAPE '~')
                       AND (? IS NULL OR documents.status = ?)
                       AND (? IS NULL OR documents.filename LIKE ? ESCAPE '~')
                       AND (? IS NULL OR documents.created_at >= ?)
@@ -1738,6 +1786,7 @@ class SQLiteRepository:
                         WHERE latest.document_id = cleaned_outputs.document_id
                       )
                       AND (? IS NULL OR classifications.code = ?)
+                      AND (? IS NULL OR classifications.code LIKE ? ESCAPE '~')
                       AND (? IS NULL OR documents.status = ?)
                       AND (? IS NULL OR documents.filename LIKE ? ESCAPE '~')
                       AND (? IS NULL OR documents.created_at >= ?)
@@ -1767,6 +1816,7 @@ class SQLiteRepository:
                         WHERE latest.document_id = cleaned_outputs.document_id
                       )
                       AND (? IS NULL OR classifications.code = ?)
+                      AND (? IS NULL OR classifications.code LIKE ? ESCAPE '~')
                       AND (? IS NULL OR documents.status = ?)
                       AND (? IS NULL OR documents.filename LIKE ? ESCAPE '~')
                       AND (? IS NULL OR documents.created_at >= ?)
@@ -1796,6 +1846,7 @@ class SQLiteRepository:
         self,
         query: str,
         classification_code: str | None,
+        classification_prefix: str | None,
         document_status: DocumentStatus | None,
         filename_contains: str | None,
         created_after: datetime | None,
@@ -1804,10 +1855,15 @@ class SQLiteRepository:
     ) -> SearchFacets:
         match_query = normalize_search_query(query, phrase=phrase)
         filename_pattern = f"%{_escape_like(filename_contains)}%" if filename_contains else None
+        classification_prefix_pattern = (
+            f"{_escape_like(classification_prefix)}%" if classification_prefix else None
+        )
         filter_parameters: tuple[object, ...] = (
             match_query,
             classification_code,
             classification_code,
+            classification_prefix_pattern,
+            classification_prefix_pattern,
             document_status.value if document_status else None,
             document_status.value if document_status else None,
             filename_pattern,
@@ -1829,6 +1885,7 @@ class SQLiteRepository:
                       ON classifications.document_id = raw_content_fts.document_id
                     WHERE raw_content_fts MATCH ?
                       AND (? IS NULL OR classifications.code = ?)
+                      AND (? IS NULL OR classifications.code LIKE ? ESCAPE '~')
                       AND (? IS NULL OR documents.status = ?)
                       AND (? IS NULL OR documents.filename LIKE ? ESCAPE '~')
                       AND (? IS NULL OR documents.created_at >= ?)
@@ -1847,6 +1904,7 @@ class SQLiteRepository:
                       ON classifications.document_id = raw_content_fts.document_id
                     WHERE raw_content_fts MATCH ?
                       AND (? IS NULL OR classifications.code = ?)
+                      AND (? IS NULL OR classifications.code LIKE ? ESCAPE '~')
                       AND (? IS NULL OR documents.status = ?)
                       AND (? IS NULL OR documents.filename LIKE ? ESCAPE '~')
                       AND (? IS NULL OR documents.created_at >= ?)
@@ -1865,6 +1923,7 @@ class SQLiteRepository:
                       ON classifications.document_id = raw_content_fts.document_id
                     WHERE raw_content_fts MATCH ?
                       AND (? IS NULL OR classifications.code = ?)
+                      AND (? IS NULL OR classifications.code LIKE ? ESCAPE '~')
                       AND (? IS NULL OR documents.status = ?)
                       AND (? IS NULL OR documents.filename LIKE ? ESCAPE '~')
                       AND (? IS NULL OR documents.created_at >= ?)

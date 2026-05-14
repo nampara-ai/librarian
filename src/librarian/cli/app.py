@@ -948,6 +948,10 @@ def search(
         str | None,
         typer.Option(help="Restrict results to one Dewey classification code."),
     ] = None,
+    classification_prefix: Annotated[
+        str | None,
+        typer.Option(help="Restrict results to Dewey classification codes with this prefix."),
+    ] = None,
     document_status: Annotated[
         str | None,
         typer.Option(help="Restrict results to one document status."),
@@ -984,6 +988,7 @@ def search(
                     limit=limit,
                     offset=offset,
                     classification_code=classification_code,
+                    classification_prefix=classification_prefix,
                     document_status=status_filter,
                     filename_contains=filename_contains,
                     created_after=created_after_filter,
@@ -994,6 +999,7 @@ def search(
                 total = await container.search_library.count(
                     query,
                     classification_code=classification_code,
+                    classification_prefix=classification_prefix,
                     document_status=status_filter,
                     filename_contains=filename_contains,
                     created_after=created_after_filter,
@@ -1025,6 +1031,7 @@ def search(
                 limit=limit,
                 offset=offset,
                 classification_code=classification_code,
+                classification_prefix=classification_prefix,
                 document_status=status_filter,
                 filename_contains=filename_contains,
                 created_after=created_after_filter,

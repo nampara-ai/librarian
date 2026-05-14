@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a30 - 2026-05-14
+
+- Added classification prefix filters to CLI and API search so users can browse
+  Dewey-style result families such as `636` while keeping exact
+  `classification_code` filtering available.
+
 ## 0.1.0a29 - 2026-05-14
 
 - Expanded broad SQLite FTS query normalization for hyphenated and slash-separated

@@ -94,12 +94,14 @@ validated before conversion starts and must not be symlinks or cross symlinked p
   Set `phrase: true`, or use CLI `--phrase`, to treat the whole query as one adjacent phrase
   without manually adding quotes.
   Queries longer than 4,096 characters are rejected before FTS execution.
-  Optional paging and filters: `limit`, `offset`, `classification_code`, `document_status`,
-  `filename_contains`, `created_after`, `created_before`, `phrase`, and `scope` (`cleaned` or
-  `raw`; default `cleaned`). Responses include `total`, the full matching document count before
-  `limit`/`offset` are applied. Date filters are ISO-8601 document creation timestamps; inverted
-  `created_after`/`created_before` windows return `code: "invalid_search_window"` before storage
-  access.
+  Optional paging and filters: `limit`, `offset`, `classification_code`,
+  `classification_prefix`, `document_status`, `filename_contains`, `created_after`,
+  `created_before`, `phrase`, and `scope` (`cleaned` or `raw`; default `cleaned`). Exact
+  classification filters can be combined with prefix filters; prefix filters match Dewey-style
+  families such as `636` against `636.1`. Responses include `total`, the full matching document
+  count before `limit`/`offset` are applied. Date filters are ISO-8601 document creation
+  timestamps; inverted `created_after`/`created_before` windows return
+  `code: "invalid_search_window"` before storage access.
 - `POST /search/results`: ranked full-text search results with `document_id`, `run_id`,
   source metadata, classification metadata, `source`, `snippet`, and `score`. Raw-source search
   results use `source: "raw"` and `run_id: null`. Snippets escape source markup and preserve

@@ -249,6 +249,7 @@ class SearchRequest(BaseModel):
     offset: int = Field(default=0, ge=0)
     phrase: bool = False
     classification_code: str | None = None
+    classification_prefix: str | None = None
     document_status: str | None = None
     filename_contains: str | None = None
     created_after: datetime | None = None
@@ -1463,6 +1464,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 limit=request.limit,
                 offset=request.offset,
                 classification_code=request.classification_code,
+                classification_prefix=request.classification_prefix,
                 document_status=document_status,
                 filename_contains=request.filename_contains,
                 created_after=request.created_after,
@@ -1473,6 +1475,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             total = await container.search_library.count(
                 request.query,
                 classification_code=request.classification_code,
+                classification_prefix=request.classification_prefix,
                 document_status=document_status,
                 filename_contains=request.filename_contains,
                 created_after=request.created_after,
@@ -1502,6 +1505,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 limit=request.limit,
                 offset=request.offset,
                 classification_code=request.classification_code,
+                classification_prefix=request.classification_prefix,
                 document_status=document_status,
                 filename_contains=request.filename_contains,
                 created_after=request.created_after,
@@ -1512,6 +1516,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             total = await container.search_library.count(
                 request.query,
                 classification_code=request.classification_code,
+                classification_prefix=request.classification_prefix,
                 document_status=document_status,
                 filename_contains=request.filename_contains,
                 created_after=request.created_after,
@@ -1552,6 +1557,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             facets = await container.search_library.facets(
                 request.query,
                 classification_code=request.classification_code,
+                classification_prefix=request.classification_prefix,
                 document_status=document_status,
                 filename_contains=request.filename_contains,
                 created_after=request.created_after,
