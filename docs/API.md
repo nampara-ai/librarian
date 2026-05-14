@@ -104,9 +104,9 @@ validated before conversion starts and must not be symlinks or cross symlinked p
   timestamps; inverted `created_after`/`created_before` windows return
   `code: "invalid_search_window"` before storage access.
 - `POST /search/results`: ranked full-text search results with `document_id`, `run_id`,
-  source metadata, classification metadata, `source`, `snippet`, and `score`. Raw-source search
-  results use `source: "raw"` and `run_id: null`. Snippets escape source markup and preserve
-  Librarian-owned `<mark>...</mark>` match highlights.
+  source metadata, document `created_at`, classification metadata, `source`, `snippet`, and
+  `score`. Raw-source search results use `source: "raw"` and `run_id: null`. Snippets escape source
+  markup and preserve Librarian-owned `<mark>...</mark>` match highlights.
   Results are ordered by BM25 relevance score, then newest document creation time, then document ID
   so paged result windows remain deterministic when scores tie.
   Responses include the same `total`, `limit`, and `offset` pagination metadata as `/search`.

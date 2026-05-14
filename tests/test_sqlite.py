@@ -537,8 +537,10 @@ async def test_sqlite_search_supports_offset_and_created_date_filters(tmp_path: 
 
     assert len(all_results) == 1
     assert all_results[0].document_id == old_ingested.document.id
+    assert all_results[0].created_at == old_created
     assert all_count == 2
     assert [item.document_id for item in recent_results] == [new_ingested.document.id]
+    assert recent_results[0].created_at == new_created
     assert recent_count == 1
 
 

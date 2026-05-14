@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a63 - 2026-05-14
+
+- Added document creation timestamps to detailed cleaned/raw search results in
+  the SQLite adapter, API response, and CLI details table so clients can audit
+  recency-aware ranking and paged result windows without fetching each document.
+
 ## 0.1.0a62 - 2026-05-14
 
 - Extended cleaned-output quality validation into LLM OCR correction so page

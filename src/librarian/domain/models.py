@@ -148,6 +148,7 @@ class SearchResult:
     source: str
     filename: str
     document_status: DocumentStatus
+    created_at: datetime
     snippet: str
     score: float
     classification_code: str | None = None

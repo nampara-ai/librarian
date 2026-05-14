@@ -14,7 +14,7 @@
   conversion/OCR adapters, versioned prompts, CLI/API parity, CI, CodeQL,
   Docker, and release automation.
 
-  Current public release: `v0.1.0a62`.
+  Current public release: `v0.1.0a63`.
 
   High-level code tour:
 
@@ -173,7 +173,7 @@
   persists runs and outputs in SQLite; and exposes the same workflow through
   both a CLI and FastAPI API.
 
-  Current release: v0.1.0a62
+  Current release: v0.1.0a63
   Repo: https://github.com/nampara-ai/librarian
 
   Codebase Tour
@@ -225,7 +225,7 @@
 
   The repo is in solid alpha shape:
 
-  - Latest release: v0.1.0a62
+  - Latest release: v0.1.0a63
   - CI passes.
   - CodeQL passes.
   - Release workflow passes.
@@ -1122,3 +1122,8 @@
   path. LLM-corrected OCR page text now carries repeated-tail and related
   warning codes into page manifests and extraction metadata before the text
   reaches the normal cleaning pipeline.
+- 2026-05-14: Improved detailed search observability by surfacing document
+  `created_at` on SQLite search results, API `/search/results` payloads, and
+  CLI `librarian search --details` output. Operators can now audit the
+  recency-aware ranking tiebreaker and paginated result windows without an
+  extra document lookup.

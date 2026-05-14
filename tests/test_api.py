@@ -321,6 +321,7 @@ def test_api_openapi_has_response_models_for_json_endpoints() -> None:
         "limit",
         "offset",
     }
+    assert "created_at" in schemas["SearchResultResponse"]["required"]
     assert {"items", "total", "limit", "offset"} <= set(
         schemas["ImportStatusResponse"]["required"]
     )

@@ -1089,13 +1089,23 @@ def search(
             console.print(
                 f"Showing {len(results)} of {total} results (offset={offset}, limit={limit})"
             )
-            table = Table("Document ID", "Source", "Run ID", "Status", "Class", "Score", "Snippet")
+            table = Table(
+                "Document ID",
+                "Source",
+                "Run ID",
+                "Status",
+                "Created",
+                "Class",
+                "Score",
+                "Snippet",
+            )
             for result in results:
                 table.add_row(
                     str(result.document_id),
                     result.source,
                     str(result.run_id) if result.run_id else "",
                     result.document_status.value,
+                    result.created_at.isoformat(),
                     result.classification_code or "",
                     f"{result.score:.3f}",
                     result.snippet,

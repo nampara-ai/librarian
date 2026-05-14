@@ -275,6 +275,7 @@ class SearchResultResponse(BaseModel):
     source: str
     filename: str
     document_status: str
+    created_at: datetime
     snippet: str
     score: float
     classification_code: str | None = None
@@ -1550,6 +1551,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     source=result.source,
                     filename=result.filename,
                     document_status=result.document_status.value,
+                    created_at=result.created_at,
                     snippet=result.snippet,
                     score=result.score,
                     classification_code=result.classification_code,

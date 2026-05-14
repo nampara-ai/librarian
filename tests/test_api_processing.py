@@ -65,6 +65,7 @@ def test_api_upload_run_and_get_content(tmp_path: Path) -> None:
         assert search.json()["results"][0]["run_id"] == run_id
         assert search.json()["results"][0]["filename"] == "notes.txt"
         assert search.json()["results"][0]["document_status"] == "ready"
+        assert search.json()["results"][0]["created_at"]
         assert search.json()["results"][0]["classification_code"] == "636.1"
         assert "<mark>Horse</mark>" in search.json()["results"][0]["snippet"]
         filtered = client.post(
@@ -120,6 +121,7 @@ def test_api_upload_run_and_get_content(tmp_path: Path) -> None:
         assert raw_search.json()["results"][0]["document_id"] == document_id
         assert raw_search.json()["results"][0]["source"] == "raw"
         assert raw_search.json()["results"][0]["run_id"] is None
+        assert raw_search.json()["results"][0]["created_at"]
         assert "<mark>rough</mark>" in raw_search.json()["results"][0]["snippet"]
         facets = client.post("/search/facets", json={"query": "Horse transcript"})
         assert facets.status_code == 200

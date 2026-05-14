@@ -1503,6 +1503,7 @@ class SQLiteRepository:
                       cleaned_outputs_fts.run_id,
                       documents.filename,
                       documents.status AS document_status,
+                      documents.created_at,
                       classifications.code AS classification_code,
                       classifications.label AS classification_label,
                       snippet(cleaned_outputs_fts, 2, ?, ?, '...', 16) AS snippet,
@@ -1542,6 +1543,7 @@ class SQLiteRepository:
                 source="cleaned",
                 filename=str(row["filename"]),
                 document_status=DocumentStatus(str(row["document_status"])),
+                created_at=_parse_datetime(str(row["created_at"])),
                 snippet=_render_search_snippet(str(row["snippet"])),
                 score=float(row["score"]),
                 classification_code=(
@@ -1657,6 +1659,7 @@ class SQLiteRepository:
                       raw_content_fts.document_id,
                       documents.filename,
                       documents.status AS document_status,
+                      documents.created_at,
                       classifications.code AS classification_code,
                       classifications.label AS classification_label,
                       snippet(raw_content_fts, 1, ?, ?, '...', 16) AS snippet,
@@ -1686,6 +1689,7 @@ class SQLiteRepository:
                 source="raw",
                 filename=str(row["filename"]),
                 document_status=DocumentStatus(str(row["document_status"])),
+                created_at=_parse_datetime(str(row["created_at"])),
                 snippet=_render_search_snippet(str(row["snippet"])),
                 score=float(row["score"]),
                 classification_code=(

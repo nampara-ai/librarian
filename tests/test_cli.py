@@ -201,6 +201,7 @@ def test_cli_search_details_reports_total_without_changing_id_output(tmp_path: P
     assert "Showing" not in ids.output
     assert details.exit_code == 0
     assert "Showing 1 of 2 results (offset=0, limit=1)" in _strip_ansi(details.output)
+    assert "Created" in _strip_ansi(details.output)
     assert phrase.exit_code == 0
     assert "Showing 1 of 1 results (offset=0, limit=20)" in _strip_ansi(phrase.output)
 

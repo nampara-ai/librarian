@@ -44,6 +44,7 @@ class FakeSearchIndex:
                 source="cleaned",
                 filename="notes.md",
                 document_status=DocumentStatus.READY,
+                created_at=datetime(2026, 1, 2, tzinfo=UTC),
                 snippet="<mark>horse</mark>",
                 score=-0.25,
                 classification_code="636.1",
