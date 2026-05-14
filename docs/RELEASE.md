@@ -42,7 +42,9 @@ uv run python .github/scripts/verify_release_evidence.py \
    size, throughput, warning, and failure metrics, are recomputed from per-case records during
    verification. Corpus-eval aggregate summaries, including size, OCR, correction, peak-memory,
    search, failure, retry, failed-page, and max page duration metrics, are recomputed from per-case
-   records during verification.
+   records during verification. Benchmark aggregate summaries, including input size, chunk counts,
+   total duration, average throughput, and fastest throughput, are recomputed from per-run records
+   during verification.
 6. Run secret scanning:
 
 ```bash

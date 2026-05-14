@@ -22,6 +22,8 @@ benchmark `--input-path` files are capped at 100 MiB. Benchmark repeat counts an
 dimensions must be positive both in the CLI and the application harness.
 Benchmark JSON results include Librarian version, generation timestamp, cleaning prompt version,
 aggregate throughput/size/chunk summary metrics, and per-run timing details.
+Release-candidate evidence verification recomputes benchmark aggregate input size, chunk count,
+total duration, average throughput, and fastest throughput from the per-run records.
 
 ## Real Provider Run
 

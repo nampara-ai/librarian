@@ -727,7 +727,14 @@ def test_release_evidence_verifier_accepts_passing_artifacts(tmp_path: Path) -> 
           "generated_at": "2026-05-13T00:00:00+00:00",
           "librarian_version": "0.1.0a4",
           "cleaning_prompt_version": "cmos_v2",
-          "summary": {"run_count": 1, "average_chars_per_second": 1000},
+          "summary": {
+            "run_count": 1,
+            "average_chars_per_second": 1000,
+            "fastest_chars_per_second": 1000,
+            "total_input_chars": 100,
+            "total_chunks": 1,
+            "total_seconds": 0.1
+          },
           "runs": [
             {
               "provider": "openai-compatible",
@@ -993,6 +1000,61 @@ def test_release_evidence_verifier_rejects_mismatched_eval_summary(
     )
 
     assert verifier.main(["--eval", str(eval_path), "--version", "v0.1.0a4"]) == 1
+
+
+def test_release_evidence_verifier_rejects_mismatched_benchmark_summary(
+    tmp_path: Path,
+) -> None:
+    verifier = _load_release_evidence_module()
+    benchmark_path = tmp_path / "benchmark.json"
+    benchmark_path.write_text(
+        """
+        {
+          "artifact_type": "librarian-benchmark-result",
+          "evidence_tier": "real-provider",
+          "generated_at": "2026-05-13T00:00:00+00:00",
+          "librarian_version": "0.1.0a4",
+          "cleaning_prompt_version": "cmos_v2",
+          "summary": {
+            "run_count": 1,
+            "average_chars_per_second": 1000,
+            "fastest_chars_per_second": 1000,
+            "total_input_chars": 99,
+            "total_chunks": 1,
+            "total_seconds": 0.1
+          },
+          "runs": [
+            {
+              "provider": "openai-compatible",
+              "model": "gpt-4.1-mini",
+              "input_chars": 100,
+              "chunks": 1,
+              "chunking_seconds": 0.01,
+              "cleaning_seconds": 0.09,
+              "total_seconds": 0.1,
+              "chars_per_second": 1000,
+              "chunk_target_chars": 8000,
+              "chunk_overlap_chars": 400
+            }
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    assert (
+        verifier.main(
+            [
+                "--benchmark",
+                str(benchmark_path),
+                "--min-benchmark-cps",
+                "10",
+                "--version",
+                "v0.1.0a4",
+            ]
+        )
+        == 1
+    )
 
 
 def test_release_evidence_verifier_rejects_low_corpus_output_ratio(tmp_path: Path) -> None:

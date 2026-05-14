@@ -488,6 +488,61 @@ def _check_benchmark_runs(
             )
 
 
+def _check_benchmark_aggregate_summary(
+    runs: Any,
+    summary: dict[str, Any],
+    path: Path,
+    *,
+    failures: list[str],
+) -> None:
+    if not isinstance(runs, list) or not all(isinstance(item, dict) for item in runs):
+        return
+    input_chars = 0
+    chunks = 0
+    total_seconds = 0.0
+    chars_per_second: list[float] = []
+    for item in runs:
+        run_input_chars = item.get("input_chars")
+        if isinstance(run_input_chars, int | float) and run_input_chars >= 0:
+            input_chars += int(run_input_chars)
+        run_chunks = item.get("chunks")
+        if isinstance(run_chunks, int) and run_chunks >= 0:
+            chunks += run_chunks
+        run_total_seconds = item.get("total_seconds")
+        if isinstance(run_total_seconds, int | float) and float(run_total_seconds) >= 0:
+            total_seconds += float(run_total_seconds)
+        cps = item.get("chars_per_second")
+        if isinstance(cps, int | float) and float(cps) > 0:
+            chars_per_second.append(float(cps))
+
+    if summary.get("total_input_chars") != input_chars:
+        failures.append(f"{path}: benchmark total_input_chars does not match runs")
+    if summary.get("total_chunks") != chunks:
+        failures.append(f"{path}: benchmark total_chunks does not match runs")
+    actual_total_seconds = summary.get("total_seconds")
+    if (
+        not isinstance(actual_total_seconds, int | float)
+        or abs(float(actual_total_seconds) - total_seconds) > 1e-9
+    ):
+        failures.append(f"{path}: benchmark total_seconds does not match runs")
+    expected_average_cps = (
+        sum(chars_per_second) / len(chars_per_second) if chars_per_second else 0.0
+    )
+    actual_average_cps = summary.get("average_chars_per_second")
+    if (
+        not isinstance(actual_average_cps, int | float)
+        or abs(float(actual_average_cps) - expected_average_cps) > 1e-9
+    ):
+        failures.append(f"{path}: benchmark average_chars_per_second does not match runs")
+    expected_fastest_cps = max(chars_per_second, default=0.0)
+    actual_fastest_cps = summary.get("fastest_chars_per_second")
+    if (
+        not isinstance(actual_fastest_cps, int | float)
+        or abs(float(actual_fastest_cps) - expected_fastest_cps) > 1e-9
+    ):
+        failures.append(f"{path}: benchmark fastest_chars_per_second does not match runs")
+
+
 def verify_eval(
     path: Path,
     *,
@@ -684,6 +739,7 @@ def verify_benchmark(
         failures,
     )
     _check_benchmark_runs(runs, summary, path, failures=failures)
+    _check_benchmark_aggregate_summary(runs, summary, path, failures=failures)
     _check_generated_at(payload, path, label="benchmark", failures=failures)
     _expect(
         bool(payload.get("librarian_version")),

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a42 - 2026-05-14
+
+- Expanded benchmark release evidence verification to recompute aggregate
+  input-size, chunk-count, duration, and throughput summary metrics from
+  per-run records.
+
 ## 0.1.0a41 - 2026-05-14
 
 - Expanded prompt-eval release evidence verification to recompute aggregate
