@@ -67,7 +67,8 @@ uv run python .github/scripts/verify_release_evidence.py \
    verification. Corpus-eval aggregate summaries, including size, OCR, correction, peak-memory,
    search, failure, retry, failed-page, and max page duration metrics, are recomputed from per-case
    records during verification, and any failed or pending page extraction status rejects the
-   evidence. Benchmark aggregate summaries, including input size, chunk counts,
+   evidence. PDF/OCR coverage tags must also be backed by page count, page source, and OCR page
+   metrics. Benchmark aggregate summaries, including input size, chunk counts,
    total duration, average throughput, and fastest throughput, are recomputed from per-run records
    during verification. Per-record derived metrics, including eval and corpus output ratios,
    corpus search recall, and benchmark run throughput, must also match their raw diagnostics.

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.0a58 - 2026-05-14
+
+- Hardened corpus-eval release evidence against tag spoofing by requiring PDF
+  tags to include page counts/status/source diagnostics, OCR/scanned tags to
+  include OCR page/source metrics, and mixed embedded/scanned PDF tags to prove
+  both embedded and OCR page sources.
+
 ## 0.1.0a57 - 2026-05-14
 
 - Tightened release corpus-eval evidence verification so PDF/page extraction

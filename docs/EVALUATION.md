@@ -35,6 +35,9 @@ PDFs, noisy OCR, mixed embedded/scanned PDFs, and SRT/VTT caption transcripts.
 Corpus-eval evidence is rejected if any page-level extraction status remains `failed` or `pending`;
 release artifacts must represent completed PDF/OCR extraction, not only internally consistent
 diagnostics.
+PDF/OCR corpus tags are semantic gates: `pdf` cases must include page diagnostics, OCR/scanned
+cases must include OCR page/source metrics, and mixed embedded/scanned PDF cases must prove both
+embedded and OCR page sources.
 
 ## Real Provider Run
 

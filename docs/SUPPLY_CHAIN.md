@@ -7,6 +7,8 @@ Current release safeguards:
   distributions or Docker images.
 - Release evidence verification rejects corpus-eval page diagnostics that still contain failed or
   pending PDF/OCR page extraction statuses.
+- Release evidence verification also cross-checks PDF/OCR corpus tags against page-source and OCR
+  metrics so tag strings cannot claim coverage without matching diagnostics.
 - CI and tag release workflows run `pip-audit --skip-editable` against the resolved Python
   environment. The local editable package is skipped because it is not a PyPI dependency; resolved
   third-party packages are still audited.

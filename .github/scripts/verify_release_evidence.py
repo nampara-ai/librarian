@@ -325,8 +325,12 @@ def _check_corpus_case_metrics(
             continue
         if not isinstance(item.get("name"), str) or not item.get("name"):
             failures.append(f"{path}: corpus eval case {index} missing name")
-        if not isinstance(item.get("tags"), list):
+        tags_obj = item.get("tags")
+        tags: set[str] = set()
+        if not isinstance(tags_obj, list):
             failures.append(f"{path}: corpus eval case {index} missing tags list")
+        else:
+            tags = {tag for tag in tags_obj if isinstance(tag, str)}
         for key in ("source_path", "output_path"):
             if not isinstance(item.get(key), str) or not item.get(key):
                 failures.append(f"{path}: corpus eval case {index} missing {key}")
@@ -384,6 +388,35 @@ def _check_corpus_case_metrics(
         for key in ("page_attempts", "ocr_pages", "corrected_pages"):
             if not isinstance(item.get(key), int) or item.get(key, -1) < 0:
                 failures.append(f"{path}: corpus eval case {index} missing nonnegative {key}")
+        page_count = item.get("page_count")
+        if page_count is not None and (
+            not isinstance(page_count, int) or page_count <= 0
+        ):
+            failures.append(f"{path}: corpus eval case {index} invalid page_count")
+        ocr_pages = item.get("ocr_pages")
+        if "pdf" in tags:
+            if not isinstance(page_count, int) or page_count <= 0:
+                failures.append(f"{path}: corpus eval case {index} pdf tag missing page_count")
+            if not isinstance(status_counts, dict) or not status_counts:
+                failures.append(
+                    f"{path}: corpus eval case {index} pdf tag missing page statuses"
+                )
+            if not isinstance(source_counts, dict) or not source_counts:
+                failures.append(f"{path}: corpus eval case {index} pdf tag missing page sources")
+        if tags & {"ocr", "scanned", "noisy-ocr"}:
+            if not isinstance(ocr_pages, int) or ocr_pages <= 0:
+                failures.append(f"{path}: corpus eval case {index} ocr tag missing OCR pages")
+            if not isinstance(source_counts, dict) or source_counts.get("ocr", 0) <= 0:
+                failures.append(f"{path}: corpus eval case {index} ocr tag missing OCR source")
+        if "mixed-embedded-scanned" in tags:
+            if not isinstance(source_counts, dict) or source_counts.get("embedded", 0) <= 0:
+                failures.append(
+                    f"{path}: corpus eval case {index} mixed PDF tag missing embedded source"
+                )
+            if not isinstance(source_counts, dict) or source_counts.get("ocr", 0) <= 0:
+                failures.append(
+                    f"{path}: corpus eval case {index} mixed PDF tag missing OCR source"
+                )
         max_page_duration = item.get("max_page_duration_ms")
         if max_page_duration is not None and (
             not isinstance(max_page_duration, int | float)
