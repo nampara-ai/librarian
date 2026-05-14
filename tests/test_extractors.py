@@ -15,6 +15,7 @@ from librarian.ingest.extractors import (
     OcrTextResult,
     PdfExtractor,
     TextFamilyExtractor,
+    TranscriptFileExtractor,
 )
 from librarian.llm.mock import MockLLMProvider
 
@@ -93,6 +94,50 @@ async def test_text_family_extractor_rejects_renamed_zip_archive(tmp_path: Path)
 
     with pytest.raises(ValueError, match="Archive inputs are not supported"):
         await TextFamilyExtractor().extract(path)
+
+
+@pytest.mark.asyncio
+async def test_transcript_file_extractor_normalizes_srt(tmp_path: Path) -> None:
+    path = tmp_path / "captions.srt"
+    path.write_text(
+        "1\n"
+        "00:00:01,000 --> 00:00:02,000\n"
+        "Ada: Hello\n\n"
+        "2\n"
+        "00:00:02,000 --> 00:00:04,000\n"
+        "world.\n",
+        encoding="utf-8",
+    )
+
+    text = await TranscriptFileExtractor().extract(path)
+
+    assert text == "- [00:01] Ada: Hello world."
+
+
+@pytest.mark.asyncio
+async def test_composite_extractor_normalizes_vtt(tmp_path: Path) -> None:
+    path = tmp_path / "captions.vtt"
+    path.write_text(
+        "WEBVTT\n\n"
+        "00:00:00.000 --> 00:00:01.000 align:start\n"
+        "Opening line\n\n"
+        "00:00:01.000 --> 00:00:03.000\n"
+        "continues.\n",
+        encoding="utf-8",
+    )
+
+    text = await CompositeExtractor().extract(path)
+
+    assert text == "- [00:00] Opening line continues."
+
+
+@pytest.mark.asyncio
+async def test_transcript_file_extractor_rejects_malformed_captions(tmp_path: Path) -> None:
+    path = tmp_path / "captions.srt"
+    path.write_text("no timestamps here", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="No timestamped transcript segments found"):
+        await TranscriptFileExtractor().extract(path)
 
 
 @pytest.mark.asyncio

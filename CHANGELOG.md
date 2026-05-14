@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.0a47 - 2026-05-14
+
+- Added direct `.srt` and `.vtt` ingest/conversion support through the composite
+  extractor, rendering timestamped captions as sentence-merged Markdown before
+  import or conversion.
+- Fixed VTT cue-setting handling so settings such as `align:start` and
+  `position:10%` are not treated as transcript text.
+
 ## 0.1.0a46 - 2026-05-14
 
 - Added transcript quote matching and the `librarian transcript-find` CLI command

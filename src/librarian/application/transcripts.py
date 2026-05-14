@@ -530,7 +530,7 @@ def _normalize_for_matching(value: str) -> str:
 
 
 def _strip_vtt_settings(value: str) -> str:
-    return re.sub(r"\s+(?:align|line|position|size|vertical):\S+", "", value).strip()
+    return re.sub(r"(?:^|\s)(?:align|line|position|size|vertical):\S+", " ", value).strip()
 
 
 def _normalize_segment_text(value: str) -> str:

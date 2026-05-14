@@ -88,6 +88,7 @@ or cross symlinked parents.
 Built-in support:
 
 - Text-like: `.txt`, `.md`, `.csv`, `.json`
+- Transcript captions: `.srt`, `.vtt` converted to timestamped Markdown with sentence merging
 - Office/PDF: `.docx`, `.pdf`
 - OCR images: `.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff`, `.bmp`, `.webp`
 

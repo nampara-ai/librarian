@@ -34,6 +34,29 @@ async def test_convert_file_to_markdown(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_convert_srt_file_to_markdown(tmp_path: Path) -> None:
+    source = tmp_path / "captions.srt"
+    output = tmp_path / "captions.md"
+    source.write_text(
+        "1\n"
+        "00:00:03,000 --> 00:00:04,000\n"
+        "Host: Welcome\n\n"
+        "2\n"
+        "00:00:04,000 --> 00:00:06,000\n"
+        "back.\n",
+        encoding="utf-8",
+    )
+
+    await DocumentConverter(CompositeExtractor()).convert_file(
+        source,
+        output,
+        format=ConversionFormat.MARKDOWN,
+    )
+
+    assert "- [00:03] Host: Welcome back." in output.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
 async def test_convert_file_rejects_symlink_output(tmp_path: Path) -> None:
     source = tmp_path / "meeting.txt"
     source.write_text("Speaker: Hello world.", encoding="utf-8")

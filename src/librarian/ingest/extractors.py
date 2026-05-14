@@ -18,6 +18,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
+from librarian.application.transcripts import (
+    TranscriptFormat,
+    parse_transcript,
+    render_transcript,
+)
 from librarian.observability import sanitize_error_message
 
 IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"})
@@ -128,6 +133,35 @@ class TextFamilyExtractor:
                 return text
             return json.dumps(parsed, indent=2, ensure_ascii=False)
         return text
+
+
+class TranscriptFileExtractor:
+    """Extractor for timestamped transcript caption files."""
+
+    supported_extensions = frozenset({".srt", ".vtt"})
+
+    def __init__(self, *, max_input_bytes: int = 100 * 1024 * 1024) -> None:
+        self.max_input_bytes = max_input_bytes
+
+    async def extract(self, path: Path) -> str:
+        return await asyncio.to_thread(self._extract_sync, path)
+
+    def _extract_sync(self, path: Path) -> str:
+        _validate_input_size(path, self.max_input_bytes, "Transcript extraction input")
+        _validate_text_like(path)
+        text = _read_limited_text_file(
+            path,
+            max_bytes=self.max_input_bytes,
+            label="Transcript extraction input",
+        )
+        segments = parse_transcript(text)
+        if not segments:
+            raise ValueError(f"No timestamped transcript segments found: {path}")
+        return render_transcript(
+            segments,
+            format=TranscriptFormat.MARKDOWN,
+            merge_sentences=True,
+        )
 
 
 class DocxExtractor:
@@ -676,6 +710,7 @@ class CompositeExtractor:
     ) -> None:
         extractors = [
             TextFamilyExtractor(max_input_bytes=text_max_input_bytes),
+            TranscriptFileExtractor(max_input_bytes=text_max_input_bytes),
             DocxExtractor(max_input_bytes=docx_max_input_bytes),
             PdfExtractor(
                 ocr_language=ocr_language,

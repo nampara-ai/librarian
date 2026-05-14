@@ -43,6 +43,19 @@ It held at 3.14.
     assert segments[1].text == "It held at 3.14."
 
 
+def test_parse_transcript_strips_vtt_cue_settings() -> None:
+    segments = parse_transcript(
+        """WEBVTT
+
+00:00:00.000 --> 00:00:01.000 align:start position:10%
+Opening line.
+"""
+    )
+
+    assert len(segments) == 1
+    assert segments[0].text == "Opening line."
+
+
 def test_merge_transcript_sentences_avoids_common_abbreviation_split() -> None:
     segments = parse_transcript(
         """[00:00] Dr.

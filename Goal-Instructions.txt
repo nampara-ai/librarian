@@ -1055,3 +1055,8 @@
   `librarian transcript-find`, with exact normalized matching and bounded fuzzy
   fallback so transcript excerpts can be mapped back to source segment and
   timestamp evidence before import, search, or publication.
+- 2026-05-14: Added direct SRT/VTT ingest and conversion support, routing
+  caption files through the transcript parser so `librarian import` and
+  `librarian convert` produce timestamped, sentence-merged Markdown instead of
+  raw caption cue text. Also fixed VTT cue settings so layout directives do not
+  leak into transcript content.
