@@ -179,6 +179,21 @@ def test_release_workflow_runs_synthetic_corpus_eval_before_build() -> None:
     ):
         assert f"--require-eval-tag {tag}" in workflow
     assert "--min-corpus-cases 13" in workflow
+    for tag in (
+        "docx",
+        "tables",
+        "headers-footers",
+        "pdf",
+        "embedded-text",
+        "scanned",
+        "ocr",
+        "noisy-ocr",
+        "mixed-embedded-scanned",
+        "transcript-caption",
+        "srt",
+        "vtt",
+    ):
+        assert f"--require-corpus-tag {tag}" in workflow
     assert "--min-corpus-search-recall 1.0" in workflow
     assert "--min-corpus-output-ratio 0.05" in workflow
     assert "--min-benchmark-cps 1000" in workflow
@@ -202,6 +217,21 @@ def test_release_docs_use_one_release_version_variable() -> None:
     ):
         assert f"--require-eval-tag {tag}" in release_doc
     assert "--min-corpus-output-ratio 0.05" in release_doc
+    for tag in (
+        "docx",
+        "tables",
+        "headers-footers",
+        "pdf",
+        "embedded-text",
+        "scanned",
+        "ocr",
+        "noisy-ocr",
+        "mixed-embedded-scanned",
+        "transcript-caption",
+        "srt",
+        "vtt",
+    ):
+        assert f"--require-corpus-tag {tag}" in release_doc
     assert 'git tag "v${RELEASE_VERSION}"' in release_doc
     assert 'git push origin "v${RELEASE_VERSION}"' in release_doc
     assert "git tag v0.1.0a4" not in release_doc
@@ -792,6 +822,8 @@ def test_release_evidence_verifier_accepts_passing_artifacts(tmp_path: Path) -> 
                 "provider",
                 "--min-corpus-cases",
                 "8",
+                "--require-corpus-tag",
+                "pdf",
                 "--min-benchmark-cps",
                 "10",
                 "--min-corpus-output-ratio",
@@ -1345,6 +1377,95 @@ def test_release_evidence_verifier_rejects_low_corpus_output_ratio(tmp_path: Pat
                 "0.05",
                 "--version",
                 "v0.1.0a4",
+            ]
+        )
+        == 1
+    )
+
+
+def test_release_evidence_verifier_rejects_missing_corpus_tags(tmp_path: Path) -> None:
+    verifier = _load_release_evidence_module()
+    corpus_path = tmp_path / "corpus.json"
+    corpus_path.write_text(
+        """
+        {
+          "artifact_type": "librarian-corpus-eval-result",
+          "evidence_tier": "mock-smoke",
+          "passed": true,
+          "llm_provider": "mock",
+          "llm_model": "mock-cleaner",
+          "generated_at": "2026-05-13T00:00:00+00:00",
+          "librarian_version": "0.1.0a4",
+          "cleaning_prompt_version": "cmos_v2",
+          "classification_prompt_version": "dewey_v2",
+          "summary": {
+            "case_count": 1,
+            "passed_count": 1,
+            "failed_count": 0,
+            "failure_count": 0,
+            "failure_case_count": 0,
+            "average_search_recall": 1.0,
+            "total_input_bytes": 1000,
+            "total_output_chars": 800,
+            "total_ocr_pages": 0,
+            "total_corrected_pages": 0,
+            "max_peak_memory_bytes": 1000,
+            "total_search_phrases": 1,
+            "total_search_hits": 1,
+            "total_page_attempts": 0,
+            "total_failed_pages": 0,
+            "max_page_duration_ms": null
+          },
+          "cases": [
+            {
+              "name": "markdown case",
+              "passed": true,
+              "tags": ["markdown"],
+              "source_path": "corpus/one.md",
+              "output_path": "converted/one.md",
+              "input_bytes": 1000,
+              "output_chars": 800,
+              "output_char_ratio": 0.8,
+              "conversion_seconds": 0.1,
+              "processing_seconds": 0.2,
+              "peak_memory_bytes": 1000,
+              "page_status_counts": {},
+              "page_source_counts": {},
+              "page_warning_counts": {},
+              "page_attempts": 0,
+              "max_page_duration_ms": null,
+              "ocr_pages": 0,
+              "corrected_pages": 0,
+              "average_ocr_confidence": null,
+              "search_recall": 1.0,
+              "search_diagnostics": [
+                {
+                  "phrase": "anchor",
+                  "hit": true,
+                  "total_results": 1,
+                  "returned_document_ids": ["doc_1"],
+                  "error": null
+                }
+              ],
+              "classification_code": "636.1",
+              "classification_label": "Horses",
+              "failures": []
+            }
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    assert (
+        verifier.main(
+            [
+                "--corpus-eval",
+                str(corpus_path),
+                "--require-corpus-tag",
+                "markdown",
+                "--require-corpus-tag",
+                "pdf",
             ]
         )
         == 1

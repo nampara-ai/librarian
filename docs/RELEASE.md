@@ -35,6 +35,18 @@ uv run python .github/scripts/verify_release_evidence.py \
   --require-eval-tag markdown \
   --require-eval-tag ocr-correction \
   --min-corpus-cases 13 \
+  --require-corpus-tag docx \
+  --require-corpus-tag tables \
+  --require-corpus-tag headers-footers \
+  --require-corpus-tag pdf \
+  --require-corpus-tag embedded-text \
+  --require-corpus-tag scanned \
+  --require-corpus-tag ocr \
+  --require-corpus-tag noisy-ocr \
+  --require-corpus-tag mixed-embedded-scanned \
+  --require-corpus-tag transcript-caption \
+  --require-corpus-tag srt \
+  --require-corpus-tag vtt \
   --min-corpus-search-recall 1.0 \
   --min-corpus-output-ratio 0.05
 ```

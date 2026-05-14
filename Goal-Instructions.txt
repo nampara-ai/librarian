@@ -1088,3 +1088,7 @@
   tags for classification, transcript, legal, technical, no-summarization,
   Markdown, and OCR-correction coverage, so six arbitrary passing eval cases can
   no longer satisfy CI or release gates.
+- 2026-05-14: Hardened corpus-eval release evidence with required per-case tags
+  for DOCX, tables, headers/footers, embedded PDFs, scanned OCR PDFs, noisy OCR,
+  mixed embedded/scanned PDFs, and SRT/VTT caption transcripts, so thirteen
+  arbitrary passing corpus cases can no longer satisfy CI or release gates.

@@ -29,6 +29,8 @@ search recall, and benchmark run throughput, against the raw size, timing, and s
 CI and release builds require at least six prompt-eval cases and verify that the per-case tags cover
 the shipped transcript, legal, technical, Markdown, OCR-correction, classification, and
 no-summarization fixtures so risk coverage cannot be accidentally dropped.
+They also require the corpus-eval evidence tags for DOCX tables/headers, embedded PDFs, scanned OCR
+PDFs, noisy OCR, mixed embedded/scanned PDFs, and SRT/VTT caption transcripts.
 
 ## Real Provider Run
 

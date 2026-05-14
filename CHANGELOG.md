@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.0a55 - 2026-05-14
+
+- Added required corpus-eval tag coverage to release evidence verification and
+  wired CI, release, and manual release checks to require the shipped DOCX,
+  table/header/footer, embedded PDF, scanned OCR PDF, noisy OCR, mixed
+  embedded/scanned PDF, and SRT/VTT caption transcript coverage tags in per-case
+  evidence.
+
 ## 0.1.0a54 - 2026-05-14
 
 - Added required prompt-eval tag coverage to release evidence verification and

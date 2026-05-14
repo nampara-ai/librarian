@@ -117,6 +117,21 @@ def test_ci_runs_and_verifies_example_evidence() -> None:
     ):
         assert f"--require-eval-tag {tag}" in workflow
     assert "--min-corpus-cases 13" in workflow
+    for tag in (
+        "docx",
+        "tables",
+        "headers-footers",
+        "pdf",
+        "embedded-text",
+        "scanned",
+        "ocr",
+        "noisy-ocr",
+        "mixed-embedded-scanned",
+        "transcript-caption",
+        "srt",
+        "vtt",
+    ):
+        assert f"--require-corpus-tag {tag}" in workflow
     assert "--min-corpus-search-recall 1.0" in workflow
     assert "--min-corpus-output-ratio 0.05" in workflow
     assert "--min-benchmark-cps 1000" in workflow

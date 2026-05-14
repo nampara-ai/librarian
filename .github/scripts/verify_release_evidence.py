@@ -399,6 +399,30 @@ def _check_corpus_case_metrics(
                 )
 
 
+def _check_required_corpus_tags(
+    payload: dict[str, Any],
+    path: Path,
+    *,
+    required_tags: set[str],
+    failures: list[str],
+) -> None:
+    if not required_tags:
+        return
+    cases = payload.get("cases")
+    if not isinstance(cases, list):
+        return
+    present_tags: set[str] = set()
+    for item in cases:
+        if not isinstance(item, dict):
+            continue
+        tags = item.get("tags")
+        if isinstance(tags, list):
+            present_tags.update(tag for tag in tags if isinstance(tag, str))
+    missing_tags = sorted(required_tags - present_tags)
+    if missing_tags:
+        failures.append(f"{path}: corpus eval missing required tags: {', '.join(missing_tags)}")
+
+
 def _check_corpus_aggregate_summary(
     payload: dict[str, Any],
     summary: dict[str, Any],
@@ -697,6 +721,7 @@ def verify_corpus_eval(
     min_search_recall: float,
     min_output_ratio: float,
     min_cases: int,
+    required_tags: set[str],
     expected_version: str | None,
 ) -> list[str]:
     payload = _load_json(path)
@@ -745,6 +770,7 @@ def verify_corpus_eval(
     _check_pass_counts(summary, path, label="corpus eval", failures=failures)
     _check_case_results(payload, summary, path, label="corpus eval", failures=failures)
     _check_corpus_case_metrics(payload, path, failures=failures)
+    _check_required_corpus_tags(payload, path, required_tags=required_tags, failures=failures)
     _check_corpus_aggregate_summary(payload, summary, path, failures=failures)
     _expect(summary.get("failure_count") == 0, f"{path}: corpus eval failures recorded", failures)
     _expect(
@@ -866,6 +892,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-corpus-search-recall", type=float, default=1.0)
     parser.add_argument("--min-corpus-output-ratio", type=float, default=0.0)
     parser.add_argument("--min-corpus-cases", type=int, default=1)
+    parser.add_argument("--require-corpus-tag", action="append", default=[])
     parser.add_argument("--min-eval-cases", type=int, default=1)
     parser.add_argument("--require-eval-tag", action="append", default=[])
     parser.add_argument("--min-benchmark-cps", type=float, default=1.0)
@@ -896,6 +923,7 @@ def main(argv: list[str] | None = None) -> int:
                     min_search_recall=args.min_corpus_search_recall,
                     min_output_ratio=args.min_corpus_output_ratio,
                     min_cases=args.min_corpus_cases,
+                    required_tags=set(args.require_corpus_tag),
                     expected_version=args.version,
                 )
             )
