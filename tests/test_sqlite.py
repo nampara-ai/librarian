@@ -1174,6 +1174,7 @@ async def test_sqlite_rejects_unbounded_limits(tmp_path: Path) -> None:
         await container.repository.list_runs(limit=0)
     with pytest.raises(ValueError, match="offset"):
         await container.repository.list_runs(offset=-1)
+    assert await container.repository.count_runs() == 0
     with pytest.raises(ValueError, match="limit"):
         await container.repository.list(limit=0)
     with pytest.raises(ValueError, match="offset"):

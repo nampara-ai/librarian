@@ -51,6 +51,8 @@ class RunRepository(Protocol):
 
     async def is_run_canceled(self, run_id: RunId) -> bool: ...
 
+    async def count_runs(self) -> int: ...
+
     async def update_status(
         self,
         run_id: RunId,

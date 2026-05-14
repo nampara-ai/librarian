@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a32 - 2026-05-14
+
+- Added total run counts to `GET /runs` responses through a repository-level
+  `count_runs` capability so API clients can page through large run histories
+  without inferring totals from the current page.
+
 ## 0.1.0a31 - 2026-05-14
 
 - Added bounded search facet buckets with `facet_limit` so broad facet queries

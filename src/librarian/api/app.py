@@ -223,6 +223,7 @@ class RunResponse(BaseModel):
 
 class RunsResponse(BaseModel):
     runs: list[RunResponse]
+    total: int
     limit: int
     offset: int
 
@@ -1097,8 +1098,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> RunsResponse:
         container = await build_ingest_container(settings)
         runs = await container.repository.list_runs(limit=limit, offset=offset)
+        total = await container.repository.count_runs()
         return RunsResponse(
             runs=[_run_response(run) for run in runs],
+            total=total,
             limit=limit,
             offset=offset,
         )

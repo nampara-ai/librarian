@@ -1540,6 +1540,9 @@ def test_api_import_endpoint_and_run_controls(tmp_path: Path) -> None:
         runs = client.get("/runs?limit=10")
         assert runs.status_code == 200
         assert runs.json()["runs"]
+        assert runs.json()["total"] >= 1
+        assert runs.json()["limit"] == 10
+        assert runs.json()["offset"] == 0
 
         deleted = client.delete(f"/documents/{document_id}")
         assert deleted.status_code == 200

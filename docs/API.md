@@ -72,7 +72,8 @@ validated before conversion starts and must not be symlinks or cross symlinked p
 ## Runs
 
 - `POST /runs`: create a processing run for one document.
-- `GET /runs?limit=100&offset=0`: list runs.
+- `GET /runs?limit=100&offset=0`: list runs. Responses include `total`, `limit`, and `offset`
+  so operator clients can page through large run histories.
 - `GET /runs/{id}`: run status.
 - `POST /runs/{id}/cancel`: mark a run canceled.
 - `POST /runs/{id}/retry`: replay a failed run as a new run.

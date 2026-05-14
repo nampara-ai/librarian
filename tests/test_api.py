@@ -308,6 +308,7 @@ def test_api_openapi_has_response_models_for_json_endpoints() -> None:
         "limit",
         "offset",
     }
+    assert {"runs", "total", "limit", "offset"} <= set(schemas["RunsResponse"]["required"])
     assert set(schemas["SearchResponse"]["required"]) == {
         "document_ids",
         "total",

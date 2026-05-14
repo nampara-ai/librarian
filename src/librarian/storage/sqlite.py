@@ -436,6 +436,10 @@ class SQLiteRepository:
         """Return true when a run has been canceled."""
         return await asyncio.to_thread(self._is_run_canceled_sync, run_id)
 
+    async def count_runs(self) -> int:
+        """Count processing runs."""
+        return await asyncio.to_thread(self._count_runs_sync)
+
     async def list_runs(self, *, limit: int = 100, offset: int = 0) -> Sequence[ProcessingRun]:
         """List processing runs."""
         return await asyncio.to_thread(self._list_runs_sync, limit, offset)
@@ -875,6 +879,11 @@ class SQLiteRepository:
                 (str(run_id), RunStatus.CANCELED.value),
             ).fetchone()
         return row is not None
+
+    def _count_runs_sync(self) -> int:
+        with self.database.connect() as connection:
+            row = connection.execute("SELECT COUNT(*) AS count FROM runs").fetchone()
+        return int(row["count"]) if row else 0
 
     def _list_runs_sync(self, limit: int, offset: int) -> list[ProcessingRun]:
         if limit < 1 or limit > 500:
