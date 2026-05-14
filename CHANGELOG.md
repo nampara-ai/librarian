@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a71 - 2026-05-14
+
+- Added structural corpus-eval expectations for regex-backed formatting/math/footnote checks and
+  Markdown table row/column relationships, then wired the generated and shipped DOCX table fixtures
+  to prove table cell relationships instead of only checking that table text appears somewhere.
+
 ## 0.1.0a70 - 2026-05-14
 
 - Added optional transcript citation bundles to document exports. CLI

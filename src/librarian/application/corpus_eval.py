@@ -9,7 +9,7 @@ import tracemalloc
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -33,6 +33,27 @@ class TextOrderExpectation(BaseModel):
     case_sensitive: bool = False
 
 
+class TextPatternExpectation(BaseModel):
+    """Assert that converted output matches a bounded regular expression."""
+
+    pattern: str = Field(min_length=1, max_length=512)
+    description: str | None = Field(default=None, max_length=160)
+    case_sensitive: bool = False
+
+
+class MarkdownTableExpectation(BaseModel):
+    """Assert that text fragments preserve row or column relationships in a table."""
+
+    cells: list[str] = Field(min_length=2, max_length=16)
+    case_sensitive: bool = False
+
+    @model_validator(mode="after")
+    def _validate_cells(self) -> MarkdownTableExpectation:
+        if any(not cell.strip() for cell in self.cells):
+            raise ValueError("table expectation cells must be non-empty")
+        return self
+
+
 class CorpusEvalCase(BaseModel):
     """One source-file evaluation case."""
 
@@ -45,6 +66,15 @@ class CorpusEvalCase(BaseModel):
     forbidden_contains: list[str] = Field(default_factory=list)
     expected_text_order: list[TextOrderExpectation] = Field(
         default_factory=lambda: cast(list[TextOrderExpectation], [])
+    )
+    expected_patterns: list[TextPatternExpectation] = Field(
+        default_factory=lambda: cast(list[TextPatternExpectation], [])
+    )
+    expected_table_rows: list[MarkdownTableExpectation] = Field(
+        default_factory=lambda: cast(list[MarkdownTableExpectation], [])
+    )
+    expected_table_columns: list[MarkdownTableExpectation] = Field(
+        default_factory=lambda: cast(list[MarkdownTableExpectation], [])
     )
     expected_search_phrases: list[str] = Field(default_factory=list)
     expected_classification_prefix: str | None = None
@@ -464,6 +494,8 @@ def _check_converted_text(
         if forbidden.lower() in lower_output:
             failures.append(f"found forbidden text: {forbidden}")
     _check_expected_text_order(case.expected_text_order, converted_text, failures)
+    _check_expected_patterns(case.expected_patterns, converted_text, failures)
+    _check_expected_markdown_tables(case, converted_text, failures)
     if case.require_markdown_headings and "\n# " not in f"\n{converted_text}":
         failures.append("missing Markdown heading")
     if case.require_no_context_markers:
@@ -508,6 +540,109 @@ def _check_expected_text_order(
 def _normalize_order_text(value: str, *, case_sensitive: bool) -> str:
     normalized = re.sub(r"\s+", " ", value).strip()
     return normalized if case_sensitive else normalized.lower()
+
+
+def _check_expected_patterns(
+    expectations: list[TextPatternExpectation],
+    converted_text: str,
+    failures: list[str],
+) -> None:
+    for expectation in expectations:
+        flags = 0 if expectation.case_sensitive else re.IGNORECASE
+        try:
+            regex = re.compile(expectation.pattern, flags)
+        except re.error as exc:
+            failures.append(f"invalid expected pattern {expectation.pattern!r}: {exc}")
+            continue
+        if regex.search(converted_text) is None:
+            label = expectation.description or expectation.pattern
+            failures.append(f"missing expected pattern: {label}")
+
+
+def _check_expected_markdown_tables(
+    case: CorpusEvalCase,
+    converted_text: str,
+    failures: list[str],
+) -> None:
+    if not case.expected_table_rows and not case.expected_table_columns:
+        return
+    tables = _parse_markdown_tables(converted_text)
+    if not tables:
+        failures.append("missing Markdown table")
+        return
+    for expectation in case.expected_table_rows:
+        if not _table_relation_matches(
+            tables,
+            expectation,
+            relation="row",
+        ):
+            failures.append(
+                "table row missing related cells: "
+                + ", ".join(repr(cell) for cell in expectation.cells)
+            )
+    for expectation in case.expected_table_columns:
+        if not _table_relation_matches(
+            tables,
+            expectation,
+            relation="column",
+        ):
+            failures.append(
+                "table column missing related cells: "
+                + ", ".join(repr(cell) for cell in expectation.cells)
+            )
+
+
+def _parse_markdown_tables(text: str) -> list[list[list[str]]]:
+    tables: list[list[list[str]]] = []
+    current: list[list[str]] = []
+    for line in text.splitlines():
+        if "|" not in line:
+            if current:
+                tables.append(current)
+                current = []
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            if current:
+                tables.append(current)
+                current = []
+            continue
+        if all(re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in cells):
+            continue
+        current.append(cells)
+    if current:
+        tables.append(current)
+    return tables
+
+
+def _table_relation_matches(
+    tables: list[list[list[str]]],
+    expectation: MarkdownTableExpectation,
+    *,
+    relation: Literal["row", "column"],
+) -> bool:
+    normalized_needles = [
+        _normalize_order_text(cell, case_sensitive=expectation.case_sensitive)
+        for cell in expectation.cells
+    ]
+    for table in tables:
+        groups = table if relation == "row" else _table_columns(table)
+        for group in groups:
+            normalized_cells = [
+                _normalize_order_text(cell, case_sensitive=expectation.case_sensitive)
+                for cell in group
+            ]
+            if all(
+                any(needle in cell for cell in normalized_cells)
+                for needle in normalized_needles
+            ):
+                return True
+    return False
+
+
+def _table_columns(table: list[list[str]]) -> list[list[str]]:
+    width = max((len(row) for row in table), default=0)
+    return [[row[index] for row in table if index < len(row)] for index in range(width)]
 
 
 def _check_conversion_budget(

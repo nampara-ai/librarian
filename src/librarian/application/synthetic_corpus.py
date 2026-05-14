@@ -152,6 +152,14 @@ def generate_synthetic_corpus(
                         "Table checkpoint",
                     ],
                     "expected_search_phrases": [first_phrase, "Table checkpoint"],
+                    "expected_table_rows": [
+                        {"cells": ["Table checkpoint", first_phrase]},
+                        {"cells": ["Review topic", second_phrase]},
+                    ],
+                    "expected_table_columns": [
+                        {"cells": ["Table checkpoint", "Review topic"]},
+                        {"cells": [first_phrase, second_phrase]},
+                    ],
                     "expected_classification_prefix": classification_prefix,
                     "min_output_char_ratio": 0.02,
                     "max_output_char_ratio": 20.0,

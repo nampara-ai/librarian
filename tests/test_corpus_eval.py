@@ -9,7 +9,9 @@ from librarian.application import corpus_eval
 from librarian.application.corpus_eval import (
     CorpusEvalCase,
     CorpusEvalSuite,
+    MarkdownTableExpectation,
     TextOrderExpectation,
+    TextPatternExpectation,
     corpus_eval_result_json,
     load_corpus_eval_suite,
     run_corpus_eval_suite,
@@ -169,6 +171,119 @@ async def test_corpus_eval_checks_expected_text_order(tmp_path: Path) -> None:
     assert result.cases[0].failures == (
         "order check failed: 'First topic' does not appear before 'Second topic'",
     )
+
+
+@pytest.mark.asyncio
+async def test_corpus_eval_checks_patterns_and_table_relationships(tmp_path: Path) -> None:
+    source = tmp_path / "relations.md"
+    source.write_text(
+        "# Relations\n\n"
+        "| Finding | Evidence |\n"
+        "| --- | --- |\n"
+        "| Table checkpoint | canter transitions |\n"
+        "| Footnote | [^1] |\n\n"
+        "The formula is E = mc^2.\n\n"
+        "[^1]: Preserve source footnotes.",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    container = await build_container(settings)
+    suite = CorpusEvalSuite(
+        cases=[
+            CorpusEvalCase(
+                name="relations",
+                source_path=source,
+                process=False,
+                expected_patterns=[
+                    TextPatternExpectation(
+                        pattern=r"E\s*=\s*mc\^?2",
+                        description="math formula",
+                    ),
+                    TextPatternExpectation(
+                        pattern=r"\[\^1\]: Preserve source footnotes\.",
+                        description="footnote definition",
+                    ),
+                ],
+                expected_table_rows=[
+                    MarkdownTableExpectation(
+                        cells=["Table checkpoint", "canter transitions"],
+                    )
+                ],
+                expected_table_columns=[
+                    MarkdownTableExpectation(
+                        cells=["Table checkpoint", "Footnote"],
+                    )
+                ],
+            )
+        ]
+    )
+
+    result = await run_corpus_eval_suite(
+        container,
+        suite,
+        output_dir=tmp_path / "converted",
+    )
+
+    assert result.passed
+
+
+@pytest.mark.asyncio
+async def test_corpus_eval_reports_missing_patterns_and_table_relationships(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "broken-relations.md"
+    source.write_text(
+        "# Broken Relations\n\n"
+        "| Finding | Evidence |\n"
+        "| --- | --- |\n"
+        "| Table checkpoint | unrelated |\n",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    container = await build_container(settings)
+    suite = CorpusEvalSuite(
+        cases=[
+            CorpusEvalCase(
+                name="broken relations",
+                source_path=source,
+                process=False,
+                expected_patterns=[
+                    TextPatternExpectation(
+                        pattern=r"\[\^1\]: Preserve source footnotes\.",
+                        description="footnote definition",
+                    )
+                ],
+                expected_table_rows=[
+                    MarkdownTableExpectation(
+                        cells=["Table checkpoint", "canter transitions"],
+                    )
+                ],
+                expected_table_columns=[
+                    MarkdownTableExpectation(
+                        cells=["Table checkpoint", "Footnote"],
+                    )
+                ],
+            )
+        ]
+    )
+
+    result = await run_corpus_eval_suite(
+        container,
+        suite,
+        output_dir=tmp_path / "converted",
+    )
+
+    assert not result.passed
+    failures = "\n".join(result.cases[0].failures)
+    assert "missing expected pattern: footnote definition" in failures
+    assert "table row missing related cells: 'Table checkpoint', 'canter transitions'" in failures
+    assert "table column missing related cells: 'Table checkpoint', 'Footnote'" in failures
 
 
 @pytest.mark.asyncio
@@ -489,6 +604,10 @@ def test_shipped_synthetic_corpus_suite_covers_conversion_formats() -> None:
         for case in pdf_cases
         if "ocr" in case.tags
     )
+    table_cases = [case for case in suite.cases if "tables" in case.tags]
+    assert table_cases
+    assert all(case.expected_table_rows for case in table_cases)
+    assert all(case.expected_table_columns for case in table_cases)
 
 
 def test_corpus_eval_case_rejects_invalid_invariants(tmp_path: Path) -> None:
@@ -528,6 +647,14 @@ def test_corpus_eval_case_rejects_invalid_invariants(tmp_path: Path) -> None:
             min_output_char_ratio=2.0,
             max_output_char_ratio=1.0,
         )
+    with pytest.raises(ValueError):
+        TextPatternExpectation(pattern="")
+    with pytest.raises(ValueError):
+        TextPatternExpectation(pattern="x" * 513)
+    with pytest.raises(ValueError):
+        MarkdownTableExpectation(cells=["one"])
+    with pytest.raises(ValueError):
+        MarkdownTableExpectation(cells=["one", " "])
 
 
 def test_load_corpus_eval_suite_rejects_oversized_json(

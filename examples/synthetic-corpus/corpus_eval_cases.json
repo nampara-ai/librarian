@@ -69,6 +69,34 @@
         "canter transitions",
         "Table checkpoint"
       ],
+      "expected_table_rows": [
+        {
+          "cells": [
+            "Table checkpoint",
+            "canter transitions"
+          ]
+        },
+        {
+          "cells": [
+            "Review topic",
+            "saddle fit"
+          ]
+        }
+      ],
+      "expected_table_columns": [
+        {
+          "cells": [
+            "Table checkpoint",
+            "Review topic"
+          ]
+        },
+        {
+          "cells": [
+            "canter transitions",
+            "saddle fit"
+          ]
+        }
+      ],
       "expected_classification_prefix": "636",
       "min_output_char_ratio": 0.02,
       "max_output_char_ratio": 20.0
@@ -96,6 +124,34 @@
         "medicine adherence",
         "Table checkpoint"
       ],
+      "expected_table_rows": [
+        {
+          "cells": [
+            "Table checkpoint",
+            "medicine adherence"
+          ]
+        },
+        {
+          "cells": [
+            "Review topic",
+            "follow-up care"
+          ]
+        }
+      ],
+      "expected_table_columns": [
+        {
+          "cells": [
+            "Table checkpoint",
+            "Review topic"
+          ]
+        },
+        {
+          "cells": [
+            "medicine adherence",
+            "follow-up care"
+          ]
+        }
+      ],
       "expected_classification_prefix": "610",
       "min_output_char_ratio": 0.02,
       "max_output_char_ratio": 20.0
@@ -122,6 +178,34 @@
       "expected_search_phrases": [
         "catalog metadata",
         "Table checkpoint"
+      ],
+      "expected_table_rows": [
+        {
+          "cells": [
+            "Table checkpoint",
+            "catalog metadata"
+          ]
+        },
+        {
+          "cells": [
+            "Review topic",
+            "search recall"
+          ]
+        }
+      ],
+      "expected_table_columns": [
+        {
+          "cells": [
+            "Table checkpoint",
+            "Review topic"
+          ]
+        },
+        {
+          "cells": [
+            "catalog metadata",
+            "search recall"
+          ]
+        }
       ],
       "expected_classification_prefix": "020",
       "min_output_char_ratio": 0.02,

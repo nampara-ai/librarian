@@ -184,6 +184,11 @@ conversion sidecar page-source summary. Optional `min_ocr_pages`, `min_corrected
 positive when set, except OCR minimums may be zero; budget overruns fail the case.
 `expected_text_order` checks converted output after whitespace normalization and can be used to
 catch reading-order regressions in transcripts, multi-column documents, and OCR output.
+`expected_patterns` accepts bounded regular expressions for formatting, math, footnote, and
+citation-marker checks that are too specific for plain substring matching.
+`expected_table_rows` and `expected_table_columns` assert Markdown table cell relationships, so
+DOCX/PDF table fixtures can prove row and column structure instead of only proving that all table
+text survived somewhere.
 
 The JSON result records Librarian version, generation timestamp, provider/model settings, prompt
 versions, aggregate pass/failure/search/size/OCR/memory summary metrics, conversion time,

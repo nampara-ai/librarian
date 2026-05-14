@@ -1485,6 +1485,14 @@ def test_cli_generate_corpus_can_include_docx_fixtures(tmp_path: Path) -> None:
     assert first_docx.exists()
     assert first_docx.suffix == ".docx"
     assert "Table checkpoint" in docx_cases[0]["expected_contains"]
+    assert docx_cases[0]["expected_table_rows"][0]["cells"] == [
+        "Table checkpoint",
+        "canter transitions",
+    ]
+    assert docx_cases[0]["expected_table_columns"][0]["cells"] == [
+        "Table checkpoint",
+        "Review topic",
+    ]
     assert "Synthetic header" in docx_cases[0]["expected_contains"]
     assert "Synthetic footer" in docx_cases[0]["expected_contains"]
 
