@@ -6,7 +6,7 @@ This repository is the production rewrite of an earlier prototype. The architect
 
 ## Status
 
-`v0.1.0a56` is the latest public alpha. It includes local CLI workflows, a FastAPI service,
+`v0.1.0a57` is the latest public alpha. It includes local CLI workflows, a FastAPI service,
 file and directory conversion/import, durable SQLite-backed processing runs, page-aware OCR and
 broad-format extraction, direct SRT/VTT transcript conversion, the upgraded v2 prompt stack,
 search/export, release automation, and OSS governance files.
@@ -18,7 +18,7 @@ From a downloaded release wheel:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install "nampara_librarian-0.1.0a56-py3-none-any.whl[all]"
+pip install "nampara_librarian-0.1.0a57-py3-none-any.whl[all]"
 ```
 
 From a source checkout:
@@ -62,8 +62,7 @@ librarian search "horse training" --classification-prefix 636 --details
 librarian search "horse training" --limit 20 --offset 20 --created-after 2026-01-01T00:00:00Z
 librarian export doc_... --output cleaned.txt
 librarian export doc_... --format md --output cleaned.md
-librarian benchmark --repeats 3 --output benchmark.json
-librarian benchmark --input-path examples/benchmark_text.txt
+librarian benchmark --paragraphs 40 --paragraph-chars 1000 --repeats 3 --output benchmark.json
 librarian eval examples/eval_cases.json --output eval.json
 librarian generate-corpus --output-dir .librarian/synthetic-corpus --include-docx --include-pdf --include-scanned-pdf
 librarian corpus-eval examples/corpus_eval_cases.json --output corpus-eval.json --overwrite
@@ -117,7 +116,7 @@ export LIBRARIAN_LLM_PROVIDER=openai-compatible
 export LIBRARIAN_LLM_MODEL=gpt-4.1-mini
 export OPENAI_API_KEY=...
 librarian eval examples/eval_cases.json --output eval-openai.json
-librarian benchmark --input-path examples/benchmark_text.txt --repeats 3 --output bench-openai.json
+librarian benchmark --paragraphs 40 --paragraph-chars 1000 --repeats 3 --output bench-openai.json
 ```
 
 Use the resulting JSON to compare `LIBRARIAN_CHUNK_TARGET_CHARS`,
@@ -155,7 +154,7 @@ For direct image runs, also set an import root because the image binds publicly 
 docker run --rm -p 8080:8080 \
   -e LIBRARIAN_API_KEY=change-me \
   -e LIBRARIAN_API_IMPORT_ROOT=/data/imports \
-  ghcr.io/nampara-ai/librarian:v0.1.0a56
+  ghcr.io/nampara-ai/librarian:v0.1.0a57
 ```
 
 ## Privacy

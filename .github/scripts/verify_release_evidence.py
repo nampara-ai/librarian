@@ -359,6 +359,22 @@ def _check_corpus_case_metrics(
         status_counts = item.get("page_status_counts")
         if not isinstance(status_counts, dict):
             failures.append(f"{path}: corpus eval case {index} missing page_status_counts")
+        else:
+            for status, count in status_counts.items():
+                if not isinstance(status, str) or not status:
+                    failures.append(
+                        f"{path}: corpus eval case {index} has invalid page status key"
+                    )
+                if not isinstance(count, int) or count < 0:
+                    failures.append(
+                        f"{path}: corpus eval case {index} has invalid page status count"
+                    )
+            failed_pages = status_counts.get("failed", 0)
+            if isinstance(failed_pages, int) and failed_pages > 0:
+                failures.append(f"{path}: corpus eval case {index} contains failed pages")
+            pending_pages = status_counts.get("pending", 0)
+            if isinstance(pending_pages, int) and pending_pages > 0:
+                failures.append(f"{path}: corpus eval case {index} contains pending pages")
         source_counts = item.get("page_source_counts")
         if not isinstance(source_counts, dict):
             failures.append(f"{path}: corpus eval case {index} missing page_source_counts")

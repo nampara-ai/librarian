@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.1.0a57 - 2026-05-14
+
+- Tightened release corpus-eval evidence verification so PDF/page extraction
+  evidence is rejected if any case still reports failed or pending page
+  statuses, closing a gap where aggregate counts could be internally
+  consistent while incomplete page extraction slipped through.
+- Updated README benchmark examples to use the deterministic multi-chunk
+  synthetic workload used by CI and release gates.
+
 ## 0.1.0a56 - 2026-05-14
 
 - Strengthened benchmark release evidence by moving CI/release benchmarks to a

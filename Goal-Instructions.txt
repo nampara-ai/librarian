@@ -1096,3 +1096,7 @@
   benchmarks from the tiny example text to deterministic multi-chunk synthetic
   text, and requiring at least 40,000 total input characters and four chunks
   before benchmark evidence can satisfy CI or release gates.
+- 2026-05-14: Tightened release corpus-eval verification so evidence with
+  failed or pending PDF/OCR page extraction statuses is rejected, and aligned
+  README benchmark examples with the deterministic multi-chunk workload used by
+  release gates.

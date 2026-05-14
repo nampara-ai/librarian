@@ -32,6 +32,9 @@ the shipped transcript, legal, technical, Markdown, OCR-correction, classificati
 no-summarization fixtures so risk coverage cannot be accidentally dropped.
 They also require the corpus-eval evidence tags for DOCX tables/headers, embedded PDFs, scanned OCR
 PDFs, noisy OCR, mixed embedded/scanned PDFs, and SRT/VTT caption transcripts.
+Corpus-eval evidence is rejected if any page-level extraction status remains `failed` or `pending`;
+release artifacts must represent completed PDF/OCR extraction, not only internally consistent
+diagnostics.
 
 ## Real Provider Run
 

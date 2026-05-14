@@ -5,6 +5,8 @@ Current release safeguards:
 - GitHub Actions CI runs lint, tests, type checking, and Docker build.
 - CI verifies prompt-eval, synthetic corpus-eval, and multi-chunk benchmark JSON evidence before building
   distributions or Docker images.
+- Release evidence verification rejects corpus-eval page diagnostics that still contain failed or
+  pending PDF/OCR page extraction statuses.
 - CI and tag release workflows run `pip-audit --skip-editable` against the resolved Python
   environment. The local editable package is skipped because it is not a PyPI dependency; resolved
   third-party packages are still audited.
