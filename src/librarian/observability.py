@@ -14,6 +14,12 @@ from typing import Any
 
 _SECRET_REPLACEMENTS = (
     (
+        re.compile(
+            r"(?i)([\"'])(api[_-]?key|token|secret|password)\1(\s*:\s*)([\"'])([^\"']+)([\"'])"
+        ),
+        r"\1\2\1\3\4[REDACTED]\6",
+    ),
+    (
         re.compile(r"(?i)\b(api[_-]?key|token|secret|password)(\s*[:=]\s*)([^\s,;]+)"),
         r"\1\2[REDACTED]",
     ),

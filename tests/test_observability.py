@@ -160,6 +160,26 @@ def test_redact_secrets_handles_api_key_header_name() -> None:
     assert "abc123" not in message
 
 
+def test_redact_secrets_handles_json_secret_fields() -> None:
+    message = redact_secrets(
+        """provider returned {"api_key":"abc123","token": "tok","safe":"ok"}"""
+    )
+
+    assert message == (
+        """provider returned {"api_key":"[REDACTED]","token": "[REDACTED]","safe":"ok"}"""
+    )
+    assert "abc123" not in message
+    assert '"tok"' not in message
+
+
+def test_redact_secrets_handles_single_quoted_secret_fields() -> None:
+    message = redact_secrets("provider returned {'secret': 'hidden', 'password':'pass'}")
+
+    assert message == "provider returned {'secret': '[REDACTED]', 'password':'[REDACTED]'}"
+    assert "hidden" not in message
+    assert "'pass'" not in message
+
+
 def test_sanitize_error_message_redacts_and_truncates() -> None:
     message = sanitize_error_message(
         "provider failed api_key=abc123 " + ("private transcript text " * 20),

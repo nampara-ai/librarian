@@ -982,7 +982,7 @@ wheels = [
 
 [[package]]
 name = "nampara-librarian"
-version = "0.1.0a24"
+version = "0.1.0a25"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },

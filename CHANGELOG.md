@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a25 - 2026-05-14
+
+- Extended shared secret redaction to quoted JSON-style secret fields such as
+  `"api_key": "..."`, `"token": "..."`, and single-quoted provider payloads, while
+  preserving non-secret fields.
+
 ## 0.1.0a24 - 2026-05-14
 
 - Extended shared secret redaction to colon-separated API key, token, secret, and password
