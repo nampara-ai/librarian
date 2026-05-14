@@ -406,6 +406,9 @@ def test_shipped_synthetic_corpus_suite_covers_conversion_formats() -> None:
         "mixed-embedded-scanned",
         "noisy-ocr",
         "ocr",
+        "transcript-caption",
+        "srt",
+        "vtt",
         "tables",
         "headers-footers",
     } <= tags

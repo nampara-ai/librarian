@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a50 - 2026-05-14
+
+- Added sanitized SRT/VTT caption fixtures to the synthetic corpus generator
+  and shipped corpus-eval suite, covering transcript-caption conversion,
+  search, classification, and text-order assertions in release evidence.
+
 ## 0.1.0a49 - 2026-05-14
 
 - Added clean WebVTT transcript export through `TranscriptFormat.VTT` and

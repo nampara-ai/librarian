@@ -300,6 +300,64 @@
       "min_output_char_ratio": 0.001,
       "max_output_char_ratio": 50.0,
       "require_markdown_headings": true
+    },
+    {
+      "name": "Horse Training Seminar SRT Captions",
+      "source_path": "corpus/012-equine-training-captions.srt",
+      "tags": [
+        "synthetic",
+        "transcript-caption",
+        "srt",
+        "equine-training"
+      ],
+      "format": "md",
+      "process": true,
+      "expected_contains": [
+        "canter transitions",
+        "saddle fit"
+      ],
+      "expected_text_order": [
+        {
+          "before": "canter transitions",
+          "after": "saddle fit"
+        }
+      ],
+      "expected_search_phrases": [
+        "canter transitions",
+        "saddle fit"
+      ],
+      "expected_classification_prefix": "636",
+      "min_output_char_ratio": 0.1,
+      "max_output_char_ratio": 20.0
+    },
+    {
+      "name": "Health Interview Transcript VTT Captions",
+      "source_path": "corpus/013-health-interview-captions.vtt",
+      "tags": [
+        "synthetic",
+        "transcript-caption",
+        "vtt",
+        "health-interview"
+      ],
+      "format": "md",
+      "process": true,
+      "expected_contains": [
+        "medicine adherence",
+        "follow-up care"
+      ],
+      "expected_text_order": [
+        {
+          "before": "medicine adherence",
+          "after": "follow-up care"
+        }
+      ],
+      "expected_search_phrases": [
+        "medicine adherence",
+        "follow-up care"
+      ],
+      "expected_classification_prefix": "610",
+      "min_output_char_ratio": 0.1,
+      "max_output_char_ratio": 20.0
     }
   ]
 }

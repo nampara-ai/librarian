@@ -1379,6 +1379,37 @@ def test_cli_generate_corpus_can_include_noisy_ocr_pdf_fixture(tmp_path: Path) -
     assert "canter transitions" not in extracted
 
 
+def test_cli_generate_corpus_can_include_transcript_caption_fixtures(tmp_path: Path) -> None:
+    runner = CliRunner()
+    output_dir = tmp_path / "synthetic"
+
+    result = runner.invoke(
+        app,
+        [
+            "generate-corpus",
+            "--output-dir",
+            str(output_dir),
+            "--documents",
+            "1",
+            "--paragraphs",
+            "2",
+            "--paragraph-sentences",
+            "1",
+            "--include-transcript-captions",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Generated 3 synthetic document(s)" in result.output
+    payload = json.loads((output_dir / "corpus_eval_cases.json").read_text(encoding="utf-8"))
+    caption_cases = [case for case in payload["cases"] if "transcript-caption" in case["tags"]]
+    assert {case["source_path"].split(".")[-1] for case in caption_cases} == {"srt", "vtt"}
+    assert all(case["expected_text_order"] for case in caption_cases)
+    srt_path = output_dir / caption_cases[0]["source_path"]
+    assert srt_path.exists()
+    assert "canter transitions" in srt_path.read_text(encoding="utf-8")
+
+
 def test_cli_generate_corpus_rejects_symlink_suite_path(tmp_path: Path) -> None:
     runner = CliRunner()
     output_dir = tmp_path / "synthetic"

@@ -35,6 +35,7 @@ def generate_synthetic_corpus(
     include_pdf: bool = False,
     include_scanned_pdf: bool = False,
     include_noisy_ocr_pdf: bool = False,
+    include_transcript_captions: bool = False,
     overwrite: bool = False,
 ) -> SyntheticCorpusResult:
     """Generate deterministic long-form text fixtures and a corpus-eval suite."""
@@ -278,6 +279,53 @@ def generate_synthetic_corpus(
                 "require_markdown_headings": True,
             }
         )
+    if include_transcript_captions:
+        base_index = len(files)
+        caption_specs = (
+            ("srt", *topics[0]),
+            ("vtt", *topics[1]),
+        )
+        for index, (
+            extension,
+            slug,
+            title,
+            first_phrase,
+            second_phrase,
+            classification_prefix,
+        ) in enumerate(caption_specs, start=1):
+            path = corpus_dir / f"{base_index + index:03d}-{slug}-captions.{extension}"
+            if path.exists() and not overwrite:
+                raise FileExistsError(f"Corpus file already exists: {path}")
+            if path.is_symlink():
+                raise ValueError(f"Corpus file path must not be a symlink: {path}")
+            text = _synthetic_caption_text(
+                extension=extension,
+                title=title,
+                first_phrase=first_phrase,
+                second_phrase=second_phrase,
+                document_number=base_index + index,
+            )
+            _write_text_atomic(path, text)
+            files.append(path)
+            total_bytes += path.stat().st_size
+            total_chars += len(text)
+            cases.append(
+                {
+                    "name": f"{title} {extension.upper()} Captions",
+                    "source_path": str(path.relative_to(suite_path.parent)),
+                    "tags": ["synthetic", "transcript-caption", extension, slug],
+                    "format": "md",
+                    "process": True,
+                    "expected_contains": [first_phrase, second_phrase],
+                    "expected_text_order": [
+                        {"before": first_phrase, "after": second_phrase}
+                    ],
+                    "expected_search_phrases": [first_phrase, second_phrase],
+                    "expected_classification_prefix": classification_prefix,
+                    "min_output_char_ratio": 0.1,
+                    "max_output_char_ratio": 20.0,
+                }
+            )
     _write_text_atomic(suite_path, json.dumps({"cases": cases}, indent=2) + "\n")
     return SyntheticCorpusResult(
         corpus_dir=corpus_dir,
@@ -531,6 +579,41 @@ def _synthetic_ocr_plain_text(
             f"Search anchors: {first_phrase}; {second_phrase}",
         ]
     )
+
+
+def _synthetic_caption_text(
+    *,
+    extension: str,
+    title: str,
+    first_phrase: str,
+    second_phrase: str,
+    document_number: int,
+) -> str:
+    lines = [
+        f"{title} caption fixture {document_number}",
+        f"Ada: The first anchor is {first_phrase}.",
+        f"The second anchor is {second_phrase}.",
+    ]
+    if extension == "srt":
+        return "\n\n".join(
+            (
+                "1\n00:00:00,000 --> 00:00:02,000\n" + lines[0],
+                "2\n00:00:02,000 --> 00:00:04,000\n" + lines[1],
+                "3\n00:00:04,000 --> 00:00:06,000\n" + lines[2],
+            )
+        ) + "\n"
+    if extension == "vtt":
+        return "\n\n".join(
+            (
+                "WEBVTT",
+                "caption-1\n00:00:00.000 --> 00:00:02.000 align:start\n"
+                f"<v Ada>{lines[0]}</v>",
+                "caption-2\n00:00:02.000 --> 00:00:04.000\n"
+                f"<c.highlight>{lines[1]}</c>",
+                "caption-3\n00:00:04.000 --> 00:00:06.000\n" + lines[2],
+            )
+        ) + "\n"
+    raise ValueError(f"Unsupported caption extension: {extension}")
 
 
 def _paginate_pdf_lines(lines: list[str], *, lines_per_page: int) -> list[list[str]]:

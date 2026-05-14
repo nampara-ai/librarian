@@ -1278,6 +1278,10 @@ def generate_corpus(
         bool,
         typer.Option(help="Also generate a sanitized noisy scanned OCR PDF fixture."),
     ] = False,
+    include_transcript_captions: Annotated[
+        bool,
+        typer.Option(help="Also generate sanitized SRT/VTT transcript caption fixtures."),
+    ] = False,
     overwrite: Annotated[bool, typer.Option(help="Overwrite existing generated files.")] = False,
 ) -> None:
     """Generate a deterministic sanitized corpus-eval fixture."""
@@ -1292,6 +1296,7 @@ def generate_corpus(
             include_pdf=include_pdf,
             include_scanned_pdf=include_scanned_pdf,
             include_noisy_ocr_pdf=include_noisy_ocr_pdf,
+            include_transcript_captions=include_transcript_captions,
             overwrite=overwrite,
         )
     except (FileExistsError, ValueError) as exc:

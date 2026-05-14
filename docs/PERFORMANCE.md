@@ -73,6 +73,7 @@ librarian generate-corpus \
   --documents 20 \
   --paragraphs 800 \
   --paragraph-sentences 6 \
+  --include-transcript-captions \
   --overwrite
 
 librarian corpus-eval .librarian/synthetic-corpus/corpus_eval_cases.json \
@@ -86,6 +87,6 @@ search, and memory numbers for regression comparisons.
 
 ## Current Status
 
-No real-provider baseline is committed for `v0.1.0a49` because this repository does not include
+No real-provider baseline is committed for `v0.1.0a50` because this repository does not include
 provider credentials. The harness and release checklist are in place so maintainers can generate and
 attach sanitized baselines to later release candidates.

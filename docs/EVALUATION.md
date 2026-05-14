@@ -184,7 +184,7 @@ summaries intentionally, or attach large generated artifacts to the release.
 The repository includes a small sanitized fixture set at
 `examples/synthetic-corpus/corpus_eval_cases.json`. CI runs it end-to-end to cover Markdown,
 DOCX with tables/headers/footers, embedded-text PDFs, scanned OCR PDFs, and mixed
-embedded/scanned PDFs with search/classification checks. The OCR fixtures are synthetic page
+embedded/scanned PDFs, and SRT/VTT caption transcripts with search/classification checks. The OCR fixtures are synthetic page
 images, so they exercise Tesseract and page-source accounting without committing private scans.
 PDF cases assert expected embedded/OCR page-source counts, so a regression that silently skips
 scanned pages fails the suite instead of only changing diagnostic output.
@@ -203,6 +203,7 @@ librarian generate-corpus \
   --include-pdf \
   --include-scanned-pdf \
   --include-noisy-ocr-pdf \
+  --include-transcript-captions \
   --overwrite
 
 librarian corpus-eval .librarian/synthetic-corpus/corpus_eval_cases.json \
@@ -216,6 +217,7 @@ Use `--include-docx` to add sanitized DOCX fixtures with body paragraphs, tables
 footers, `--include-pdf` to add embedded-text PDF fixtures with expected page counts, and
 `--include-scanned-pdf` to add image-only and mixed embedded/scanned PDF fixtures that exercise OCR
 page recovery. Add `--include-noisy-ocr-pdf` to include a deterministic mildly skewed, speckled,
-low-contrast scanned page for OCR quality regressions. The generated cases include stable search
+low-contrast scanned page for OCR quality regressions. Add `--include-transcript-captions` to include
+SRT/VTT caption fixtures with timestamp, cue-markup, and reading-order expectations. The generated cases include stable search
 phrases and classification expectations so results are comparable across commits and provider
 configurations.

@@ -1068,3 +1068,7 @@
   workflows can round-trip to clean `.vtt` files through `librarian
   transcript-normalize --format vtt`, including VTT timestamp rendering, CLI
   validation, tests, and docs.
+- 2026-05-14: Expanded sanitized corpus-eval coverage with generated and
+  shipped SRT/VTT caption fixtures, including cue-markup/voice-label coverage,
+  expected text order, search phrases, and classification expectations so
+  release evidence exercises the transcript-caption ingestion path.
