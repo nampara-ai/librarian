@@ -259,6 +259,101 @@ def test_cli_delete_removes_document_records_and_owned_upload(tmp_path: Path) ->
     asyncio.run(verify_raw_blob_deleted())
 
 
+def test_cli_delete_does_not_remove_upload_through_symlinked_upload_root(tmp_path: Path) -> None:
+    async def setup() -> tuple[str, str]:
+        data_dir = tmp_path / ".librarian"
+        actual_uploads = tmp_path / "outside-uploads"
+        upload_dir = actual_uploads / "manual"
+        upload_dir.mkdir(parents=True)
+        data_dir.mkdir()
+        (data_dir / "uploads").symlink_to(actual_uploads, target_is_directory=True)
+        source = data_dir / "uploads" / "manual" / "source.txt"
+        source.write_text("Horse CLI delete symlinked upload root.", encoding="utf-8")
+        settings = Settings(
+            data_dir=data_dir,
+            database_path=data_dir / "librarian.sqlite",
+            chunk_target_chars=200,
+            chunk_overlap_chars=20,
+        )
+        container = await build_container(settings)
+        ingested = await container.ingest_document.execute(source)
+        run = await container.process_document.execute(ingested.document.id)
+        assert run.status == RunStatus.SUCCEEDED
+        return str(ingested.document.id), str(actual_uploads / "manual" / "source.txt")
+
+    import asyncio
+
+    document_id, resolved_source_path = asyncio.run(setup())
+    runner = CliRunner()
+    env = {
+        "LIBRARIAN_DATA_DIR": str(tmp_path / ".librarian"),
+        "LIBRARIAN_DATABASE_PATH": str(tmp_path / ".librarian" / "librarian.sqlite"),
+    }
+
+    deleted = runner.invoke(app, ["delete", document_id, "--yes"], env=env)
+    search = runner.invoke(
+        app,
+        ["search", "Horse CLI delete symlinked upload root", "--scope", "raw"],
+        env=env,
+    )
+    show = runner.invoke(app, ["show", document_id], env=env)
+
+    assert deleted.exit_code == 0
+    assert f"Deleted {document_id}" in _strip_ansi(deleted.output)
+    assert search.exit_code == 0
+    assert document_id not in search.output
+    assert show.exit_code != 0
+    assert "Document not found" in show.output
+    assert Path(resolved_source_path).exists()
+
+
+def test_cli_delete_does_not_remove_upload_through_symlinked_data_dir(tmp_path: Path) -> None:
+    async def setup() -> tuple[str, str]:
+        real_data_dir = tmp_path / "real-librarian"
+        upload_dir = real_data_dir / "uploads" / "manual"
+        upload_dir.mkdir(parents=True)
+        data_dir = tmp_path / ".librarian"
+        data_dir.symlink_to(real_data_dir, target_is_directory=True)
+        source = data_dir / "uploads" / "manual" / "source.txt"
+        source.write_text("Horse CLI delete symlinked data dir.", encoding="utf-8")
+        settings = Settings(
+            data_dir=data_dir,
+            database_path=data_dir / "librarian.sqlite",
+            chunk_target_chars=200,
+            chunk_overlap_chars=20,
+        )
+        container = await build_container(settings)
+        ingested = await container.ingest_document.execute(source)
+        run = await container.process_document.execute(ingested.document.id)
+        assert run.status == RunStatus.SUCCEEDED
+        return str(ingested.document.id), str(real_data_dir / "uploads" / "manual" / "source.txt")
+
+    import asyncio
+
+    document_id, resolved_source_path = asyncio.run(setup())
+    runner = CliRunner()
+    env = {
+        "LIBRARIAN_DATA_DIR": str(tmp_path / ".librarian"),
+        "LIBRARIAN_DATABASE_PATH": str(tmp_path / ".librarian" / "librarian.sqlite"),
+    }
+
+    deleted = runner.invoke(app, ["delete", document_id, "--yes"], env=env)
+    search = runner.invoke(
+        app,
+        ["search", "Horse CLI delete symlinked data dir", "--scope", "raw"],
+        env=env,
+    )
+    show = runner.invoke(app, ["show", document_id], env=env)
+
+    assert deleted.exit_code == 0
+    assert f"Deleted {document_id}" in _strip_ansi(deleted.output)
+    assert search.exit_code == 0
+    assert document_id not in search.output
+    assert show.exit_code != 0
+    assert "Document not found" in show.output
+    assert Path(resolved_source_path).exists()
+
+
 def test_cli_transcript_normalize_writes_requested_format(tmp_path: Path) -> None:
     source = tmp_path / "transcript.txt"
     output = tmp_path / "transcript.srt"
