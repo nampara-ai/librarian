@@ -254,6 +254,73 @@ async def test_corpus_eval_fails_page_source_and_ocr_expectations(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_corpus_eval_rejects_mismatched_page_summary(tmp_path: Path) -> None:
+    class MetadataExtractor:
+        supported_extensions = frozenset({".pdf"})
+        last_metadata: dict[str, object] | None = None
+
+        async def extract(self, path: Path) -> str:
+            del path
+            self.last_metadata = {
+                "artifact_type": "pdf-page-extraction",
+                "page_count": 1,
+                "summary": {
+                    "status": "succeeded",
+                    "status_counts": {"failed": 0, "pending": 0, "succeeded": 1},
+                    "source_counts": {"ocr": 1},
+                    "warning_counts": {},
+                    "attempts": 99,
+                    "ocr_pages": 1,
+                    "corrected_pages": 0,
+                    "average_ocr_confidence": 88.0,
+                    "max_page_duration_ms": 10.0,
+                },
+                "pages": [
+                    {
+                        "page_number": 1,
+                        "status": "succeeded",
+                        "source": "ocr",
+                        "chars": 16,
+                        "confidence": 88.0,
+                        "corrected": False,
+                        "warnings": [],
+                        "attempts": 1,
+                        "duration_ms": 10.0,
+                    }
+                ],
+            }
+            return "# PDF\n\nExtracted text"
+
+    source = tmp_path / "summary.pdf"
+    source.write_bytes(b"%PDF")
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    container = await build_container(settings)
+    object.__setattr__(container.ingest_document, "extractor", MetadataExtractor())
+    suite = CorpusEvalSuite(
+        cases=[
+            CorpusEvalCase(
+                name="summary mismatch",
+                source_path=source,
+                process=False,
+                expected_contains=["Extracted text"],
+            )
+        ]
+    )
+
+    result = await run_corpus_eval_suite(
+        container,
+        suite,
+        output_dir=tmp_path / "converted",
+    )
+
+    assert not result.passed
+    assert result.cases[0].failures == ("page summary attempts 99 != expected 1",)
+
+
+@pytest.mark.asyncio
 async def test_corpus_eval_redacts_conversion_failures(tmp_path: Path) -> None:
     class FailingExtractor:
         supported_extensions = frozenset({".txt"})

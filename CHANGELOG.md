@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a52 - 2026-05-14
+
+- Surfaced PDF page-manifest schema and lifecycle summaries through CLI/API
+  inspection, and made corpus-eval reject mismatched page summary diagnostics
+  instead of trusting top-level manifest summaries.
+
 ## 0.1.0a51 - 2026-05-14
 
 - Added top-level lifecycle summaries and schema versioning to PDF page

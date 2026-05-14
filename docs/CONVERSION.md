@@ -166,8 +166,9 @@ librarian page-manifest ./out/report.md.pages.json --json --failures-only
 ```
 
 The JSON view includes counts, confidence summary, retry attempts, OCR duration, and page
-diagnostics without printing raw or corrected page text, so it is safe to use in CI logs and
-operator tickets. The CLI rejects page manifest paths that are symlinks or cross symlinked parents.
+diagnostics without printing raw or corrected page text, plus the manifest `schema_version` and
+top-level `summary` status for external automation, so it is safe to use in CI logs and operator
+tickets. The CLI rejects page manifest paths that are symlinks or cross symlinked parents.
 API deployments can inspect the same sidecar with
 `GET /imports/page-manifest?manifest_path=/data/out/report.md.pages.json`. The path must be under
 `LIBRARIAN_API_IMPORT_ROOT`; use `failures_only=true` to page through failed OCR records.

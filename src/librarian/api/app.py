@@ -195,6 +195,9 @@ class PdfPageManifestPageResponse(BaseModel):
 
 class PdfPageManifestStatusResponse(BaseModel):
     manifest_path: str
+    schema_version: int | None
+    manifest_status: str | None
+    manifest_summary: dict[str, object]
     source_sha256: str
     page_count: int
     statuses: dict[str, int]
@@ -1355,8 +1358,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for page in pages
             if isinstance((attempt_count := page.get("attempts")), int)
         )
+        manifest_summary_obj = payload.get("summary")
+        manifest_summary = (
+            cast(dict[str, object], manifest_summary_obj)
+            if isinstance(manifest_summary_obj, dict)
+            else {}
+        )
         return PdfPageManifestStatusResponse(
             manifest_path=str(path),
+            schema_version=_manifest_int_or_none(payload.get("schema_version")),
+            manifest_status=_manifest_str_or_none(manifest_summary.get("status")),
+            manifest_summary=manifest_summary,
             source_sha256=str(payload.get("source_sha256") or ""),
             page_count=_manifest_int(payload.get("page_count"), default=len(pages)),
             statuses=_count_manifest_values(pages, "status"),

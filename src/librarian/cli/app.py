@@ -1349,9 +1349,18 @@ def page_manifest(
     average_confidence = (
         f"{sum(confidences) / len(confidences):.1f}" if confidences else "n/a"
     )
+    manifest_summary_obj = payload.get("summary")
+    manifest_summary = (
+        cast(dict[str, object], manifest_summary_obj)
+        if isinstance(manifest_summary_obj, dict)
+        else {}
+    )
     if json_output:
         summary = {
             "manifest_path": str(path.resolve()),
+            "schema_version": payload.get("schema_version"),
+            "manifest_status": manifest_summary.get("status"),
+            "manifest_summary": manifest_summary,
             "source_sha256": payload.get("source_sha256", ""),
             "page_count": payload.get("page_count", len(pages)),
             "statuses": statuses,
@@ -1384,6 +1393,12 @@ def page_manifest(
         console.out(json.dumps(summary, indent=2, sort_keys=True))
         return
     console.print(f"Manifest: {path.resolve()}")
+    if payload.get("schema_version") is not None or manifest_summary.get("status") is not None:
+        console.print(
+            "Schema: "
+            f"{payload.get('schema_version', '')}; "
+            f"status={manifest_summary.get('status', '')}"
+        )
     console.print(f"Source SHA-256: {payload.get('source_sha256', '')}")
     console.print(
         "Pages: "

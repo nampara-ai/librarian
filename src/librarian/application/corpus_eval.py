@@ -271,6 +271,7 @@ async def _run_corpus_case(
     page_metrics = _page_metrics(extraction_data)
     if case.expected_page_count is not None and page_count != case.expected_page_count:
         failures.append(f"page_count {page_count} != expected {case.expected_page_count}")
+    _check_page_summary(extraction_data, page_metrics, failures)
     _check_page_metrics(case, page_metrics, failures)
 
     classification_code = None
@@ -577,6 +578,79 @@ def _check_page_metrics(
             "corrected_pages "
             f"{page_metrics.corrected_pages} < minimum {case.min_corrected_pages}"
         )
+
+
+def _check_page_summary(
+    extraction: dict[str, object],
+    page_metrics: PageMetrics,
+    failures: list[str],
+) -> None:
+    summary_obj = extraction.get("summary")
+    if summary_obj is None:
+        return
+    if not isinstance(summary_obj, dict):
+        failures.append("page summary must be an object")
+        return
+    summary = cast(dict[str, object], summary_obj)
+    expected_status = "succeeded"
+    if page_metrics.status_counts.get("failed", 0) > 0:
+        expected_status = "failed"
+    elif page_metrics.status_counts.get("pending", 0) > 0:
+        expected_status = "pending"
+    _check_summary_value(summary, "status", expected_status, failures)
+    _check_summary_value(
+        summary,
+        "status_counts",
+        {
+            "failed": page_metrics.status_counts.get("failed", 0),
+            "pending": page_metrics.status_counts.get("pending", 0),
+            "succeeded": page_metrics.status_counts.get("succeeded", 0),
+        },
+        failures,
+    )
+    _check_summary_value(summary, "source_counts", page_metrics.source_counts, failures)
+    _check_summary_value(summary, "warning_counts", page_metrics.warning_counts, failures)
+    _check_summary_value(summary, "attempts", page_metrics.attempts, failures)
+    _check_summary_value(summary, "ocr_pages", page_metrics.ocr_pages, failures)
+    _check_summary_value(summary, "corrected_pages", page_metrics.corrected_pages, failures)
+    _check_summary_float(
+        summary,
+        "average_ocr_confidence",
+        page_metrics.average_ocr_confidence,
+        failures,
+    )
+    _check_summary_float(
+        summary,
+        "max_page_duration_ms",
+        page_metrics.max_duration_ms,
+        failures,
+    )
+
+
+def _check_summary_value(
+    summary: dict[str, object],
+    key: str,
+    expected: object,
+    failures: list[str],
+) -> None:
+    actual = summary.get(key)
+    if actual != expected:
+        failures.append(f"page summary {key} {actual!r} != expected {expected!r}")
+
+
+def _check_summary_float(
+    summary: dict[str, object],
+    key: str,
+    expected: float | None,
+    failures: list[str],
+) -> None:
+    actual = summary.get(key)
+    if expected is None:
+        if actual is not None:
+            failures.append(f"page summary {key} {actual!r} != expected None")
+        return
+    if not isinstance(actual, int | float) or abs(float(actual) - expected) > 1e-6:
+        failures.append(f"page summary {key} {actual!r} != expected {expected!r}")
 
 
 async def _search_recall(

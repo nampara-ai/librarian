@@ -1482,8 +1482,20 @@ def test_cli_page_manifest_summarizes_pdf_page_state(tmp_path: Path) -> None:
         json.dumps(
             {
                 "artifact_type": "pdf-page-extraction-manifest",
+                "schema_version": 1,
                 "source_sha256": "abc123",
                 "page_count": 3,
+                "summary": {
+                    "status": "failed",
+                    "status_counts": {"failed": 1, "pending": 0, "succeeded": 2},
+                    "source_counts": {"embedded": 1, "ocr": 2},
+                    "warning_counts": {"ocr-page-failed": 1},
+                    "attempts": 3,
+                    "ocr_pages": 2,
+                    "corrected_pages": 1,
+                    "average_ocr_confidence": 91.5,
+                    "max_page_duration_ms": 123.4,
+                },
                 "pages": [
                     {
                         "page_number": 1,
@@ -1530,6 +1542,7 @@ def test_cli_page_manifest_summarizes_pdf_page_state(tmp_path: Path) -> None:
 
     output = _strip_ansi(result.output)
     assert result.exit_code == 0
+    assert "Schema: 1; status=failed" in output
     assert "Source SHA-256: abc123" in output
     assert "Pages: 3 (succeeded=2, failed=1, pending=0)" in output
     assert "embedded=1" in output
@@ -1548,8 +1561,23 @@ def test_cli_page_manifest_prints_machine_readable_summary(tmp_path: Path) -> No
         json.dumps(
             {
                 "artifact_type": "pdf-page-extraction-manifest",
+                "schema_version": 1,
                 "source_sha256": "abc123",
                 "page_count": 2,
+                "summary": {
+                    "status": "failed",
+                    "status_counts": {"failed": 1, "pending": 0, "succeeded": 1},
+                    "source_counts": {"ocr": 2},
+                    "warning_counts": {
+                        "missing-ocr-confidence": 1,
+                        "ocr-page-failed": 1,
+                    },
+                    "attempts": 3,
+                    "ocr_pages": 2,
+                    "corrected_pages": 1,
+                    "average_ocr_confidence": 91.5,
+                    "max_page_duration_ms": 123.4,
+                },
                 "pages": [
                     {
                         "page_number": 1,
@@ -1590,6 +1618,13 @@ def test_cli_page_manifest_prints_machine_readable_summary(tmp_path: Path) -> No
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
+    assert payload["schema_version"] == 1
+    assert payload["manifest_status"] == "failed"
+    assert payload["manifest_summary"]["status_counts"] == {
+        "failed": 1,
+        "pending": 0,
+        "succeeded": 1,
+    }
     assert payload["source_sha256"] == "abc123"
     assert payload["page_count"] == 2
     assert payload["statuses"] == {"failed": 1, "succeeded": 1}

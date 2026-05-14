@@ -1076,3 +1076,7 @@
   and top-level lifecycle summaries for status, source, warning, retry,
   confidence, OCR/correction, and duration diagnostics. Tightened CI and
   release evidence gates to require all 13 shipped synthetic corpus-eval cases.
+- 2026-05-14: Threaded PDF page-manifest schema/status summaries through CLI
+  and API inspection responses, and made corpus-eval cross-check page summary
+  diagnostics against per-page records so stale or forged summaries fail
+  evaluation instead of being trusted as proxy evidence.

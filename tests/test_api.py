@@ -324,9 +324,18 @@ def test_api_openapi_has_response_models_for_json_endpoints() -> None:
     assert {"items", "total", "limit", "offset"} <= set(
         schemas["ImportStatusResponse"]["required"]
     )
-    assert {"pages", "statuses", "sources", "warnings", "total", "limit", "offset"} <= set(
-        schemas["PdfPageManifestStatusResponse"]["required"]
-    )
+    assert {
+        "pages",
+        "schema_version",
+        "manifest_status",
+        "manifest_summary",
+        "statuses",
+        "sources",
+        "warnings",
+        "total",
+        "limit",
+        "offset",
+    } <= set(schemas["PdfPageManifestStatusResponse"]["required"])
 
 
 def test_api_validation_errors_include_machine_code() -> None:

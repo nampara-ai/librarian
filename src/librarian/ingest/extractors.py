@@ -391,6 +391,24 @@ class PdfExtractor:
             "source_sha256": source_sha256,
             "extraction_config": extraction_config,
             "page_count": page_count,
+            "summary": _pdf_page_manifest_summary(
+                [
+                    {
+                        "page_number": page.page_number,
+                        "source": page.source,
+                        "chars": len(page.text),
+                        "confidence": page.confidence,
+                        "corrected": page.corrected,
+                        "status": _pdf_page_status(page),
+                        "error": page.error,
+                        "warnings": list(page.warnings),
+                        "attempts": page.attempts,
+                        "duration_ms": page.duration_ms,
+                        "image_path": page.image_path,
+                    }
+                    for page in final_pages
+                ]
+            ),
             "pages": [
                 {
                     "page_number": page.page_number,
