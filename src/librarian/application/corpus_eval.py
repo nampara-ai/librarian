@@ -309,6 +309,8 @@ def corpus_eval_result_json(result: CorpusEvalRunResult) -> str:
     """Render corpus evaluation results as JSON."""
     return json.dumps(
         {
+            "artifact_type": "librarian-corpus-eval-result",
+            "evidence_tier": _evidence_tier(result.llm_provider),
             "passed": result.passed,
             "total_seconds": result.total_seconds,
             "generated_at": result.generated_at.isoformat(),
@@ -356,6 +358,10 @@ def corpus_eval_result_json(result: CorpusEvalRunResult) -> str:
         },
         indent=2,
     )
+
+
+def _evidence_tier(provider: str) -> str:
+    return "mock-smoke" if provider == "mock" else "real-provider"
 
 
 def _corpus_eval_summary(result: CorpusEvalRunResult) -> dict[str, object]:

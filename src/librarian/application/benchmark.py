@@ -117,6 +117,8 @@ def benchmark_result_json(result: BenchmarkSuiteResult) -> str:
     """Render benchmark results as JSON."""
     return json.dumps(
         {
+            "artifact_type": "librarian-benchmark-result",
+            "evidence_tier": _benchmark_evidence_tier(result),
             "generated_at": result.generated_at.isoformat(),
             "librarian_version": result.librarian_version,
             "cleaning_prompt_version": result.cleaning_prompt_version,
@@ -141,6 +143,11 @@ def benchmark_result_json(result: BenchmarkSuiteResult) -> str:
         },
         indent=2,
     )
+
+
+def _benchmark_evidence_tier(result: BenchmarkSuiteResult) -> str:
+    providers = {item.provider for item in result.runs}
+    return "real-provider" if providers and "mock" not in providers else "mock-smoke"
 
 
 def _benchmark_summary(result: BenchmarkSuiteResult) -> dict[str, object]:

@@ -66,6 +66,8 @@ async def test_corpus_eval_runs_conversion_processing_and_search(tmp_path: Path)
     assert result.cases[0].search_diagnostics[0].total_results == 1
     assert result.cases[0].classification_code == "636.1"
     rendered = json.loads(corpus_eval_result_json(result))
+    assert rendered["artifact_type"] == "librarian-corpus-eval-result"
+    assert rendered["evidence_tier"] == "mock-smoke"
     assert rendered["librarian_version"]
     assert rendered["llm_provider"] == "mock"
     assert rendered["llm_model"] == "mock-cleaner"

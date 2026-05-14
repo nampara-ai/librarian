@@ -90,6 +90,43 @@ def _check_pass_counts(
         failures.append(f"{path}: {label} pass counts do not add up to case_count")
 
 
+def _check_artifact_type(
+    payload: dict[str, Any],
+    path: Path,
+    *,
+    expected_type: str,
+    label: str,
+    failures: list[str],
+) -> None:
+    actual = payload.get("artifact_type")
+    if actual != expected_type:
+        failures.append(f"{path}: {label} artifact_type {actual!r} != {expected_type!r}")
+
+
+def _check_evidence_tier(
+    payload: dict[str, Any],
+    path: Path,
+    *,
+    providers: set[Any],
+    require_real_provider: bool,
+    label: str,
+    failures: list[str],
+) -> None:
+    tier = payload.get("evidence_tier")
+    if tier not in {"mock-smoke", "real-provider"}:
+        failures.append(f"{path}: {label} evidence_tier is missing or invalid")
+        return
+    expected = (
+        "mock-smoke"
+        if not providers or "mock" in providers or None in providers
+        else "real-provider"
+    )
+    if tier != expected:
+        failures.append(f"{path}: {label} evidence_tier {tier!r} does not match providers")
+    if require_real_provider and tier != "real-provider":
+        failures.append(f"{path}: {label} evidence_tier is not real-provider")
+
+
 def verify_eval(
     path: Path,
     *,
@@ -101,6 +138,21 @@ def verify_eval(
     failures: list[str] = []
     provider = payload.get("provider")
 
+    _check_artifact_type(
+        payload,
+        path,
+        expected_type="librarian-eval-result",
+        label="eval",
+        failures=failures,
+    )
+    _check_evidence_tier(
+        payload,
+        path,
+        providers={provider},
+        require_real_provider=require_real_provider,
+        label="eval",
+        failures=failures,
+    )
     _expect(payload.get("passed") is True, f"{path}: eval did not pass", failures)
     _check_generated_at(payload, path, label="eval", failures=failures)
     _expect(
@@ -151,6 +203,21 @@ def verify_corpus_eval(
     total_input_bytes = summary.get("total_input_bytes")
     total_output_chars = summary.get("total_output_chars")
 
+    _check_artifact_type(
+        payload,
+        path,
+        expected_type="librarian-corpus-eval-result",
+        label="corpus eval",
+        failures=failures,
+    )
+    _check_evidence_tier(
+        payload,
+        path,
+        providers={provider},
+        require_real_provider=require_real_provider,
+        label="corpus eval",
+        failures=failures,
+    )
     _expect(payload.get("passed") is True, f"{path}: corpus eval did not pass", failures)
     _check_generated_at(payload, path, label="corpus eval", failures=failures)
     _expect(
@@ -223,7 +290,27 @@ def verify_benchmark(
     failures: list[str] = []
     runs = payload.get("runs")
     average_cps = summary.get("average_chars_per_second")
+    providers = (
+        {item.get("provider") for item in runs if isinstance(item, dict)}
+        if isinstance(runs, list)
+        else set()
+    )
 
+    _check_artifact_type(
+        payload,
+        path,
+        expected_type="librarian-benchmark-result",
+        label="benchmark",
+        failures=failures,
+    )
+    _check_evidence_tier(
+        payload,
+        path,
+        providers=providers,
+        require_real_provider=require_real_provider,
+        label="benchmark",
+        failures=failures,
+    )
     _expect(
         isinstance(runs, list) and len(runs) >= min_runs,
         f"{path}: too few benchmark runs",
@@ -253,7 +340,6 @@ def verify_benchmark(
         failures,
     )
     if require_real_provider and isinstance(runs, list):
-        providers = {item.get("provider") for item in runs if isinstance(item, dict)}
         _expect(
             bool(providers) and "mock" not in providers and None not in providers,
             f"{path}: benchmark provider is not real",

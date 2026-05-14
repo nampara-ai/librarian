@@ -40,6 +40,8 @@ async def test_benchmark_reports_throughput() -> None:
     assert result.runs[0].chunks > 0
     assert result.average_chars_per_second > 0
     rendered = json.loads(benchmark_result_json(result))
+    assert rendered["artifact_type"] == "librarian-benchmark-result"
+    assert rendered["evidence_tier"] == "mock-smoke"
     assert rendered["librarian_version"]
     assert rendered["generated_at"].endswith("+00:00")
     assert rendered["cleaning_prompt_version"] == "cmos_v1"

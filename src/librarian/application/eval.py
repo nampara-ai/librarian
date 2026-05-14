@@ -186,6 +186,8 @@ def eval_result_json(result: EvalRunResult) -> str:
     """Render an evaluation result as JSON."""
     return json.dumps(
         {
+            "artifact_type": "librarian-eval-result",
+            "evidence_tier": _evidence_tier(result.provider),
             "passed": result.passed,
             "provider": result.provider,
             "model": result.model,
@@ -215,6 +217,10 @@ def eval_result_json(result: EvalRunResult) -> str:
         },
         indent=2,
     )
+
+
+def _evidence_tier(provider: str) -> str:
+    return "mock-smoke" if provider == "mock" else "real-provider"
 
 
 def _eval_summary(result: EvalRunResult) -> dict[str, object]:

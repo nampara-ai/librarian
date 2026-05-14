@@ -45,6 +45,8 @@ async def test_eval_suite_runs_against_configured_stack(tmp_path: Path) -> None:
     assert result.cases[0].classification_code == "636.1"
     assert result.cases[0].chars_per_second > 0
     rendered = json.loads(eval_result_json(result))
+    assert rendered["artifact_type"] == "librarian-eval-result"
+    assert rendered["evidence_tier"] == "mock-smoke"
     assert rendered["librarian_version"]
     assert rendered["generated_at"].endswith("+00:00")
     assert rendered["cleaning_prompt_version"] == "cmos_v2"

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a33 - 2026-05-14
+
+- Added explicit eval evidence artifact metadata and verifier checks so prompt eval,
+  corpus-eval, and benchmark JSON distinguish deterministic mock smoke evidence from
+  real-provider release evidence, and reject mismatched provider/tier claims.
+
 ## 0.1.0a32 - 2026-05-14
 
 - Added total run counts to `GET /runs` responses through a repository-level

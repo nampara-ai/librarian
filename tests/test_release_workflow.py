@@ -356,6 +356,8 @@ def test_release_evidence_verifier_accepts_passing_artifacts(tmp_path: Path) -> 
     eval_path.write_text(
         """
         {
+          "artifact_type": "librarian-eval-result",
+          "evidence_tier": "real-provider",
           "passed": true,
           "provider": "openai-compatible",
           "model": "gpt-4.1-mini",
@@ -371,6 +373,8 @@ def test_release_evidence_verifier_accepts_passing_artifacts(tmp_path: Path) -> 
     corpus_path.write_text(
         """
         {
+          "artifact_type": "librarian-corpus-eval-result",
+          "evidence_tier": "real-provider",
           "passed": true,
           "llm_provider": "openai-compatible",
           "llm_model": "gpt-4.1-mini",
@@ -394,6 +398,8 @@ def test_release_evidence_verifier_accepts_passing_artifacts(tmp_path: Path) -> 
     benchmark_path.write_text(
         """
         {
+          "artifact_type": "librarian-benchmark-result",
+          "evidence_tier": "real-provider",
           "generated_at": "2026-05-13T00:00:00+00:00",
           "librarian_version": "0.1.0a4",
           "cleaning_prompt_version": "cmos_v2",
@@ -434,6 +440,8 @@ def test_release_evidence_verifier_rejects_mock_or_failed_artifacts(tmp_path: Pa
     eval_path.write_text(
         """
         {
+          "artifact_type": "librarian-eval-result",
+          "evidence_tier": "mock-smoke",
           "passed": false,
           "provider": "mock",
           "model": "mock-cleaner",
@@ -450,6 +458,30 @@ def test_release_evidence_verifier_rejects_mock_or_failed_artifacts(tmp_path: Pa
     assert verifier.main(["--eval", str(eval_path), "--require-real-provider"]) == 1
 
 
+def test_release_evidence_verifier_rejects_mismatched_evidence_tier(tmp_path: Path) -> None:
+    verifier = _load_release_evidence_module()
+    eval_path = tmp_path / "eval.json"
+    eval_path.write_text(
+        """
+        {
+          "artifact_type": "librarian-eval-result",
+          "evidence_tier": "real-provider",
+          "passed": true,
+          "provider": "mock",
+          "model": "mock-cleaner",
+          "generated_at": "2026-05-13T00:00:00+00:00",
+          "librarian_version": "0.1.0a4",
+          "cleaning_prompt_version": "cmos_v2",
+          "classification_prompt_version": "dewey_v2",
+          "summary": {"case_count": 1, "passed_count": 1, "failed_count": 0, "failure_count": 0}
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    assert verifier.main(["--eval", str(eval_path)]) == 1
+
+
 def test_release_evidence_verifier_rejects_invalid_result_shape(tmp_path: Path) -> None:
     verifier = _load_release_evidence_module()
     eval_path = tmp_path / "eval.json"
@@ -464,6 +496,8 @@ def test_release_evidence_verifier_rejects_version_mismatch(tmp_path: Path) -> N
     eval_path.write_text(
         """
         {
+          "artifact_type": "librarian-eval-result",
+          "evidence_tier": "real-provider",
           "passed": true,
           "provider": "openai-compatible",
           "model": "gpt-4.1-mini",
@@ -488,6 +522,8 @@ def test_release_evidence_verifier_rejects_bad_timestamps_and_counts(
     eval_path.write_text(
         """
         {
+          "artifact_type": "librarian-eval-result",
+          "evidence_tier": "real-provider",
           "passed": true,
           "provider": "openai-compatible",
           "model": "gpt-4.1-mini",
@@ -510,6 +546,8 @@ def test_release_evidence_verifier_rejects_low_corpus_output_ratio(tmp_path: Pat
     corpus_path.write_text(
         """
         {
+          "artifact_type": "librarian-corpus-eval-result",
+          "evidence_tier": "real-provider",
           "passed": true,
           "llm_provider": "openai-compatible",
           "llm_model": "gpt-4.1-mini",

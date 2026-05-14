@@ -110,9 +110,11 @@ Use `min_output_char_ratio` and `max_output_char_ratio` for provider-backed prom
 preserve source fidelity. Ratio bounds catch aggressive summarization, accidental truncation, and
 runaway expansion while still allowing normal cleanup edits.
 
-Eval JSON results include Librarian version, generation timestamp, provider/model settings, prompt
+Eval JSON results include an `artifact_type`, an `evidence_tier` (`mock-smoke` or
+`real-provider`), Librarian version, generation timestamp, provider/model settings, prompt
 versions, aggregate pass/throughput/warning/failure summary metrics, and per-case classification,
-warning, output character ratio, and failure details.
+warning, output character ratio, and failure details. Release-candidate evidence verification
+rejects artifacts whose tier does not match the recorded provider.
 
 ## Corpus Eval Format
 
