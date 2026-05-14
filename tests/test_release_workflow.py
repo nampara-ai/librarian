@@ -1831,6 +1831,93 @@ def test_release_evidence_verifier_rejects_pdf_and_ocr_tag_spoofing(
     assert verifier.main(["--corpus-eval", str(corpus_path), "--version", "v0.1.0a4"]) == 1
 
 
+def test_release_evidence_verifier_rejects_document_and_caption_tag_spoofing(
+    tmp_path: Path,
+) -> None:
+    verifier = _load_release_evidence_module()
+    corpus_path = tmp_path / "corpus.json"
+    corpus_path.write_text(
+        """
+        {
+          "artifact_type": "librarian-corpus-eval-result",
+          "evidence_tier": "real-provider",
+          "passed": true,
+          "llm_provider": "openai-compatible",
+          "llm_model": "gpt-4.1-mini",
+          "generated_at": "2026-05-13T00:00:00+00:00",
+          "librarian_version": "0.1.0a4",
+          "cleaning_prompt_version": "cmos_v2",
+          "classification_prompt_version": "dewey_v2",
+          "summary": {
+            "case_count": 1,
+            "passed_count": 1,
+            "failed_count": 0,
+            "failure_count": 0,
+            "failure_case_count": 0,
+            "average_search_recall": 0.0,
+            "total_input_bytes": 1000,
+            "total_output_chars": 800,
+            "total_ocr_pages": 0,
+            "total_corrected_pages": 0,
+            "max_peak_memory_bytes": 1000,
+            "total_search_phrases": 1,
+            "total_search_hits": 0,
+            "total_page_attempts": 0,
+            "total_failed_pages": 0,
+            "max_page_duration_ms": null
+          },
+          "cases": [
+            {
+              "name": "spoofed document case",
+              "passed": true,
+              "tags": [
+                "docx",
+                "tables",
+                "headers-footers",
+                "embedded-text",
+                "transcript-caption",
+                "srt"
+              ],
+              "source_path": "corpus/one.md",
+              "output_path": "converted/one.md",
+              "input_bytes": 1000,
+              "output_chars": 800,
+              "output_char_ratio": 0.8,
+              "conversion_seconds": 0.1,
+              "processing_seconds": 0.2,
+              "peak_memory_bytes": 1000,
+              "page_count": null,
+              "page_status_counts": {},
+              "page_source_counts": {},
+              "page_warning_counts": {},
+              "page_attempts": 0,
+              "max_page_duration_ms": null,
+              "ocr_pages": 0,
+              "corrected_pages": 0,
+              "average_ocr_confidence": null,
+              "search_recall": 0.0,
+              "search_diagnostics": [
+                {
+                  "phrase": "anchor",
+                  "hit": false,
+                  "total_results": 0,
+                  "returned_document_ids": [],
+                  "error": null
+                }
+              ],
+              "classification_code": null,
+              "classification_label": null,
+              "failures": []
+            }
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    assert verifier.main(["--corpus-eval", str(corpus_path), "--version", "v0.1.0a4"]) == 1
+
+
 def test_release_evidence_verifier_rejects_mismatched_corpus_case_recall(
     tmp_path: Path,
 ) -> None:

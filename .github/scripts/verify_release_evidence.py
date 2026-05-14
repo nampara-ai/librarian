@@ -334,6 +334,8 @@ def _check_corpus_case_metrics(
         for key in ("source_path", "output_path"):
             if not isinstance(item.get(key), str) or not item.get(key):
                 failures.append(f"{path}: corpus eval case {index} missing {key}")
+        source_path = item.get("source_path")
+        source_suffix = _path_suffix(source_path) if isinstance(source_path, str) else ""
         if not isinstance(item.get("input_bytes"), int | float) or item.get("input_bytes", 0) <= 0:
             failures.append(f"{path}: corpus eval case {index} missing positive input_bytes")
         if (
@@ -403,6 +405,13 @@ def _check_corpus_case_metrics(
                 )
             if not isinstance(source_counts, dict) or not source_counts:
                 failures.append(f"{path}: corpus eval case {index} pdf tag missing page sources")
+            if source_suffix != ".pdf":
+                failures.append(f"{path}: corpus eval case {index} pdf tag source is not .pdf")
+        if "embedded-text" in tags:
+            if not isinstance(source_counts, dict) or source_counts.get("embedded", 0) <= 0:
+                failures.append(
+                    f"{path}: corpus eval case {index} embedded-text tag missing embedded source"
+                )
         if tags & {"ocr", "scanned", "noisy-ocr"}:
             if not isinstance(ocr_pages, int) or ocr_pages <= 0:
                 failures.append(f"{path}: corpus eval case {index} ocr tag missing OCR pages")
@@ -417,6 +426,12 @@ def _check_corpus_case_metrics(
                 failures.append(
                     f"{path}: corpus eval case {index} mixed PDF tag missing OCR source"
                 )
+        if tags & {"docx", "tables", "headers-footers"} and source_suffix != ".docx":
+            failures.append(f"{path}: corpus eval case {index} docx tag source is not .docx")
+        if "srt" in tags and source_suffix != ".srt":
+            failures.append(f"{path}: corpus eval case {index} srt tag source is not .srt")
+        if "vtt" in tags and source_suffix != ".vtt":
+            failures.append(f"{path}: corpus eval case {index} vtt tag source is not .vtt")
         max_page_duration = item.get("max_page_duration_ms")
         if max_page_duration is not None and (
             not isinstance(max_page_duration, int | float)
@@ -446,6 +461,21 @@ def _check_corpus_case_metrics(
                 failures.append(
                     f"{path}: corpus eval case {index} search_recall is inconsistent"
                 )
+        if "transcript-caption" in tags:
+            if source_suffix not in {".srt", ".vtt"}:
+                failures.append(
+                    f"{path}: corpus eval case {index} transcript-caption source is not caption"
+                )
+            if not isinstance(search_recall, int | float) or float(search_recall) <= 0:
+                failures.append(
+                    f"{path}: corpus eval case {index} transcript-caption missing search recall"
+                )
+            if not isinstance(item.get("classification_code"), str) or not item.get(
+                "classification_code"
+            ):
+                failures.append(
+                    f"{path}: corpus eval case {index} transcript-caption missing classification"
+                )
 
 
 def _check_required_corpus_tags(
@@ -470,6 +500,10 @@ def _check_required_corpus_tags(
     missing_tags = sorted(required_tags - present_tags)
     if missing_tags:
         failures.append(f"{path}: corpus eval missing required tags: {', '.join(missing_tags)}")
+
+
+def _path_suffix(value: str) -> str:
+    return Path(value).suffix.lower()
 
 
 def _check_corpus_aggregate_summary(

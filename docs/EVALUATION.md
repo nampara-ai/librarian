@@ -38,6 +38,9 @@ diagnostics.
 PDF/OCR corpus tags are semantic gates: `pdf` cases must include page diagnostics, OCR/scanned
 cases must include OCR page/source metrics, and mixed embedded/scanned PDF cases must prove both
 embedded and OCR page sources.
+DOCX/table/header tags must come from DOCX source paths, embedded-text tags must prove embedded
+PDF extraction, and transcript-caption/SRT/VTT tags must come from matching caption files with
+search and classification evidence.
 
 ## Real Provider Run
 

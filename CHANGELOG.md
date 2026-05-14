@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.0a59 - 2026-05-14
+
+- Extended corpus-eval release evidence semantic checks so DOCX/table/header
+  tags must come from DOCX sources, embedded-text tags must prove embedded PDF
+  extraction, and transcript-caption/SRT/VTT tags must come from caption files
+  with search and classification evidence.
+
 ## 0.1.0a58 - 2026-05-14
 
 - Hardened corpus-eval release evidence against tag spoofing by requiring PDF

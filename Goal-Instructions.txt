@@ -1103,3 +1103,6 @@
 - 2026-05-14: Hardened corpus-eval release evidence against tag spoofing by
   requiring PDF/OCR/mixed embedded-scanned tags to be backed by page counts,
   page-source counts, and OCR page metrics.
+- 2026-05-14: Extended corpus-eval release evidence semantic checks so DOCX,
+  table/header/footer, embedded-text, and transcript-caption/SRT/VTT tags must
+  match source paths and diagnostics instead of only appearing as tag strings.
