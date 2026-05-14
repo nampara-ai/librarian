@@ -25,6 +25,10 @@ def _expect(condition: bool, message: str, failures: list[str]) -> None:
         failures.append(message)
 
 
+def _float_matches(actual: Any, expected: float, *, tolerance: float = 1e-9) -> bool:
+    return isinstance(actual, int | float) and abs(float(actual) - expected) <= tolerance
+
+
 def _summary(payload: dict[str, Any], path: Path) -> dict[str, Any]:
     value = payload.get("summary")
     if not isinstance(value, dict):
@@ -197,6 +201,21 @@ def _check_eval_case_metrics(
         cps = item.get("chars_per_second")
         if not isinstance(cps, int | float) or float(cps) <= 0:
             failures.append(f"{path}: eval case {index} missing positive chars_per_second")
+        input_chars = item.get("input_chars")
+        output_chars = item.get("output_chars")
+        if (
+            isinstance(input_chars, int | float)
+            and float(input_chars) > 0
+            and isinstance(output_chars, int | float)
+            and float(output_chars) >= 0
+        ):
+            expected_ratio = float(output_chars) / float(input_chars)
+            if not _float_matches(ratio, expected_ratio):
+                failures.append(f"{path}: eval case {index} output_char_ratio is inconsistent")
+            if isinstance(duration, int | float) and float(duration) > 0:
+                expected_cps = float(input_chars) / float(duration)
+                if not _float_matches(cps, expected_cps):
+                    failures.append(f"{path}: eval case {index} chars_per_second is inconsistent")
         if not isinstance(item.get("classification_code"), str) or not item.get(
             "classification_code"
         ):
@@ -297,6 +316,19 @@ def _check_corpus_case_metrics(
         ratio = item.get("output_char_ratio")
         if not isinstance(ratio, int | float) or float(ratio) <= 0:
             failures.append(f"{path}: corpus eval case {index} missing positive output_char_ratio")
+        input_bytes = item.get("input_bytes")
+        output_chars = item.get("output_chars")
+        if (
+            isinstance(input_bytes, int | float)
+            and float(input_bytes) > 0
+            and isinstance(output_chars, int | float)
+            and float(output_chars) >= 0
+        ):
+            expected_ratio = float(output_chars) / float(input_bytes)
+            if not _float_matches(ratio, expected_ratio):
+                failures.append(
+                    f"{path}: corpus eval case {index} output_char_ratio is inconsistent"
+                )
         for key in ("conversion_seconds", "peak_memory_bytes"):
             if not isinstance(item.get(key), int | float) or item.get(key, 0) < 0:
                 failures.append(f"{path}: corpus eval case {index} missing nonnegative {key}")
@@ -330,6 +362,17 @@ def _check_corpus_case_metrics(
             failures.append(f"{path}: corpus eval case {index} missing search_diagnostics list")
         elif search_recall is not None and not diagnostics:
             failures.append(f"{path}: corpus eval case {index} missing search diagnostics")
+        elif isinstance(search_recall, int | float) and diagnostics:
+            hits = sum(
+                1
+                for diagnostic in diagnostics
+                if isinstance(diagnostic, dict) and diagnostic.get("hit") is True
+            )
+            expected_recall = hits / len(diagnostics)
+            if not _float_matches(search_recall, expected_recall):
+                failures.append(
+                    f"{path}: corpus eval case {index} search_recall is inconsistent"
+                )
 
 
 def _check_corpus_aggregate_summary(
@@ -477,6 +520,17 @@ def _check_benchmark_runs(
         cps = item.get("chars_per_second")
         if not isinstance(cps, int | float) or float(cps) <= 0:
             failures.append(f"{path}: benchmark run {index} missing positive chars_per_second")
+        input_chars = item.get("input_chars")
+        total_seconds = item.get("total_seconds")
+        if (
+            isinstance(input_chars, int | float)
+            and float(input_chars) > 0
+            and isinstance(total_seconds, int | float)
+            and float(total_seconds) > 0
+        ):
+            expected_cps = float(input_chars) / float(total_seconds)
+            if not _float_matches(cps, expected_cps):
+                failures.append(f"{path}: benchmark run {index} chars_per_second is inconsistent")
         if not isinstance(item.get("chunk_target_chars"), int) or item.get(
             "chunk_target_chars", 0
         ) <= 0:

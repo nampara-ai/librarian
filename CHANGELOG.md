@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.0a43 - 2026-05-14
+
+- Strengthened release evidence verification to cross-check per-record derived
+  metrics, rejecting eval/corpus output ratios, corpus search recall, and
+  benchmark run throughput when they do not match the raw size, timing, and
+  search diagnostics.
+
 ## 0.1.0a42 - 2026-05-14
 
 - Expanded benchmark release evidence verification to recompute aggregate

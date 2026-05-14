@@ -23,7 +23,9 @@ dimensions must be positive both in the CLI and the application harness.
 Benchmark JSON results include Librarian version, generation timestamp, cleaning prompt version,
 aggregate throughput/size/chunk summary metrics, and per-run timing details.
 Release-candidate evidence verification recomputes benchmark aggregate input size, chunk count,
-total duration, average throughput, and fastest throughput from the per-run records.
+total duration, average throughput, and fastest throughput from the per-run records. It also
+cross-checks per-record derived metrics, including eval and corpus output character ratios, corpus
+search recall, and benchmark run throughput, against the raw size, timing, and search diagnostics.
 
 ## Real Provider Run
 
@@ -121,7 +123,8 @@ match the per-case and per-run details. It also rejects incomplete detail record
 case names, tags, warnings, classification results, positive size/timing metrics, corpus page/search
 diagnostics, benchmark model names, chunk counts, and throughput measurements. Prompt-eval summary
 size, throughput, warning, and failure metrics are recomputed from per-case records by the release
-evidence verifier.
+evidence verifier, and per-case output ratios and throughput must match the recorded input/output
+sizes and durations.
 
 ## Corpus Eval Format
 

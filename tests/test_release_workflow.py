@@ -398,7 +398,7 @@ def test_release_evidence_verifier_accepts_passing_artifacts(tmp_path: Path) -> 
               "tags": ["provider"],
               "input_chars": 120,
               "output_chars": 110,
-              "output_char_ratio": 0.92,
+              "output_char_ratio": 0.9166666666666666,
               "duration_seconds": 1.2,
               "chars_per_second": 100,
               "classification_code": "020",
@@ -1002,6 +1002,59 @@ def test_release_evidence_verifier_rejects_mismatched_eval_summary(
     assert verifier.main(["--eval", str(eval_path), "--version", "v0.1.0a4"]) == 1
 
 
+def test_release_evidence_verifier_rejects_mismatched_eval_case_ratio(
+    tmp_path: Path,
+) -> None:
+    verifier = _load_release_evidence_module()
+    eval_path = tmp_path / "eval.json"
+    eval_path.write_text(
+        """
+        {
+          "artifact_type": "librarian-eval-result",
+          "evidence_tier": "real-provider",
+          "passed": true,
+          "provider": "openai-compatible",
+          "model": "gpt-4.1-mini",
+          "generated_at": "2026-05-13T00:00:00+00:00",
+          "librarian_version": "0.1.0a4",
+          "cleaning_prompt_version": "cmos_v2",
+          "classification_prompt_version": "dewey_v2",
+          "summary": {
+            "case_count": 1,
+            "passed_count": 1,
+            "failed_count": 0,
+            "failure_count": 0,
+            "failure_case_count": 0,
+            "total_input_chars": 100,
+            "total_output_chars": 90,
+            "average_chars_per_second": 100,
+            "warning_count": 0,
+            "warning_case_count": 0
+          },
+          "cases": [
+            {
+              "name": "case one",
+              "passed": true,
+              "tags": ["provider"],
+              "input_chars": 100,
+              "output_chars": 90,
+              "output_char_ratio": 0.8,
+              "duration_seconds": 1.0,
+              "chars_per_second": 100,
+              "classification_code": "636.1",
+              "classification_label": "Horses",
+              "warnings": [],
+              "failures": []
+            }
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    assert verifier.main(["--eval", str(eval_path), "--version", "v0.1.0a4"]) == 1
+
+
 def test_release_evidence_verifier_rejects_mismatched_benchmark_summary(
     tmp_path: Path,
 ) -> None:
@@ -1033,6 +1086,61 @@ def test_release_evidence_verifier_rejects_mismatched_benchmark_summary(
               "cleaning_seconds": 0.09,
               "total_seconds": 0.1,
               "chars_per_second": 1000,
+              "chunk_target_chars": 8000,
+              "chunk_overlap_chars": 400
+            }
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    assert (
+        verifier.main(
+            [
+                "--benchmark",
+                str(benchmark_path),
+                "--min-benchmark-cps",
+                "10",
+                "--version",
+                "v0.1.0a4",
+            ]
+        )
+        == 1
+    )
+
+
+def test_release_evidence_verifier_rejects_mismatched_benchmark_run_rate(
+    tmp_path: Path,
+) -> None:
+    verifier = _load_release_evidence_module()
+    benchmark_path = tmp_path / "benchmark.json"
+    benchmark_path.write_text(
+        """
+        {
+          "artifact_type": "librarian-benchmark-result",
+          "evidence_tier": "real-provider",
+          "generated_at": "2026-05-13T00:00:00+00:00",
+          "librarian_version": "0.1.0a4",
+          "cleaning_prompt_version": "cmos_v2",
+          "summary": {
+            "run_count": 1,
+            "average_chars_per_second": 900,
+            "fastest_chars_per_second": 900,
+            "total_input_chars": 100,
+            "total_chunks": 1,
+            "total_seconds": 0.1
+          },
+          "runs": [
+            {
+              "provider": "openai-compatible",
+              "model": "gpt-4.1-mini",
+              "input_chars": 100,
+              "chunks": 1,
+              "chunking_seconds": 0.01,
+              "cleaning_seconds": 0.09,
+              "total_seconds": 0.1,
+              "chars_per_second": 900,
               "chunk_target_chars": 8000,
               "chunk_overlap_chars": 400
             }
@@ -1168,6 +1276,82 @@ def test_release_evidence_verifier_rejects_mismatched_corpus_page_summary(
                   "returned_document_ids": ["doc_1"],
                   "error": null
                 }
+              ],
+              "classification_code": "636.1",
+              "classification_label": "Horses",
+              "failures": []
+            }
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    assert verifier.main(["--corpus-eval", str(corpus_path), "--version", "v0.1.0a4"]) == 1
+
+
+def test_release_evidence_verifier_rejects_mismatched_corpus_case_recall(
+    tmp_path: Path,
+) -> None:
+    verifier = _load_release_evidence_module()
+    corpus_path = tmp_path / "corpus.json"
+    corpus_path.write_text(
+        """
+        {
+          "artifact_type": "librarian-corpus-eval-result",
+          "evidence_tier": "real-provider",
+          "passed": true,
+          "llm_provider": "openai-compatible",
+          "llm_model": "gpt-4.1-mini",
+          "generated_at": "2026-05-13T00:00:00+00:00",
+          "librarian_version": "0.1.0a4",
+          "cleaning_prompt_version": "cmos_v2",
+          "classification_prompt_version": "dewey_v2",
+          "summary": {
+            "case_count": 1,
+            "passed_count": 1,
+            "failed_count": 0,
+            "failure_count": 0,
+            "failure_case_count": 0,
+            "average_search_recall": 1.0,
+            "total_input_bytes": 1000,
+            "total_output_chars": 800,
+            "total_ocr_pages": 0,
+            "total_corrected_pages": 0,
+            "max_peak_memory_bytes": 1000,
+            "total_search_phrases": 2,
+            "total_search_hits": 1,
+            "total_page_attempts": 0,
+            "total_failed_pages": 0,
+            "max_page_duration_ms": null
+          },
+          "cases": [
+            {
+              "name": "search case",
+              "passed": true,
+              "tags": ["markdown"],
+              "source_path": "corpus/one.md",
+              "output_path": "converted/one.md",
+              "input_bytes": 1000,
+              "output_chars": 800,
+              "output_char_ratio": 0.8,
+              "conversion_seconds": 0.1,
+              "processing_seconds": 0.2,
+              "peak_memory_bytes": 1000,
+              "page_status_counts": {},
+              "page_source_counts": {},
+              "page_warning_counts": {},
+              "page_attempts": 0,
+              "max_page_duration_ms": null,
+              "ocr_pages": 0,
+              "corrected_pages": 0,
+              "average_ocr_confidence": null,
+              "search_recall": 1.0,
+              "search_diagnostics": [
+                {"phrase": "anchor", "hit": true, "total_results": 1,
+                 "returned_document_ids": ["doc_1"], "error": null},
+                {"phrase": "missing", "hit": false, "total_results": 0,
+                 "returned_document_ids": [], "error": null}
               ],
               "classification_code": "636.1",
               "classification_label": "Horses",
