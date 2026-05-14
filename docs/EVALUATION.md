@@ -117,7 +117,9 @@ warning, output character ratio, and failure details. Release-candidate evidence
 rejects artifacts whose tier does not match the recorded provider or whose summary counts do not
 match the per-case and per-run details. It also rejects incomplete detail records, including missing
 case names, tags, warnings, classification results, positive size/timing metrics, corpus page/search
-diagnostics, benchmark model names, chunk counts, and throughput measurements.
+diagnostics, benchmark model names, chunk counts, and throughput measurements. Prompt-eval summary
+size, throughput, warning, and failure metrics are recomputed from per-case records by the release
+evidence verifier.
 
 ## Corpus Eval Format
 

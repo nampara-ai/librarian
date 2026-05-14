@@ -365,7 +365,18 @@ def test_release_evidence_verifier_accepts_passing_artifacts(tmp_path: Path) -> 
           "librarian_version": "0.1.0a4",
           "cleaning_prompt_version": "cmos_v2",
           "classification_prompt_version": "dewey_v2",
-          "summary": {"case_count": 2, "passed_count": 2, "failed_count": 0, "failure_count": 0},
+          "summary": {
+            "case_count": 2,
+            "passed_count": 2,
+            "failed_count": 0,
+            "failure_count": 0,
+            "failure_case_count": 0,
+            "total_input_chars": 220,
+            "total_output_chars": 205,
+            "average_chars_per_second": 100,
+            "warning_count": 0,
+            "warning_case_count": 0
+          },
           "cases": [
             {
               "name": "case one",
@@ -923,6 +934,59 @@ def test_release_evidence_verifier_rejects_bad_timestamps_and_counts(
           "cleaning_prompt_version": "cmos_v2",
           "classification_prompt_version": "dewey_v2",
           "summary": {"case_count": 2, "passed_count": 2, "failed_count": 1, "failure_count": 0}
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    assert verifier.main(["--eval", str(eval_path), "--version", "v0.1.0a4"]) == 1
+
+
+def test_release_evidence_verifier_rejects_mismatched_eval_summary(
+    tmp_path: Path,
+) -> None:
+    verifier = _load_release_evidence_module()
+    eval_path = tmp_path / "eval.json"
+    eval_path.write_text(
+        """
+        {
+          "artifact_type": "librarian-eval-result",
+          "evidence_tier": "real-provider",
+          "passed": true,
+          "provider": "openai-compatible",
+          "model": "gpt-4.1-mini",
+          "generated_at": "2026-05-13T00:00:00+00:00",
+          "librarian_version": "0.1.0a4",
+          "cleaning_prompt_version": "cmos_v2",
+          "classification_prompt_version": "dewey_v2",
+          "summary": {
+            "case_count": 1,
+            "passed_count": 1,
+            "failed_count": 0,
+            "failure_count": 0,
+            "failure_case_count": 0,
+            "total_input_chars": 99,
+            "total_output_chars": 90,
+            "average_chars_per_second": 100,
+            "warning_count": 0,
+            "warning_case_count": 0
+          },
+          "cases": [
+            {
+              "name": "case one",
+              "passed": true,
+              "tags": ["provider"],
+              "input_chars": 100,
+              "output_chars": 90,
+              "output_char_ratio": 0.9,
+              "duration_seconds": 1.0,
+              "chars_per_second": 100,
+              "classification_code": "636.1",
+              "classification_label": "Horses",
+              "warnings": [],
+              "failures": []
+            }
+          ]
         }
         """,
         encoding="utf-8",

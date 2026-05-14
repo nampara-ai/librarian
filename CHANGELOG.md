@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.0a41 - 2026-05-14
+
+- Expanded prompt-eval release evidence verification to recompute aggregate
+  size, throughput, warning, and failure summary metrics from per-case records.
+
 ## 0.1.0a40 - 2026-05-14
 
 - Expanded corpus-eval release evidence verification to recompute aggregate

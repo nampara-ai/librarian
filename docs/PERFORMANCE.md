@@ -86,6 +86,6 @@ search, and memory numbers for regression comparisons.
 
 ## Current Status
 
-No real-provider baseline is committed for `v0.1.0a40` because this repository does not include
+No real-provider baseline is committed for `v0.1.0a41` because this repository does not include
 provider credentials. The harness and release checklist are in place so maintainers can generate and
 attach sanitized baselines to later release candidates.

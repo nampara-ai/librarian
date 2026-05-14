@@ -207,6 +207,67 @@ def _check_eval_case_metrics(
             failures.append(f"{path}: eval case {index} missing classification_label")
 
 
+def _check_eval_aggregate_summary(
+    payload: dict[str, Any],
+    summary: dict[str, Any],
+    path: Path,
+    *,
+    failures: list[str],
+) -> None:
+    cases = payload.get("cases")
+    if not isinstance(cases, list) or not all(isinstance(item, dict) for item in cases):
+        return
+    total_input_chars = 0
+    total_output_chars = 0
+    chars_per_second: list[float] = []
+    warning_count = 0
+    failure_count = 0
+    warning_case_count = 0
+    failure_case_count = 0
+    for item in cases:
+        input_chars = item.get("input_chars")
+        if isinstance(input_chars, int | float) and input_chars >= 0:
+            total_input_chars += int(input_chars)
+        output_chars = item.get("output_chars")
+        if isinstance(output_chars, int | float) and output_chars >= 0:
+            total_output_chars += int(output_chars)
+        cps = item.get("chars_per_second")
+        if isinstance(cps, int | float) and float(cps) > 0:
+            chars_per_second.append(float(cps))
+        warnings_obj = item.get("warnings")
+        if isinstance(warnings_obj, list):
+            warning_count += len(warnings_obj)
+            if warnings_obj:
+                warning_case_count += 1
+        failures_obj = item.get("failures")
+        if isinstance(failures_obj, list):
+            failure_count += len(failures_obj)
+            if failures_obj:
+                failure_case_count += 1
+
+    if summary.get("total_input_chars") != total_input_chars:
+        failures.append(f"{path}: eval total_input_chars does not match cases")
+    if summary.get("total_output_chars") != total_output_chars:
+        failures.append(f"{path}: eval total_output_chars does not match cases")
+    expected_average_cps = (
+        sum(chars_per_second) / len(chars_per_second) if chars_per_second else 0.0
+    )
+    actual_average_cps = summary.get("average_chars_per_second")
+    if (
+        not isinstance(actual_average_cps, int | float)
+        or abs(float(actual_average_cps) - expected_average_cps) > 1e-9
+    ):
+        failures.append(f"{path}: eval average_chars_per_second does not match cases")
+    if summary.get("warning_count") != warning_count:
+        failures.append(f"{path}: eval warning_count does not match cases")
+    if summary.get("failure_count") != failure_count:
+        failures.append(f"{path}: eval failure_count does not match cases")
+    if summary.get("warning_case_count") != warning_case_count:
+        failures.append(f"{path}: eval warning_case_count does not match cases")
+    if summary.get("failure_case_count") != failure_case_count:
+        failures.append(f"{path}: eval failure_case_count does not match cases")
+
+
 def _check_corpus_case_metrics(
     payload: dict[str, Any],
     path: Path,
@@ -472,6 +533,7 @@ def verify_eval(
     _check_pass_counts(summary, path, label="eval", failures=failures)
     _check_case_results(payload, summary, path, label="eval", failures=failures)
     _check_eval_case_metrics(payload, path, failures=failures)
+    _check_eval_aggregate_summary(payload, summary, path, failures=failures)
     _expect(summary.get("failure_count") == 0, f"{path}: eval failures recorded", failures)
     _expect(
         payload.get("cleaning_prompt_version") == "cmos_v2",

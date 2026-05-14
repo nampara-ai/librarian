@@ -38,9 +38,11 @@ uv run python .github/scripts/verify_release_evidence.py \
    cross-checks summary counts against per-case and per-run details so hidden failures cannot be
    masked by a green top-level summary. Detailed records must include case names, tags, output
    ratios, timings, classification/search/page diagnostics, benchmark models, chunk counts, and
-   throughput metrics; incomplete detail records are rejected. Corpus-eval aggregate summaries,
-   including size, OCR, correction, peak-memory, search, failure, retry, failed-page, and max page
-   duration metrics, are recomputed from per-case records during verification.
+   throughput metrics; incomplete detail records are rejected. Eval aggregate summaries, including
+   size, throughput, warning, and failure metrics, are recomputed from per-case records during
+   verification. Corpus-eval aggregate summaries, including size, OCR, correction, peak-memory,
+   search, failure, retry, failed-page, and max page duration metrics, are recomputed from per-case
+   records during verification.
 6. Run secret scanning:
 
 ```bash
