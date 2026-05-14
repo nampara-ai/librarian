@@ -189,6 +189,7 @@ def generate_synthetic_corpus(
                     "expected_search_phrases": [first_phrase, second_phrase],
                     "expected_classification_prefix": classification_prefix,
                     "expected_page_count": page_count,
+                    "expected_page_source_counts": {"embedded": page_count},
                     "min_output_char_ratio": 0.05,
                     "max_output_char_ratio": 50.0,
                     "require_markdown_headings": True,
@@ -220,6 +221,9 @@ def generate_synthetic_corpus(
             tags = ["synthetic", "pdf", "scanned", "ocr", slug]
             if index == 2:
                 tags.append("mixed-embedded-scanned")
+                expected_page_source_counts = {"embedded": 1, "ocr": page_count - 1}
+            else:
+                expected_page_source_counts = {"ocr": page_count}
             cases.append(
                 {
                     "name": f"{title} OCR PDF {index}",
@@ -231,6 +235,8 @@ def generate_synthetic_corpus(
                     "expected_search_phrases": [first_phrase],
                     "expected_classification_prefix": classification_prefix,
                     "expected_page_count": page_count,
+                    "expected_page_source_counts": expected_page_source_counts,
+                    "min_ocr_pages": expected_page_source_counts["ocr"],
                     "min_output_char_ratio": 0.001,
                     "max_output_char_ratio": 50.0,
                     "require_markdown_headings": True,
@@ -265,6 +271,8 @@ def generate_synthetic_corpus(
                 "expected_search_phrases": [first_phrase],
                 "expected_classification_prefix": classification_prefix,
                 "expected_page_count": page_count,
+                "expected_page_source_counts": {"ocr": page_count},
+                "min_ocr_pages": page_count,
                 "min_output_char_ratio": 0.001,
                 "max_output_char_ratio": 50.0,
                 "require_markdown_headings": True,

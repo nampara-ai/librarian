@@ -148,6 +148,9 @@
       ],
       "expected_classification_prefix": "636",
       "expected_page_count": 1,
+      "expected_page_source_counts": {
+        "embedded": 1
+      },
       "min_output_char_ratio": 0.05,
       "max_output_char_ratio": 50.0,
       "require_markdown_headings": true
@@ -173,6 +176,9 @@
       ],
       "expected_classification_prefix": "610",
       "expected_page_count": 1,
+      "expected_page_source_counts": {
+        "embedded": 1
+      },
       "min_output_char_ratio": 0.05,
       "max_output_char_ratio": 50.0,
       "require_markdown_headings": true
@@ -198,6 +204,9 @@
       ],
       "expected_classification_prefix": "020",
       "expected_page_count": 1,
+      "expected_page_source_counts": {
+        "embedded": 1
+      },
       "min_output_char_ratio": 0.05,
       "max_output_char_ratio": 50.0,
       "require_markdown_headings": true
@@ -223,6 +232,10 @@
       ],
       "expected_classification_prefix": "636",
       "expected_page_count": 1,
+      "expected_page_source_counts": {
+        "ocr": 1
+      },
+      "min_ocr_pages": 1,
       "min_output_char_ratio": 0.001,
       "max_output_char_ratio": 50.0,
       "require_markdown_headings": true
@@ -249,6 +262,11 @@
       ],
       "expected_classification_prefix": "610",
       "expected_page_count": 2,
+      "expected_page_source_counts": {
+        "embedded": 1,
+        "ocr": 1
+      },
+      "min_ocr_pages": 1,
       "min_output_char_ratio": 0.001,
       "max_output_char_ratio": 50.0,
       "require_markdown_headings": true
@@ -275,6 +293,10 @@
       ],
       "expected_classification_prefix": "636",
       "expected_page_count": 1,
+      "expected_page_source_counts": {
+        "ocr": 1
+      },
+      "min_ocr_pages": 1,
       "min_output_char_ratio": 0.001,
       "max_output_char_ratio": 50.0,
       "require_markdown_headings": true

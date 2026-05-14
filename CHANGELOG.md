@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.0a35 - 2026-05-14
+
+- Added explicit corpus-eval assertions for PDF page-source counts, minimum OCR
+  pages, and minimum corrected OCR pages, and enabled them in the shipped
+  synthetic PDF/OCR suite so scanned-page coverage regressions fail evaluation
+  instead of only changing diagnostics.
+
 ## 0.1.0a34 - 2026-05-14
 
 - Strengthened release evidence verification to cross-check eval and corpus-eval

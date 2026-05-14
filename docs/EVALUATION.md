@@ -134,6 +134,9 @@ Corpus eval cases point at real sanitized source files, relative to the suite JS
       "expected_search_phrases": ["canter transitions"],
       "expected_classification_prefix": "636",
       "expected_page_count": 12,
+      "expected_page_source_counts": {"embedded": 10, "ocr": 2},
+      "min_ocr_pages": 2,
+      "min_corrected_pages": 1,
       "min_output_char_ratio": 0.5,
       "max_output_char_ratio": 2.0,
       "max_conversion_seconds": 30,
@@ -148,8 +151,10 @@ Corpus eval cases point at real sanitized source files, relative to the suite JS
 Corpus eval suites must contain at least one case. Each case must have a non-empty `name`,
 `expected_page_count` must be positive when provided, and output character ratio bounds must be
 non-negative with `max_output_char_ratio >= min_output_char_ratio`. Optional
+`expected_page_source_counts` values must be non-negative and are checked exactly against the
+conversion sidecar page-source summary. Optional `min_ocr_pages`, `min_corrected_pages`,
 `max_conversion_seconds`, `max_processing_seconds`, and `max_peak_memory_bytes` budgets must be
-positive when set; budget overruns fail the case.
+positive when set, except OCR minimums may be zero; budget overruns fail the case.
 
 The JSON result records Librarian version, generation timestamp, provider/model settings, prompt
 versions, aggregate pass/failure/search/size/OCR/memory summary metrics, conversion time,
@@ -166,6 +171,8 @@ The repository includes a small sanitized fixture set at
 DOCX with tables/headers/footers, embedded-text PDFs, scanned OCR PDFs, and mixed
 embedded/scanned PDFs with search/classification checks. The OCR fixtures are synthetic page
 images, so they exercise Tesseract and page-source accounting without committing private scans.
+PDF cases assert expected embedded/OCR page-source counts, so a regression that silently skips
+scanned pages fails the suite instead of only changing diagnostic output.
 Generate larger local suites when measuring scale or release-candidate performance.
 
 Use `generate-corpus` to create deterministic sanitized long-document fixtures without committing

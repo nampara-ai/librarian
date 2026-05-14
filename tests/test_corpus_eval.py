@@ -128,6 +128,69 @@ async def test_corpus_eval_fails_performance_budgets(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_corpus_eval_fails_page_source_and_ocr_expectations(tmp_path: Path) -> None:
+    class MetadataExtractor:
+        supported_extensions = frozenset({".pdf"})
+        last_metadata: dict[str, object] | None = None
+
+        async def extract(self, path: Path) -> str:
+            del path
+            self.last_metadata = {
+                "artifact_type": "pdf-page-extraction",
+                "page_count": 2,
+                "pages": [
+                    {
+                        "page_number": 1,
+                        "source": "embedded",
+                        "chars": 12,
+                        "corrected": False,
+                    },
+                    {
+                        "page_number": 2,
+                        "source": "empty",
+                        "chars": 0,
+                        "corrected": False,
+                    },
+                ],
+            }
+            return "# PDF\n\nExtracted text"
+
+    source = tmp_path / "mixed.pdf"
+    source.write_bytes(b"%PDF")
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    container = await build_container(settings)
+    object.__setattr__(container.ingest_document, "extractor", MetadataExtractor())
+    suite = CorpusEvalSuite(
+        cases=[
+            CorpusEvalCase(
+                name="mixed pdf",
+                source_path=source,
+                process=False,
+                expected_contains=["Extracted text"],
+                expected_page_source_counts={"embedded": 1, "ocr": 1},
+                min_ocr_pages=1,
+                min_corrected_pages=1,
+            )
+        ]
+    )
+
+    result = await run_corpus_eval_suite(
+        container,
+        suite,
+        output_dir=tmp_path / "converted",
+    )
+
+    assert not result.passed
+    failures = "\n".join(result.cases[0].failures)
+    assert "page source 'ocr' count 0 != expected 1" in failures
+    assert "ocr_pages 0 < minimum 1" in failures
+    assert "corrected_pages 0 < minimum 1" in failures
+
+
+@pytest.mark.asyncio
 async def test_corpus_eval_redacts_conversion_failures(tmp_path: Path) -> None:
     class FailingExtractor:
         supported_extensions = frozenset({".txt"})
@@ -286,6 +349,13 @@ def test_shipped_synthetic_corpus_suite_covers_conversion_formats() -> None:
     assert any(case.expected_page_count is not None for case in suite.cases)
     assert all(case.expected_search_phrases for case in suite.cases)
     assert all(case.expected_classification_prefix for case in suite.cases)
+    pdf_cases = [case for case in suite.cases if "pdf" in case.tags]
+    assert all(case.expected_page_source_counts for case in pdf_cases)
+    assert all(
+        case.min_ocr_pages is not None
+        for case in pdf_cases
+        if "ocr" in case.tags
+    )
 
 
 def test_corpus_eval_case_rejects_invalid_invariants(tmp_path: Path) -> None:
@@ -294,6 +364,22 @@ def test_corpus_eval_case_rejects_invalid_invariants(tmp_path: Path) -> None:
         CorpusEvalCase(name="", source_path=source)
     with pytest.raises(ValueError):
         CorpusEvalCase(name="notes", source_path=source, expected_page_count=0)
+    with pytest.raises(ValueError):
+        CorpusEvalCase(
+            name="notes",
+            source_path=source,
+            expected_page_source_counts={"": 1},
+        )
+    with pytest.raises(ValueError):
+        CorpusEvalCase(
+            name="notes",
+            source_path=source,
+            expected_page_source_counts={"ocr": -1},
+        )
+    with pytest.raises(ValueError):
+        CorpusEvalCase(name="notes", source_path=source, min_ocr_pages=-1)
+    with pytest.raises(ValueError):
+        CorpusEvalCase(name="notes", source_path=source, min_corrected_pages=-1)
     with pytest.raises(ValueError):
         CorpusEvalCase(name="notes", source_path=source, min_output_char_ratio=-1)
     with pytest.raises(ValueError):

@@ -37,6 +37,9 @@ class CorpusEvalCase(BaseModel):
     expected_search_phrases: list[str] = Field(default_factory=list)
     expected_classification_prefix: str | None = None
     expected_page_count: int | None = Field(default=None, ge=1)
+    expected_page_source_counts: dict[str, int] = Field(default_factory=dict)
+    min_ocr_pages: int | None = Field(default=None, ge=0)
+    min_corrected_pages: int | None = Field(default=None, ge=0)
     min_output_char_ratio: float = Field(default=0.05, ge=0)
     max_output_char_ratio: float = Field(default=20.0, gt=0)
     max_conversion_seconds: float | None = Field(default=None, gt=0)
@@ -49,6 +52,11 @@ class CorpusEvalCase(BaseModel):
     def _validate_ratio_bounds(self) -> CorpusEvalCase:
         if self.max_output_char_ratio < self.min_output_char_ratio:
             raise ValueError("max_output_char_ratio must be >= min_output_char_ratio")
+        for source, count in self.expected_page_source_counts.items():
+            if not source.strip():
+                raise ValueError("expected_page_source_counts keys must be non-empty")
+            if count < 0:
+                raise ValueError("expected_page_source_counts values must be >= 0")
         return self
 
 
@@ -239,6 +247,7 @@ async def _run_corpus_case(
     page_metrics = _page_metrics(extraction_data)
     if case.expected_page_count is not None and page_count != case.expected_page_count:
         failures.append(f"page_count {page_count} != expected {case.expected_page_count}")
+    _check_page_metrics(case, page_metrics, failures)
 
     classification_code = None
     classification_label = None
@@ -461,6 +470,31 @@ def _check_memory_budget(
     if peak_memory_bytes > case.max_peak_memory_bytes:
         failures.append(
             f"peak_memory_bytes {peak_memory_bytes} > maximum {case.max_peak_memory_bytes}"
+        )
+
+
+def _check_page_metrics(
+    case: CorpusEvalCase,
+    page_metrics: PageMetrics,
+    failures: list[str],
+) -> None:
+    for source, expected_count in case.expected_page_source_counts.items():
+        actual_count = page_metrics.source_counts.get(source, 0)
+        if actual_count != expected_count:
+            failures.append(
+                f"page source {source!r} count {actual_count} != expected {expected_count}"
+            )
+    if case.min_ocr_pages is not None and page_metrics.ocr_pages < case.min_ocr_pages:
+        failures.append(
+            f"ocr_pages {page_metrics.ocr_pages} < minimum {case.min_ocr_pages}"
+        )
+    if (
+        case.min_corrected_pages is not None
+        and page_metrics.corrected_pages < case.min_corrected_pages
+    ):
+        failures.append(
+            "corrected_pages "
+            f"{page_metrics.corrected_pages} < minimum {case.min_corrected_pages}"
         )
 
 
