@@ -34,6 +34,9 @@ MARKDOWN_TABLE_ROW_REGEX = re.compile(r"(?m)^\s*\|.+\|\s*$")
 CITATION_MARKER_REGEX = re.compile(
     r"(?:\[[0-9A-Za-z][0-9A-Za-z .:-]{0,20}\]|\([A-Z][A-Za-z-]+,\s*\d{4}\))"
 )
+REPEATED_TAIL_MIN_PATTERN_CHARS = 12
+REPEATED_TAIL_MAX_PATTERN_CHARS = 240
+REPEATED_TAIL_MIN_REPEATS = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +97,8 @@ def _markdown_quality_warnings(text: str, *, source_text: str | None) -> list[st
     table_rows = MARKDOWN_TABLE_ROW_REGEX.findall(text)
     if len(table_rows) >= 2 and MARKDOWN_TABLE_SEPARATOR_REGEX.search(text) is None:
         warnings.append("malformed-markdown-table")
+    if _has_repeated_tail(text):
+        warnings.append("repeated-tail")
     if source_text is None:
         return warnings
     if _paragraph_count(source_text) >= 3 and _paragraph_count(text) <= 1 and len(text) > 500:
@@ -118,3 +123,28 @@ def _has_markdown_table(text: str) -> bool:
         len(MARKDOWN_TABLE_ROW_REGEX.findall(text)) >= 2
         and MARKDOWN_TABLE_SEPARATOR_REGEX.search(text) is not None
     )
+
+
+def _has_repeated_tail(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", text.strip())
+    max_pattern_length = min(
+        REPEATED_TAIL_MAX_PATTERN_CHARS,
+        len(normalized) // REPEATED_TAIL_MIN_REPEATS,
+    )
+    if max_pattern_length < REPEATED_TAIL_MIN_PATTERN_CHARS:
+        return False
+
+    for pattern_length in range(REPEATED_TAIL_MIN_PATTERN_CHARS, max_pattern_length + 1):
+        pattern = normalized[-pattern_length:]
+        if len(set(re.findall(r"\w", pattern))) < 2:
+            continue
+        repeats = 0
+        position = len(normalized)
+        while position >= pattern_length:
+            if normalized[position - pattern_length : position] != pattern:
+                break
+            repeats += 1
+            position -= pattern_length
+        if repeats >= REPEATED_TAIL_MIN_REPEATS:
+            return True
+    return False

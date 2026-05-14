@@ -126,9 +126,9 @@ OCR support:
 
 Cleaned chunk records include non-fatal warnings when output quality checks find likely rendering
 regressions, including collapsed paragraphs, missing Markdown headings/lists/tables, missing
-citation markers, malformed Markdown tables, orphan list markers, context-marker leaks, and
-assistant artifacts. These warnings are persisted with cleaned chunks so eval suites and operators
-can investigate suspicious outputs without blocking successful runs.
+citation markers, malformed Markdown tables, orphan list markers, repeated tails, context-marker
+leaks, and assistant artifacts. These warnings are persisted with cleaned chunks so eval suites and
+operators can investigate suspicious outputs without blocking successful runs.
 - Tune scanned-PDF throughput with `LIBRARIAN_OCR_PAGE_CONCURRENCY`.
 - Control LLM OCR correction with `LIBRARIAN_OCR_LLM_CORRECTION=always|never|low-confidence`
   and optionally override the correction model with `LIBRARIAN_OCR_LLM_MODEL`.

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a61 - 2026-05-14
+
+- Added repeated-tail output validation so degenerate LLM/OCR corrections that
+  end by looping the same phrase are persisted as `repeated-tail` cleaned chunk
+  warnings and fail evals unless explicitly allowed.
+
 ## 0.1.0a60 - 2026-05-14
 
 - Added an external repository capability review covering Dolphin, olmOCR, and

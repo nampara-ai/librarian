@@ -76,6 +76,25 @@ def test_validation_warns_for_collapsed_paragraphs() -> None:
     assert "collapsed-paragraphs" in result.warnings
 
 
+def test_validation_warns_for_repeated_tail() -> None:
+    repeated_tail = " The closing sentence repeats without adding evidence." * 8
+    result = validate_cleaned_text(
+        f"Useful OCR text before a degenerate tail.{repeated_tail}",
+        input_size=200,
+    )
+
+    assert "repeated-tail" in result.warnings
+
+
+def test_validation_repeated_tail_ignores_normal_short_repetition() -> None:
+    result = validate_cleaned_text(
+        "Stable appendix text. Figure 1 references note A. Figure 2 references note A.",
+        input_size=80,
+    )
+
+    assert "repeated-tail" not in result.warnings
+
+
 def test_settings_reject_invalid_coherence_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LIBRARIAN_COHERENCE_MODE", "fictional")
     with pytest.raises(ValidationError):

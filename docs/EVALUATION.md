@@ -120,10 +120,10 @@ classification, no-summarization, Markdown structure preservation, and OCR corre
 
 Eval cases fail on unexpected cleaned-output quality warnings by default. Warnings cover likely
 rendering regressions such as lost Markdown headings/lists/tables, missing citation markers,
-collapsed paragraphs, context-marker leaks, malformed Markdown tables, orphan list markers, and
-assistant artifacts. Add `allowed_warnings` only when a fixture intentionally exercises a known
-degradation. Use `forbidden_contains` to fail prompt evals when provider output includes known
-summarization phrases, context markers, or assistant artifacts.
+collapsed paragraphs, repeated tails, context-marker leaks, malformed Markdown tables, orphan list
+markers, and assistant artifacts. Add `allowed_warnings` only when a fixture intentionally exercises
+a known degradation. Use `forbidden_contains` to fail prompt evals when provider output includes
+known summarization phrases, context markers, or assistant artifacts.
 
 Use `min_output_char_ratio` and `max_output_char_ratio` for provider-backed prompt evals that must
 preserve source fidelity. Ratio bounds catch aggressive summarization, accidental truncation, and
