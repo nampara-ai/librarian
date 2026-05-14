@@ -94,6 +94,7 @@ class PdfPageExtraction:
     error: str | None = None
     raw_text: str | None = None
     image_path: str | None = None
+    rotation_degrees: int = 0
     warnings: tuple[str, ...] = ()
     attempts: int = 0
     duration_ms: float | None = None
@@ -106,6 +107,7 @@ class OcrTextResult:
     text: str
     confidence: float | None = None
     image_path: str | None = None
+    rotation_degrees: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,6 +218,7 @@ class PdfExtractor:
         ocr_preprocess_mode: OcrPreprocessMode = "none",
         ocr_threshold: int = 180,
         ocr_preserve_page_images: bool = False,
+        ocr_rotation_retry: bool = False,
         ocr_correction_provider: OcrCorrectionProvider | None = None,
         ocr_correction_mode: OcrCorrectionMode = "always",
         ocr_correction_model: str = "mock-cleaner",
@@ -235,6 +238,7 @@ class PdfExtractor:
         self.ocr_preprocess_mode: OcrPreprocessMode = ocr_preprocess_mode
         self.ocr_threshold = ocr_threshold
         self.ocr_preserve_page_images = ocr_preserve_page_images
+        self.ocr_rotation_retry = ocr_rotation_retry
         self.ocr_correction_provider = ocr_correction_provider
         self.ocr_correction_mode = ocr_correction_mode
         self.ocr_correction_model = ocr_correction_model
@@ -327,6 +331,8 @@ class PdfExtractor:
                         preprocess_mode=self.ocr_preprocess_mode,
                         threshold=self.ocr_threshold,
                         image_artifact_path=self._ocr_page_image_artifact_path(page_number),
+                        rotation_retry=self.ocr_rotation_retry,
+                        low_confidence_threshold=self.ocr_low_confidence_threshold,
                     )
                     ocr_result = _coerce_ocr_result(ocr_result_obj)
                     correction = await self._correct_ocr_page(
@@ -341,6 +347,7 @@ class PdfExtractor:
                         *_ocr_page_warnings(
                             confidence=ocr_result.confidence,
                             low_confidence_threshold=self.ocr_low_confidence_threshold,
+                            rotation_degrees=ocr_result.rotation_degrees,
                         ),
                         *correction.warnings,
                     )
@@ -352,6 +359,7 @@ class PdfExtractor:
                         corrected=corrected_page,
                         raw_text=ocr_result.text,
                         image_path=ocr_result.image_path,
+                        rotation_degrees=ocr_result.rotation_degrees,
                         attempts=previous_attempts.get(page_number, 0) + 1,
                         duration_ms=duration_ms,
                         warnings=tuple(dict.fromkeys(warnings)),
@@ -419,6 +427,7 @@ class PdfExtractor:
                         "attempts": page.attempts,
                         "duration_ms": page.duration_ms,
                         "image_path": page.image_path,
+                        "rotation_degrees": page.rotation_degrees,
                     }
                     for page in final_pages
                 ]
@@ -436,6 +445,7 @@ class PdfExtractor:
                     "attempts": page.attempts,
                     "duration_ms": page.duration_ms,
                     "image_path": page.image_path,
+                    "rotation_degrees": page.rotation_degrees,
                 }
                 for page in final_pages
             ],
@@ -466,6 +476,7 @@ class PdfExtractor:
             "ocr_preprocess_mode": self.ocr_preprocess_mode,
             "ocr_threshold": self.ocr_threshold,
             "ocr_preserve_page_images": self.ocr_preserve_page_images,
+            "ocr_rotation_retry": self.ocr_rotation_retry,
             "ocr_correction_mode": self.ocr_correction_mode,
             "ocr_correction_model": self.ocr_correction_model,
             "ocr_low_confidence_threshold": self.ocr_low_confidence_threshold,
@@ -499,6 +510,8 @@ class PdfExtractor:
                         preprocess_mode=self.ocr_preprocess_mode,
                         threshold=self.ocr_threshold,
                         image_artifact_path=None,
+                        rotation_retry=self.ocr_rotation_retry,
+                        low_confidence_threshold=self.ocr_low_confidence_threshold,
                     )
                 )
             except (RuntimeError, ValueError) as exc:
@@ -513,9 +526,11 @@ class PdfExtractor:
                 confidence=ocr_result.confidence,
                 raw_text=ocr_result.text,
                 image_path=ocr_result.image_path,
+                rotation_degrees=ocr_result.rotation_degrees,
                 warnings=_ocr_page_warnings(
                     confidence=ocr_result.confidence,
                     low_confidence_threshold=self.ocr_low_confidence_threshold,
+                    rotation_degrees=ocr_result.rotation_degrees,
                 ),
             )
         self.last_metadata = {
@@ -728,6 +743,7 @@ class CompositeExtractor:
         ocr_preprocess_mode: OcrPreprocessMode = "none",
         ocr_threshold: int = 180,
         ocr_preserve_page_images: bool = False,
+        ocr_rotation_retry: bool = False,
         ocr_correction_provider: OcrCorrectionProvider | None = None,
         ocr_correction_mode: OcrCorrectionMode = "always",
         ocr_correction_model: str = "mock-cleaner",
@@ -755,6 +771,7 @@ class CompositeExtractor:
                 ocr_preprocess_mode=ocr_preprocess_mode,
                 ocr_threshold=ocr_threshold,
                 ocr_preserve_page_images=ocr_preserve_page_images,
+                ocr_rotation_retry=ocr_rotation_retry,
                 ocr_correction_provider=ocr_correction_provider,
                 ocr_correction_mode=ocr_correction_mode,
                 ocr_correction_model=ocr_correction_model,
@@ -1071,6 +1088,8 @@ def _ocr_pdf_page(
     preprocess_mode: OcrPreprocessMode = "none",
     threshold: int = 180,
     image_artifact_path: Path | None = None,
+    rotation_retry: bool = False,
+    low_confidence_threshold: float = 85.0,
 ) -> OcrTextResult:
     if shutil.which("tesseract") is None:
         raise RuntimeError("Scanned PDF OCR requires the 'tesseract' executable on PATH")
@@ -1094,25 +1113,121 @@ def _ocr_pdf_page(
             ),
         )
         results = [
-            _ocr_image_result(
+            _ocr_image_result_with_rotation_retry(
                 image_path,
                 language=language,
                 timeout_seconds=timeout_seconds,
                 preprocess_mode=preprocess_mode,
                 threshold=threshold,
+                rotation_retry=rotation_retry,
+                low_confidence_threshold=low_confidence_threshold,
+                output_dir=Path(tmp_dir),
             )
             for image_path in image_paths
         ]
+        selected_image_path = _selected_ocr_page_image_path(image_paths, results)
         preserved_image_path = None
-        if image_artifact_path is not None and image_paths:
-            _copy_ocr_page_image(image_paths[0], image_artifact_path)
+        if image_artifact_path is not None and selected_image_path is not None:
+            _copy_ocr_page_image(selected_image_path, image_artifact_path)
             preserved_image_path = str(image_artifact_path)
     text = "\n\n".join(result.text for result in results if result.text.strip())
     if not text:
         raise ValueError(f"No OCR text found on PDF page {page_number}: {path}")
     confidences = [result.confidence for result in results if result.confidence is not None]
     confidence = sum(confidences) / len(confidences) if confidences else None
-    return OcrTextResult(text=text, confidence=confidence, image_path=preserved_image_path)
+    rotation_degrees = max(
+        (result.rotation_degrees for result in results),
+        key=lambda degrees: 0 if degrees == 0 else 1,
+        default=0,
+    )
+    return OcrTextResult(
+        text=text,
+        confidence=confidence,
+        image_path=preserved_image_path,
+        rotation_degrees=rotation_degrees,
+    )
+
+
+def _ocr_image_result_with_rotation_retry(
+    path: Path,
+    *,
+    language: str,
+    timeout_seconds: int,
+    preprocess_mode: OcrPreprocessMode,
+    threshold: int,
+    rotation_retry: bool,
+    low_confidence_threshold: float,
+    output_dir: Path,
+) -> OcrTextResult:
+    original = _ocr_image_result(
+        path,
+        language=language,
+        timeout_seconds=timeout_seconds,
+        preprocess_mode=preprocess_mode,
+        threshold=threshold,
+    )
+    if not rotation_retry or _ocr_confidence_is_usable(
+        original.confidence,
+        low_confidence_threshold=low_confidence_threshold,
+    ):
+        return original
+
+    best = original
+    for degrees in (90, 180, 270):
+        rotated_path = _rotate_ocr_image(path, degrees=degrees, output_dir=output_dir)
+        try:
+            candidate = _ocr_image_result(
+                rotated_path,
+                language=language,
+                timeout_seconds=timeout_seconds,
+                preprocess_mode=preprocess_mode,
+                threshold=threshold,
+            )
+        except (RuntimeError, ValueError, subprocess.SubprocessError):
+            continue
+        candidate = OcrTextResult(
+            text=candidate.text,
+            confidence=candidate.confidence,
+            image_path=str(rotated_path),
+            rotation_degrees=degrees,
+        )
+        if _ocr_confidence_score(candidate.confidence) > _ocr_confidence_score(best.confidence):
+            best = candidate
+    return best
+
+
+def _ocr_confidence_is_usable(
+    confidence: float | None,
+    *,
+    low_confidence_threshold: float,
+) -> bool:
+    return confidence is not None and confidence >= low_confidence_threshold
+
+
+def _ocr_confidence_score(confidence: float | None) -> float:
+    return confidence if confidence is not None else -1.0
+
+
+def _rotate_ocr_image(path: Path, *, degrees: int, output_dir: Path) -> Path:
+    try:
+        image_module = importlib.import_module("PIL.Image")
+    except ImportError as exc:
+        raise RuntimeError("OCR rotation retry requires installing the 'ocr' extra") from exc
+    image = image_module.open(path)
+    rotated = image.rotate(-degrees, expand=True, fillcolor=255)
+    rotated_path = output_dir / f"{path.stem}.rotated-{degrees}.png"
+    rotated.save(rotated_path)
+    return rotated_path
+
+
+def _selected_ocr_page_image_path(
+    image_paths: Sequence[Path],
+    results: Sequence[OcrTextResult],
+) -> Path | None:
+    for result in results:
+        if result.image_path:
+            return Path(result.image_path)
+    return image_paths[0] if image_paths else None
 
 
 def _copy_ocr_page_image(source_path: Path, destination_path: Path) -> None:
@@ -1202,6 +1317,7 @@ async def _write_pdf_page_manifest(
                 "raw_text": page.raw_text,
                 "corrected_text": page.text if page.corrected else None,
                 "image_path": page.image_path,
+                "rotation_degrees": page.rotation_degrees,
                 "text": page.text,
             }
         )
@@ -1346,6 +1462,7 @@ def _reusable_manifest_pages(
             corrected=item.get("corrected") is True,
             raw_text=cast(str | None, item.get("raw_text")),
             image_path=cast(str | None, item.get("image_path")),
+            rotation_degrees=_manifest_rotation_degrees(item.get("rotation_degrees")),
             warnings=_manifest_warnings(item.get("warnings")),
             attempts=_manifest_attempt_count(item.get("attempts")),
             duration_ms=_manifest_duration_ms(item.get("duration_ms")),
@@ -1382,16 +1499,26 @@ def _manifest_duration_ms(value: object) -> float | None:
     return None
 
 
+def _manifest_rotation_degrees(value: object) -> int:
+    if isinstance(value, int) and value in {0, 90, 180, 270}:
+        return value
+    return 0
+
+
 def _ocr_page_warnings(
     *,
     confidence: float | None,
     low_confidence_threshold: float,
+    rotation_degrees: int = 0,
 ) -> tuple[str, ...]:
+    warnings: list[str] = []
+    if rotation_degrees:
+        warnings.append("ocr-rotation-retry")
     if confidence is None:
-        return ("missing-ocr-confidence",)
-    if confidence < low_confidence_threshold:
-        return ("low-ocr-confidence",)
-    return ()
+        warnings.append("missing-ocr-confidence")
+    elif confidence < low_confidence_threshold:
+        warnings.append("low-ocr-confidence")
+    return tuple(warnings)
 
 
 def _manifest_warnings(value: object) -> tuple[str, ...]:

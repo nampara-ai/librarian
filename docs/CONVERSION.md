@@ -127,6 +127,9 @@ OCR support:
   `threshold` and `deskew` use `LIBRARIAN_OCR_THRESHOLD`, which defaults to `180`.
 - Preserve rasterized page images for debugging with `LIBRARIAN_OCR_PRESERVE_PAGE_IMAGES=true`.
   This only writes page images when conversion sidecars are enabled.
+- Retry low-confidence PDF page OCR at 90/180/270 degree rotations with
+  `LIBRARIAN_OCR_ROTATION_RETRY=true`. This is off by default because it can multiply Tesseract
+  work on difficult pages.
 - Tune scanned-PDF throughput with `LIBRARIAN_OCR_PAGE_CONCURRENCY`.
 - Control LLM OCR correction with `LIBRARIAN_OCR_LLM_CORRECTION=always|never|low-confidence`
   and optionally override the correction model with `LIBRARIAN_OCR_LLM_MODEL`.
@@ -162,6 +165,9 @@ status/source/warning counts, retry attempts, OCR/correction counts, confidence,
 duration so operators can inspect large runs without scanning raw page text.
 When `LIBRARIAN_OCR_PRESERVE_PAGE_IMAGES=true`, OCR page records also include `image_path` values
 pointing at same-directory raster image artifacts for visual debugging.
+When `LIBRARIAN_OCR_ROTATION_RETRY=true`, low-confidence or missing-confidence OCR pages are retried
+at right-angle rotations and the selected page record includes `rotation_degrees` plus an
+`ocr-rotation-retry` warning when a rotated result was chosen.
 Scanned pages are written as `pending` before OCR begins; failed pages retain the error, warning
 codes, elapsed OCR duration, and retry `attempts`. Resumed extraction increments attempts while
 replaying only unfinished or failed OCR pages.
@@ -181,7 +187,7 @@ API deployments can inspect the same sidecar with
 `GET /imports/page-manifest?manifest_path=/data/out/report.md.pages.json`. The path must be under
 `LIBRARIAN_API_IMPORT_ROOT`; use `failures_only=true` to page through failed OCR records.
 Manifest page records also include structured `warnings` codes such as `low-ocr-confidence`,
-`missing-ocr-confidence`, `repeated-tail`, and `ocr-page-failed`.
+`missing-ocr-confidence`, `ocr-rotation-retry`, `repeated-tail`, and `ocr-page-failed`.
 
 Markdown PDF output includes stable page boundaries:
 

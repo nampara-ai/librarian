@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.0a72 - 2026-05-14
+
+- Added opt-in PDF OCR rotation retry for low-confidence or missing-confidence pages.
+  `LIBRARIAN_OCR_ROTATION_RETRY=true` retries right-angle rotations, records the selected
+  `rotation_degrees`, and marks rotated recoveries with `ocr-rotation-retry` warnings in page
+  manifests, CLI/API manifest inspection, and extraction metadata.
+
 ## 0.1.0a71 - 2026-05-14
 
 - Added structural corpus-eval expectations for regex-backed formatting/math/footnote checks and

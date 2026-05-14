@@ -194,6 +194,7 @@ class PdfPageManifestPageResponse(BaseModel):
     attempts: int
     duration_ms: float | None
     image_path: str | None
+    rotation_degrees: int
     warnings: list[str]
     error: str | None
 
@@ -424,6 +425,7 @@ class ConfigResponse(BaseModel):
     ocr_preprocess_mode: str
     ocr_threshold: int
     ocr_preserve_page_images: bool
+    ocr_rotation_retry: bool
     ocr_llm_correction: str
     ocr_llm_model: str | None
     ocr_low_confidence_threshold: float
@@ -1699,6 +1701,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ocr_preprocess_mode=settings.ocr_preprocess_mode,
             ocr_threshold=settings.ocr_threshold,
             ocr_preserve_page_images=settings.ocr_preserve_page_images,
+            ocr_rotation_retry=settings.ocr_rotation_retry,
             ocr_llm_correction=settings.ocr_llm_correction,
             ocr_llm_model=settings.ocr_llm_model,
             ocr_low_confidence_threshold=settings.ocr_low_confidence_threshold,
@@ -1884,6 +1887,7 @@ def _pdf_page_manifest_page_response(page: dict[str, object]) -> PdfPageManifest
         attempts=_manifest_int(page.get("attempts"), default=0),
         duration_ms=_manifest_float_or_none(page.get("duration_ms")),
         image_path=_manifest_str_or_none(page.get("image_path")),
+        rotation_degrees=_manifest_int(page.get("rotation_degrees"), default=0),
         warnings=_manifest_warning_list(page),
         error=_manifest_str_or_none(page.get("error")),
     )
@@ -2361,6 +2365,7 @@ def _build_extractor(
         ocr_preprocess_mode=settings.ocr_preprocess_mode,
         ocr_threshold=settings.ocr_threshold,
         ocr_preserve_page_images=settings.ocr_preserve_page_images,
+        ocr_rotation_retry=settings.ocr_rotation_retry,
         ocr_correction_provider=LazyLLMProvider(settings, metrics=metrics),
         ocr_correction_mode=settings.ocr_llm_correction,
         ocr_correction_model=settings.ocr_llm_model or settings.llm_model,

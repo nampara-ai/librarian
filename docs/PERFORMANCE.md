@@ -39,6 +39,7 @@ Record:
 - `LIBRARIAN_LLM_MAX_CONCURRENCY`
 - `LIBRARIAN_OCR_PAGE_CONCURRENCY`
 - `LIBRARIAN_OCR_LLM_CORRECTION`
+- `LIBRARIAN_OCR_ROTATION_RETRY`
 - chunk target and overlap
 - coherence mode
 - document page count and scanned-page count
@@ -87,6 +88,6 @@ search, and memory numbers for regression comparisons.
 
 ## Current Status
 
-No real-provider baseline is committed for `v0.1.0a71` because this repository does not include
+No real-provider baseline is committed for `v0.1.0a72` because this repository does not include
 provider credentials. The harness and release checklist are in place so maintainers can generate and
 attach sanitized baselines to later release candidates.

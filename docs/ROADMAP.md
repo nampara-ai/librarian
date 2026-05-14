@@ -16,6 +16,7 @@
 - Transcript quote/citation evidence in JSON and Markdown exports.
 - Structural corpus-eval checks for table relationships, regex-backed
   math/formula, footnote, citation marker, and formatting expectations.
+- Opt-in OCR rotation retry diagnostics for low-confidence scanned PDF pages.
 - Release evidence gates for prompt eval, corpus eval, benchmark, and semantic
   corpus tag coverage.
 - External repository review for Dolphin, olmOCR, and LongCut upgrade paths.
@@ -29,7 +30,7 @@
 - More real-world conversion fixtures.
 - Provider-specific performance baselines.
 - Optional olmOCR-inspired VLM page OCR adapter with anchor-text prompts,
-  rotation retry, fallback diagnostics, and provider cost/page metrics.
+  fallback diagnostics, and provider cost/page metrics.
 - Larger real-world corpus-eval fixtures for table relations, math/formula
   preservation, footnotes, and formatting.
 - Transcript quote/citation evidence in future notes and grounded Q&A.

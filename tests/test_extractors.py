@@ -1243,6 +1243,62 @@ async def test_pdf_page_manifest_records_missing_confidence_warning(
 
 
 @pytest.mark.asyncio
+async def test_pdf_page_manifest_records_ocr_rotation_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "fixture.pdf"
+    manifest = tmp_path / "fixture.md.pages.json"
+    path.write_bytes(b"%PDF")
+
+    class FakePage:
+        @staticmethod
+        def extract_text() -> None:
+            return None
+
+    class FakePdf:
+        pages = [FakePage()]
+
+        def __enter__(self) -> "FakePdf":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(path: Path) -> FakePdf:
+            del path
+            return FakePdf()
+
+    def fake_import_module(name: str) -> object:
+        if name == "pdfplumber":
+            return FakePdfPlumber
+        return __import__(name)
+
+    def fake_ocr_pdf_page(*args: object, **kwargs: object) -> OcrTextResult:
+        assert kwargs["rotation_retry"] is True
+        return OcrTextResult(text="OCR rotated", confidence=92.0, rotation_degrees=90)
+
+    monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", fake_ocr_pdf_page)
+    extractor = PdfExtractor(ocr_correction_mode="never", ocr_rotation_retry=True)
+    extractor.set_page_manifest_path(manifest)
+
+    await extractor.extract(path)
+
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    page = payload["pages"][0]
+    assert payload["extraction_config"]["ocr_rotation_retry"] is True
+    assert page["rotation_degrees"] == 90
+    assert page["warnings"] == ["ocr-rotation-retry"]
+    assert extractor.last_metadata is not None
+    pages = extractor.last_metadata["pages"]
+    assert isinstance(pages, list)
+    assert pages[0]["rotation_degrees"] == 90
+
+
+@pytest.mark.asyncio
 async def test_pdf_extractor_low_confidence_skips_high_confidence_pages(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1311,6 +1367,57 @@ def test_parse_tesseract_tsv_confidence_averages_word_confidence() -> None:
     )
 
     assert extractors.parse_tesseract_tsv_confidence(tsv) == 85.5
+
+
+def test_ocr_image_rotation_retry_selects_highest_confidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "page.png"
+    source.write_bytes(b"image")
+    calls: list[str] = []
+
+    def fake_ocr_image_result(path: Path, **kwargs: object) -> OcrTextResult:
+        del kwargs
+        calls.append(path.name)
+        if "rotated-90" in path.name:
+            return OcrTextResult(text="Rotated text", confidence=96.0)
+        if "rotated-180" in path.name:
+            return OcrTextResult(text="Upside down", confidence=12.0)
+        if "rotated-270" in path.name:
+            return OcrTextResult(text="Sideways", confidence=35.0)
+        return OcrTextResult(text="Original text", confidence=40.0)
+
+    def fake_rotate_ocr_image(path: Path, *, degrees: int, output_dir: Path) -> Path:
+        del path
+        rotated = output_dir / f"page.rotated-{degrees}.png"
+        rotated.write_bytes(b"rotated")
+        return rotated
+
+    monkeypatch.setattr("librarian.ingest.extractors._ocr_image_result", fake_ocr_image_result)
+    monkeypatch.setattr("librarian.ingest.extractors._rotate_ocr_image", fake_rotate_ocr_image)
+
+    rotation_retry = cast(Any, extractors)._ocr_image_result_with_rotation_retry
+    result = rotation_retry(
+        source,
+        language="eng",
+        timeout_seconds=120,
+        preprocess_mode="none",
+        threshold=180,
+        rotation_retry=True,
+        low_confidence_threshold=85,
+        output_dir=tmp_path,
+    )
+
+    assert result.text == "Rotated text"
+    assert result.confidence == 96.0
+    assert result.rotation_degrees == 90
+    assert calls == [
+        "page.png",
+        "page.rotated-90.png",
+        "page.rotated-180.png",
+        "page.rotated-270.png",
+    ]
 
 
 @pytest.mark.asyncio
@@ -1400,6 +1507,7 @@ async def test_pdf_extractor_passes_ocr_preprocessing_options(
         "ocr_preprocess_mode": "deskew",
         "ocr_threshold": 155,
         "ocr_preserve_page_images": False,
+        "ocr_rotation_retry": False,
         "ocr_correction_mode": "never",
         "ocr_correction_model": "mock-cleaner",
         "ocr_low_confidence_threshold": 85.0,

@@ -1455,6 +1455,7 @@ def page_manifest(
                     "corrected": page.get("corrected") is True,
                     "attempts": page.get("attempts", 0),
                     "duration_ms": page.get("duration_ms"),
+                    "rotation_degrees": page.get("rotation_degrees", 0),
                     "warnings": _manifest_warning_list(page),
                     "error": page.get("error"),
                 }
@@ -1507,6 +1508,7 @@ def page_manifest(
         "Corrected",
         "Attempts",
         "Duration ms",
+        "Rotation",
         "Warnings",
         "Error",
     )
@@ -1522,6 +1524,7 @@ def page_manifest(
             "yes" if page.get("corrected") is True else "",
             str(page.get("attempts", "")),
             f"{float(duration_ms):.1f}" if isinstance(duration_ms, int | float) else "",
+            str(page.get("rotation_degrees") or ""),
             ", ".join(_manifest_warning_list(page)),
             str(page.get("error") or ""),
         )
@@ -2087,6 +2090,7 @@ def _build_extractor(settings: Settings) -> CompositeExtractor:
         ocr_preprocess_mode=settings.ocr_preprocess_mode,
         ocr_threshold=settings.ocr_threshold,
         ocr_preserve_page_images=settings.ocr_preserve_page_images,
+        ocr_rotation_retry=settings.ocr_rotation_retry,
         ocr_correction_provider=LazyLLMProvider(settings),
         ocr_correction_mode=settings.ocr_llm_correction,
         ocr_correction_model=settings.ocr_llm_model or settings.llm_model,

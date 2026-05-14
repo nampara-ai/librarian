@@ -1757,6 +1757,7 @@ def test_cli_page_manifest_summarizes_pdf_page_state(tmp_path: Path) -> None:
                         "corrected": False,
                         "attempts": 2,
                         "duration_ms": 45.6,
+                        "rotation_degrees": 90,
                         "warnings": ["ocr-page-failed"],
                         "error": "scan failed",
                     },
@@ -1780,6 +1781,7 @@ def test_cli_page_manifest_summarizes_pdf_page_state(tmp_path: Path) -> None:
     assert "attempts=3" in output
     assert "avg_confidence=91.5" in output
     assert "ocr-page-failed" in output
+    assert "90" in output
     assert "45.6" in output
     assert "scan failed" in output
 
@@ -1876,6 +1878,7 @@ def test_cli_page_manifest_prints_machine_readable_summary(tmp_path: Path) -> No
             "corrected": False,
             "attempts": 2,
             "duration_ms": 45.6,
+            "rotation_degrees": 0,
             "warnings": ["ocr-page-failed", "missing-ocr-confidence"],
             "error": "scan failed",
         }

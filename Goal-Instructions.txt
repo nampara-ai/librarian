@@ -14,7 +14,7 @@
   conversion/OCR adapters, versioned prompts, CLI/API parity, CI, CodeQL,
   Docker, and release automation.
 
-  Current public release: `v0.1.0a71`.
+  Current public release: `v0.1.0a72`.
 
   High-level code tour:
 
@@ -173,7 +173,7 @@
   persists runs and outputs in SQLite; and exposes the same workflow through
   both a CLI and FastAPI API.
 
-  Current release: v0.1.0a71
+  Current release: v0.1.0a72
   Repo: https://github.com/nampara-ai/librarian
 
   Codebase Tour
@@ -225,12 +225,12 @@
 
   The repo is in solid alpha shape:
 
-  - Latest release: v0.1.0a71
+  - Latest release: v0.1.0a72
   - CI passes.
   - CodeQL passes.
   - Release workflow passes.
   - Docker image published.
-  - Local tests: 498 passed, 3 skipped as of the v0.1.0a71 full gate.
+  - Local tests: 500 passed, 3 skipped as of the v0.1.0a72 full gate.
   - Large PDF smoke test was run manually on a 561-page PDF:
       - 560 embedded-text pages
       - 1 OCR page
@@ -1159,3 +1159,9 @@
   row/column cell relationships. The generated and shipped DOCX table fixtures
   now prove table structure instead of only checking that table text appears
   somewhere in converted output.
+- 2026-05-14: Added opt-in PDF OCR rotation retry for low-confidence or
+  missing-confidence pages. `LIBRARIAN_OCR_ROTATION_RETRY=true` retries
+  right-angle rotations, keeps throughput unchanged by default, records the
+  selected `rotation_degrees`, and marks rotated recoveries with
+  `ocr-rotation-retry` warnings in page manifests, CLI/API manifest inspection,
+  and extraction metadata.

@@ -38,7 +38,7 @@ import root:
 docker run --rm -p 8080:8080 \
   -e LIBRARIAN_API_KEY=change-me \
   -e LIBRARIAN_API_IMPORT_ROOT=/data/imports \
-  ghcr.io/nampara-ai/librarian:v0.1.0a71
+  ghcr.io/nampara-ai/librarian:v0.1.0a72
 ```
 
 ## Environment
@@ -79,6 +79,7 @@ LIBRARIAN_CLEANING_PROMPT_VERSION=cmos_v2  # cmos_v1 or cmos_v2
 LIBRARIAN_CLASSIFICATION_PROMPT_VERSION=dewey_v2  # dewey_v1 or dewey_v2
 LIBRARIAN_OCR_TIMEOUT_SECONDS=120
 LIBRARIAN_OCR_PRESERVE_PAGE_IMAGES=false
+LIBRARIAN_OCR_ROTATION_RETRY=false
 LIBRARIAN_OCR_PDF_DPI=200
 LIBRARIAN_OCR_PDF_MAX_PAGES=1000
 LIBRARIAN_OCR_LLM_CORRECTION=always

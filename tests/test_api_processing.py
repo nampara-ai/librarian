@@ -1302,6 +1302,7 @@ def test_api_config_exposes_operational_controls(tmp_path: Path) -> None:
         ocr_preprocess_mode="threshold",
         ocr_threshold=160,
         ocr_preserve_page_images=True,
+        ocr_rotation_retry=True,
         otel_service_name="librarian-test",
         universal_timeout_seconds=77,
     )
@@ -1327,6 +1328,7 @@ def test_api_config_exposes_operational_controls(tmp_path: Path) -> None:
     assert payload["ocr_preprocess_mode"] == "threshold"
     assert payload["ocr_threshold"] == 160
     assert payload["ocr_preserve_page_images"] is True
+    assert payload["ocr_rotation_retry"] is True
     assert payload["cleaning_prompt_version"] == "cmos_v2"
     assert payload["classification_prompt_version"] == "dewey_v2"
     assert payload["universal_timeout_seconds"] == 77
@@ -2120,6 +2122,7 @@ def test_api_import_page_manifest_reports_pdf_page_progress(tmp_path: Path) -> N
             "attempts": 2,
             "duration_ms": 12.0,
             "image_path": None,
+            "rotation_degrees": 0,
             "warnings": ["ocr-page-failed", "missing-ocr-confidence"],
             "error": "tesseract failed",
         }
