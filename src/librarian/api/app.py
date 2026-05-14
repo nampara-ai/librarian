@@ -844,7 +844,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await asyncio.to_thread(_verify_writable_data_dir, settings)
             result = await SQLiteDatabase(settings.database_path).verify()
         except (FileNotFoundError, OSError, RuntimeError, sqlite3.DatabaseError) as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+            raise HTTPException(status_code=503, detail=sanitize_error_message(exc)) from exc
         if not result.ok:
             raise HTTPException(status_code=503, detail="Database verification failed")
         return ReadinessResponse(
@@ -1077,7 +1077,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             run = await container.process_document.start(DocumentId(request.document_id))
         except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise HTTPException(status_code=404, detail=sanitize_error_message(exc)) from exc
         try:
             await _submit_run(settings, http_request, run.id)
         except Exception as exc:
@@ -1162,7 +1162,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             output_mode = DirectoryOutputMode(request.output_mode)
             processing_mode = ImportProcessingMode(request.processing_mode)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=sanitize_error_message(exc)) from exc
         _validate_subdirectory_name(request.subdirectory_name)
         source_path = _resolve_api_path(Path(request.source_dir), settings=settings)
         if not source_path.exists():
@@ -1246,7 +1246,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         except ValueError as exc:
             status_code = 413 if "manifest_path contains more than" in str(exc).lower() else 400
-            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=status_code,
+                detail=sanitize_error_message(exc),
+            ) from exc
         items = cast(list[dict[str, object]], result.to_json_dict()["items"])
         return ImportResponse(
             converted=result.converted,
@@ -1282,7 +1285,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             payload_obj = json.loads(manifest_text)
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid import manifest: {exc}") from exc
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid import manifest: {sanitize_error_message(exc)}",
+            ) from exc
         if not isinstance(payload_obj, dict):
             raise HTTPException(status_code=400, detail="Invalid import manifest")
         payload = cast(dict[str, object], payload_obj)
@@ -1327,7 +1333,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except HTTPException:
             raise
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=sanitize_error_message(exc)) from exc
         visible_pages = [
             page
             for page in pages
@@ -1475,7 +1481,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 phrase=request.phrase,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=sanitize_error_message(exc)) from exc
         return SearchResponse(
             document_ids=[str(document_id) for document_id in results],
             total=total,
@@ -1514,7 +1520,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 phrase=request.phrase,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=sanitize_error_message(exc)) from exc
         return SearchResultsResponse(
             results=[
                 SearchResultResponse(
@@ -1554,7 +1560,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 phrase=request.phrase,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=sanitize_error_message(exc)) from exc
         return SearchFacetsResponse(
             classifications=[
                 SearchFacetValueResponse(value=item.value, count=item.count, label=item.label)
@@ -1697,7 +1703,7 @@ async def _ingest_upload(
         ingested = await container.ingest_document.execute(destination)
     except Exception as exc:
         await _cleanup_upload(destination)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=sanitize_error_message(exc)) from exc
     if ingested.duplicate:
         await _cleanup_upload(destination)
     return _document_response(ingested.document)
@@ -1743,7 +1749,7 @@ def _validate_search_query(request: SearchRequest) -> None:
     try:
         normalize_search_query(request.query, phrase=request.phrase)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=sanitize_error_message(exc)) from exc
 
 
 def _summary_int(summary: dict[str, object], key: str) -> int:

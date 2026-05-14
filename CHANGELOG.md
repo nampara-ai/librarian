@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a26 - 2026-05-14
+
+- Sanitized API exception details for readiness, imports, page-manifest reads, upload ingestion,
+  and search adapter validation paths so API responses preserve stable validation text without
+  leaking credentials or oversized provider/parser error payloads.
+
 ## 0.1.0a25 - 2026-05-14
 
 - Extended shared secret redaction to quoted JSON-style secret fields such as

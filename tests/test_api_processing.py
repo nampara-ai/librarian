@@ -903,6 +903,43 @@ def test_api_batch_upload_item_errors_are_redacted(
     assert "sk-testSECRET123" not in error["detail"]
 
 
+def test_api_single_upload_ingest_errors_are_redacted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+
+    class FailingIngest:
+        async def execute(self, path: Path) -> None:
+            del path
+            raise RuntimeError('ingest failed {"api_key":"abc123"} sk-testSECRET123')
+
+    class FakeContainer:
+        ingest_document = FailingIngest()
+
+    async def fake_build_ingest_container(*args: object, **kwargs: object) -> FakeContainer:
+        del args, kwargs
+        return FakeContainer()
+
+    monkeypatch.setattr(api_app, "build_ingest_container", fake_build_ingest_container)
+
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/documents",
+            files={"file": ("notes.txt", b"first", "text/plain")},
+        )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert '{"api_key":"[REDACTED]"}' in detail
+    assert "[REDACTED]" in detail
+    assert "abc123" not in detail
+    assert "sk-testSECRET123" not in detail
+
+
 def test_api_document_list_uses_paginated_response_metadata(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",
@@ -1945,6 +1982,39 @@ def test_api_import_page_manifest_rejects_symlinked_manifest_path(tmp_path: Path
     assert response.status_code == 400
     assert response.json()["code"] == "invalid_manifest_path"
     assert "manifest_path must not be a symlink" in response.json()["detail"]
+
+
+def test_api_import_page_manifest_read_errors_are_redacted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import_root = tmp_path / "imports"
+    import_root.mkdir()
+    manifest = import_root / "pages.json"
+    manifest.write_text("{}", encoding="utf-8")
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_import_root=import_root,
+    )
+
+    def fail_read_manifest(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise ValueError("manifest parser failed token: abc123 sk-testSECRET123")
+
+    monkeypatch.setattr(api_app, "_read_pdf_page_manifest", fail_read_manifest)
+
+    with TestClient(create_app(settings)) as client:
+        response = client.get(
+            "/imports/page-manifest",
+            params={"manifest_path": str(manifest)},
+        )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "token: [REDACTED]" in detail
+    assert "abc123" not in detail
+    assert "sk-testSECRET123" not in detail
 
 
 def test_api_import_rejects_manifest_over_unrelated_json(tmp_path: Path) -> None:
