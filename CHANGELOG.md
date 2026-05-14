@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0a37 - 2026-05-14
+
+- Made SQLite FTS result ordering deterministic by adding newest-document and
+  document-ID tie-breakers after BM25 score for both cleaned and raw searches,
+  keeping paginated search windows stable when relevance scores tie.
+
 ## 0.1.0a36 - 2026-05-14
 
 - Tightened release evidence verification so eval, corpus-eval, and benchmark

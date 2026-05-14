@@ -1528,7 +1528,7 @@ class SQLiteRepository:
                       AND (? IS NULL OR documents.filename LIKE ? ESCAPE '~')
                       AND (? IS NULL OR documents.created_at >= ?)
                       AND (? IS NULL OR documents.created_at <= ?)
-                    ORDER BY score ASC
+                    ORDER BY score ASC, documents.created_at DESC, documents.id ASC
                     LIMIT ? OFFSET ?
                     """,
                     parameters,
@@ -1672,7 +1672,7 @@ class SQLiteRepository:
                       AND (? IS NULL OR documents.filename LIKE ? ESCAPE '~')
                       AND (? IS NULL OR documents.created_at >= ?)
                       AND (? IS NULL OR documents.created_at <= ?)
-                    ORDER BY score ASC
+                    ORDER BY score ASC, documents.created_at DESC, documents.id ASC
                     LIMIT ? OFFSET ?
                     """,
                     parameters,

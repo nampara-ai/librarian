@@ -107,6 +107,8 @@ validated before conversion starts and must not be symlinks or cross symlinked p
   source metadata, classification metadata, `source`, `snippet`, and `score`. Raw-source search
   results use `source: "raw"` and `run_id: null`. Snippets escape source markup and preserve
   Librarian-owned `<mark>...</mark>` match highlights.
+  Results are ordered by BM25 relevance score, then newest document creation time, then document ID
+  so paged result windows remain deterministic when scores tie.
   Responses include the same `total`, `limit`, and `offset` pagination metadata as `/search`.
 - `POST /search/facets`: facet counts for a query grouped by classification, document status,
   search source, and filename. Facets honor the same query filters as `/search`, so counts reflect

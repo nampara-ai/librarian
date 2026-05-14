@@ -90,10 +90,11 @@ payloads. A filesystem or object-store content adapter remains a future option f
 hosted deployments; SQLite is still the supported alpha backend.
 
 Search goes through the application-layer `SearchIndex` port. The default adapter is SQLite FTS over
-cleaned and raw outputs, with snippets, facets, pagination, and filters. User queries are normalized
-before `MATCH` so ordinary punctuation and hyphenated terms behave like word queries instead of
-exposing raw FTS syntax. Future semantic or hybrid indexes should implement the same port rather
-than changing API or CLI route code.
+cleaned and raw outputs, with snippets, facets, pagination, and filters. Results use BM25 ranking
+with deterministic created-at and document-ID tie-breakers so pagination is stable. User queries are
+normalized before `MATCH` so ordinary punctuation and hyphenated terms behave like word queries
+instead of exposing raw FTS syntax. Future semantic or hybrid indexes should implement the same port
+rather than changing API or CLI route code.
 
 ## Prompt Governance
 
