@@ -1,0 +1,1049 @@
+  You are taking over the Librarian repository:
+
+  https://github.com/nampara-ai/librarian
+
+  Librarian is a local-first document ingestion, cleaning, classification, and
+  search system. It converts messy documents into Markdown/plain text, cleans
+  them with an LLM while preserving fidelity, classifies them into Dewey
+  Decimal-style categories, stores provenance-rich outputs, and exposes the same
+  core engine through both CLI and FastAPI surfaces.
+
+  The project began as a prototype agent that aggressively cleaned huge
+  transcript corpora. The current repo is the production rewrite: hexagonal
+  architecture, SQLite persistence, durable run records, queue workers,
+  conversion/OCR adapters, versioned prompts, CLI/API parity, CI, CodeQL,
+  Docker, and release automation.
+
+  Current public release: `v0.1.0a6`.
+
+  High-level code tour:
+
+  - `src/librarian/domain/`
+    Pure dataclasses and IDs. No framework/database/provider imports.
+
+  - `src/librarian/application/`
+    Core use cases and ports.
+    Important files:
+    - `ports.py`: protocol boundaries.
+    - `ingest_document.py`: source ingestion and raw text persistence.
+    - `convert_document.py`: single/batch conversion to Markdown/text.
+    - `process_document.py`: full processing run lifecycle.
+    - `clean_chunks.py`: fast/balanced/max-coherence chunk cleaning.
+    - `assemble_document.py`: final output assembly and boundary cleanup.
+    - `classify_document.py`: structured Dewey classification.
+    - `jobs.py`: in-process runner and durable queue worker loop.
+    - `import_library.py`: batch import workflow.
+
+  - `src/librarian/ingest/`
+    Extraction adapters:
+    - text/json/csv/md
+    - DOCX
+    - PDF with page-aware extraction
+    - image OCR via Tesseract
+    - optional broad MarkItDown conversion
+    PDF behavior is page-aware: embedded-text pages use embedded extraction;
+  empty/scanned pages are OCRed. OCR defaults support up to 1,000 pages.
+
+  - `src/librarian/storage/`
+    SQLite implementation and migrations.
+    SQLite is intentional and acceptable for alpha/local-first use. Do not
+  propose replacing it just because it is SQLite. Focus instead on correctness,
+  observability, scaling limits, and adapter boundaries.
+
+  - `src/librarian/llm/`
+    Providers:
+    - mock provider for deterministic CI/local dry runs
+    - OpenAI-compatible provider
+    - lazy provider construction for ingest-only paths
+
+  - `src/librarian/prompts/`
+    Versioned prompts.
+    Current defaults:
+    - `cleaning/cmos_v2.md`
+    - `classification/dewey_v2.md`
+    Older v1 prompts remain for provenance/cache compatibility.
+
+  - `src/librarian/cli/app.py`
+    Typer CLI. Commands include init, migrate, convert, convert-dir, import,
+  ingest, process, worker, search, export, benchmark, eval, api.
+
+  - `src/librarian/api/app.py`
+    FastAPI surface. Supports documents, imports, runs, events, search, config,
+  metrics, health.
+
+  - `tests/`
+    Broad coverage for API, CLI, processing, SQLite, conversion, extractors,
+  prompt loading, validation, queue behavior, eval/benchmark.
+
+  - `docs/`
+    Architecture, PRD, quickstart, conversion, deployment, release, supply
+  chain, performance, roadmap, etc.
+
+  Recent major work:
+  - Released `v0.1.0a4`.
+  - Added page-aware large-PDF/OCR workflow.
+  - Installed and tested Tesseract locally against a 561-page PDF.
+  - Added v2 prompt stack.
+  - Added final assembly cleanup for context-marker leaks, assistant artifacts,
+  duplicate boundary sentences, duplicate headers, and whitespace.
+  - CI, CodeQL, release workflow are passing.
+  - Release artifacts and GHCR image are live.
+
+  Important commands:
+
+  ```bash
+  uv run ruff check .
+  uv run pyright
+  uv run pytest -q
+  uv run python -m build
+  docker build -t librarian-release-check .
+
+  For OCR locally:
+
+  brew install tesseract poppler
+  pip install -e ".[all]"
+
+  Large PDF smoke flow:
+
+  export LIBRARIAN_OCR_PDF_MAX_PAGES=1000
+  export LIBRARIAN_PDF_MAX_PAGES=1000
+  export LIBRARIAN_OCR_LLM_CORRECTION=never
+
+  librarian convert ./large.pdf --format md --output ./large.md
+  librarian ingest ./large.md
+  librarian process doc_...
+  librarian search "known phrase"
+
+  Recommended next work to make Librarian world-class production-grade:
+
+  1. Real large-corpus eval suite
+     Build a sanitized benchmark corpus:
+      - long embedded-text PDFs
+      - scanned PDFs
+      - mixed OCR/embedded PDFs
+      - DOCX with tables/headers/footers
+      - Markdown transcripts
+      - noisy OCR pages
+        Track quality, page counts, extraction source per page, runtime, memory,
+        and search/index success.
+  2. Page-level OCR durability
+     Current PDF extraction is page-aware, but page-level progress/resume is not
+     fully durable.
+     Add:
+      - page extraction manifest
+      - per-page retry/replay
+      - page-level status and diagnostics
+      - ability to resume a 1,000-page OCR job without starting over
+  3. OCR quality improvements
+     Add optional richer OCR diagnostics:
+      - confidence where available
+      - per-page OCR text artifacts
+      - side-by-side raw/corrected OCR mode
+      - LLM OCR correction evals
+      - better handling for cover pages, tables, footnotes, hyphenation, page
+        headers/footers
+  4. Real provider prompt evals
+     The v2 prompts are much stronger, but they need empirical validation.
+     Build eval cases for:
+      - transcript cleanup fidelity
+      - OCR correction
+      - legal/technical prose preservation
+      - no summarization
+      - Markdown structure preservation
+      - Dewey classification accuracy
+      - context leakage prevention
+        Run against DeepSeek, OpenAI-compatible models, and any target hosted
+        provider.
+  5. Search improvements
+     SQLite FTS works, but production retrieval should improve:
+      - snippet/highlight support
+      - pagination/ranking metadata
+      - phrase query ergonomics
+      - structured filters by classification/source/status/date
+      - maybe embeddings later, but do not replace FTS until measured need
+        exists
+
+  You’re inheriting nampara-ai/librarian, a production rewrite of an old
+  prototype agent called Librarian.
+
+  Librarian is a local-first document/corpus cleaner and organizer. It ingests
+  messy transcripts, PDFs, DOCX, Markdown, text-like files, and OCR images;
+  converts them into Markdown/plain text; cleans them with an LLM while
+  preserving source fidelity; classifies them into Dewey Decimal categories;
+  persists runs and outputs in SQLite; and exposes the same workflow through
+  both a CLI and FastAPI API.
+
+  Current release: v0.1.0a6
+  Repo: https://github.com/nampara-ai/librarian
+
+  Codebase Tour
+
+  Core shape is hexagonal:
+
+  - src/librarian/domain/
+    Pure domain models and IDs. No framework or storage imports.
+  - src/librarian/application/
+    Main use cases and ports:
+      - process_document.py: processing run pipeline.
+      - convert_document.py: file/directory conversion.
+      - import_library.py: batch convert + ingest + optional process/queue.
+      - clean_chunks.py: LLM chunk cleaning with fast, balanced, max-coherence.
+      - classify_document.py: Dewey classification.
+      - assemble_document.py: final output cleanup.
+      - jobs.py: in-process runner and durable queue worker.
+  - src/librarian/ingest/extractors.py
+    Extraction/conversion adapters:
+      - text/Markdown/CSV/JSON
+      - DOCX
+      - PDF with page-aware extraction
+      - Tesseract OCR
+      - optional MarkItDown broad-format conversion
+        PDF extraction now handles mixed embedded/scanned PDFs page-by-page.
+  - src/librarian/storage/
+    SQLite repository, migrations, FTS, queue tables, run state, content blobs.
+  - src/librarian/llm/
+    Mock provider, OpenAI-compatible provider, lazy provider construction.
+  - src/librarian/prompts/
+    Versioned prompts:
+      - cleaning/cmos_v1.md
+      - cleaning/cmos_v2.md
+      - classification/dewey_v1.md
+      - classification/dewey_v2.md
+        Defaults are now cmos_v2 and dewey_v2.
+  - src/librarian/cli/app.py
+    Typer CLI.
+  - src/librarian/api/app.py
+    FastAPI app.
+  - docs/
+    Architecture, API, conversion/OCR, deployment, release, evaluation,
+    performance, roadmap, supply chain docs.
+  - .github/workflows/
+    CI, CodeQL, release workflow. Release builds wheel/sdist/SBOM and publishes
+    GHCR image.
+
+  Current State
+
+  The repo is in solid alpha shape:
+
+  - Latest release: v0.1.0a6
+  - CI passes.
+  - CodeQL passes.
+  - Release workflow passes.
+  - Docker image published.
+  - Local tests: 406 passed, 3 skipped as of the last full gate.
+  - Large PDF smoke test was run manually on a 561-page PDF:
+      - 560 embedded-text pages
+      - 1 OCR page
+      - conversion succeeded
+      - batch sidecar metadata was correct
+      - ingest/process/search succeeded with mock provider
+
+  Important Existing Capabilities
+
+  CLI examples:
+
+  librarian init
+  librarian convert ./large.pdf --format md --output ./large.md
+  librarian ingest ./large.md
+  librarian process doc_...
+  librarian search "known phrase"
+  librarian import ./input --recursive --format md --process
+  librarian worker
+
+  API examples:
+
+  - POST /documents
+  - POST /runs
+  - POST /imports
+  - POST /search
+  - GET /documents/{id}/content
+  - GET /documents/{id}/export
+  - GET /config
+
+  Config highlights:
+
+  LIBRARIAN_LLM_PROVIDER=openai-compatible
+  LIBRARIAN_LLM_MODEL=deepseek-chat
+  LIBRARIAN_LLM_BASE_URL=https://api.deepseek.com
+  LIBRARIAN_LLM_API_KEY_ENV=DEEPSEEK_API_KEY
+  DEEPSEEK_API_KEY=...
+  LIBRARIAN_CLEANING_PROMPT_VERSION=cmos_v2
+  LIBRARIAN_CLASSIFICATION_PROMPT_VERSION=dewey_v2
+  LIBRARIAN_OCR_PDF_MAX_PAGES=1000
+  LIBRARIAN_OCR_LLM_CORRECTION=always
+
+  Recommendations For World-Class Production Readiness
+
+  1. Build real long-document evaluation
+
+  The biggest missing piece is not architecture; it is evidence. Create a
+  sanitized benchmark/eval corpus with:
+
+  - 500-1000 page embedded PDFs
+  - scanned PDFs
+  - mixed embedded/scanned PDFs
+  - DOCX with tables, headers, footers, lists
+  - OCR images
+  - messy transcript files
+  - multilingual OCR samples if needed
+
+  Track:
+
+  - conversion time
+  - processing time
+  - peak memory
+  - output character ratio
+  - page count integrity
+  - search recall for known phrases
+  - classification accuracy
+  - OCR quality before/after LLM correction
+  - formatting preservation
+
+  Add a docs/results/ or release-attached benchmark artifact policy.
+
+  2. Add page-level progress and resumability for huge PDFs
+
+  Current PDF conversion works, but a true 1000-page scanned PDF should have
+  durable page-level state.
+
+  Recommended design:
+
+  - Add page extraction records keyed by source hash + page number + extraction
+    config.
+  - Persist per-page status: pending, embedded, ocr, corrected, failed.
+  - Allow resume after crash.
+  - Stream page progress through CLI/API.
+  - Sidecar should be written incrementally, not only after full conversion.
+  - Failed pages should support retry.
+
+  3. Improve OCR fidelity and diagnostics
+
+  Current OCR path uses Tesseract and optional LLM correction. Next upgrades:
+
+  - Capture Tesseract confidence via TSV/HOCR where available.
+  - Implement LIBRARIAN_OCR_LLM_CORRECTION=low-confidence for real.
+  - Preserve page images or OCR diagnostics optionally.
+  - Add preprocessing knobs:
+      - grayscale
+      - thresholding
+      - deskew
+      - DPI tuning
+  - Add structured page warnings in sidecars.
+  - Add tests with actual scanned fixtures.
+
+  4. Add real provider integration tests behind opt-in env vars
+
+  CI should keep using mock, but maintainers should have opt-in tests:
+
+  LIBRARIAN_RUN_PROVIDER_TESTS=1
+  LIBRARIAN_LLM_PROVIDER=openai-compatible
+  LIBRARIAN_LLM_MODEL=...
+
+  Test:
+
+  - cleaning prompt behavior
+  - JSON classification response robustness
+  - retry behavior
+  - auth failure fast-fail
+  - rate-limit retry
+  - prompt version provenance
+  - OCR correction quality
+
+  5. Improve output rendering and formatting preservation
+
+  The core goal is flawless Markdown/plain text. Add render-quality checks:
+
+  - page markers preserved
+  - Markdown headings stable
+  - tables preserved where possible
+  - lists preserved
+  - citations not mangled
+  - no leaked context markers
+  - no assistant artifacts
+  - no duplicated boundary sentences
+  - no collapsed document into one paragraph
+
+  Consider adding a Markdown AST validation layer or snapshot tests for
+  representative fixtures.
+
+  6. Make single-file import workflow smoother
+
+  Right now librarian import is directory-oriented. Users naturally expect this
+  to work:
+
+  librarian import ./large.md --process
+
+  Recommended fix:
+
+  - Let import accept file or directory.
+  - If file, convert/ingest/process just that file.
+  - Keep convert-dir directory-only, but make import ergonomic.
+
+  7. Strengthen API product surface
+
+  API is functional, but production hosted use needs:
+
+  - OpenAPI response models for all endpoints.
+  - Better error taxonomy and stable machine-readable error codes.
+  - Batch upload endpoint.
+  - Import progress endpoints.
+  - Run logs as structured JSON, not only events strings.
+  - Auth model beyond one static API key if hosted.
+  - Optional per-tenant data roots if multi-user.
+
+  8. Add observability
+
+  Current metrics are process-local and basic. Add:
+
+  - structured logs for each run stage
+  - run duration metrics
+  - queue wait time
+  - OCR pages/sec
+  - LLM tokens/estimated cost if provider exposes usage
+  - conversion failure counts by taxonomy
+  - OpenTelemetry export option
+  - Prometheus endpoint option
+
+  9. Harden SQLite operations at scale
+
+  SQLite is fine for this project, especially local-first. But tune and test it
+  seriously:
+
+  - Stress API + worker contention.
+  - Validate WAL/busy timeout behavior under load.
+  - Add VACUUM/checkpoint guidance.
+  - Document expected DB growth for large corpora.
+  - Consider filesystem/object content adapter later for very large cleaned/raw
+    blobs, but don’t migrate away from SQLite prematurely.
+
+  10. Improve search
+
+  Current SQLite FTS is a good baseline. Next:
+
+  - More forgiving query parser for punctuation/hyphenated terms.
+  - Snippets/highlights.
+  - Search over raw vs cleaned outputs.
+  - Facets by classification/status/source.
+  - Optional semantic index adapter behind a port.
+
+  11. Release hardening
+
+  Already good for alpha. Before beta:
+
+  - Publish to PyPI if package ownership is settled.
+  - Add artifact attestations.
+  - Add signed releases.
+  - Add container vulnerability scanning.
+  - Consider locked constraints for release builds.
+  - Add a reproducibility note.
+  - Improve changelog release notes so release pages don’t include the full
+    changelog as notes.
+
+  12. Security/privacy pass
+
+  Before hosted mode:
+
+  - Threat model API imports.
+  - Review symlink/path handling again.
+  - Add malware/archive policy for uploaded files.
+  - Add data deletion tests for every persisted artifact.
+  - Ensure logs never include source text or API keys.
+  - Add secret scanning guidance for users.
+
+  High-Priority Next Work Order
+
+  1. Add single-file librarian import ./file --process.
+  2. Add page-level OCR progress/resume design and implementation.
+  3. Build real long-document fixture/eval harness.
+  4. Add OCR confidence diagnostics and implement low-confidence.
+  5. Add provider-backed eval suite for cmos_v2 / dewey_v2.
+  6. Improve search query handling for punctuation/hyphenated phrases.
+  7. Add OpenTelemetry/Prometheus production observability.
+  8. Cut v0.1.0a4 only after the above has tests and docs.
+
+  Caution
+
+  Do not casually rewrite the architecture. The ports/adapters split is already
+  working. The next improvements should mostly be deeper reliability, evals,
+  progress/resume, large-file evidence, and operator visibility.
+
+  Codex Progress Log
+
+  - 2026-05-13: Added exact phrase search ergonomics across SQLite search,
+    FastAPI search requests, and CLI `librarian search --phrase`, with matching
+    tests and API documentation. This advances high-priority item 6 while
+    preserving the existing broad FTS behavior by default.
+  - 2026-05-13: Hardened PDF page manifests for OCR durability: scanned pages
+    are persisted as pending before OCR starts, failed pages keep errors,
+    warnings, elapsed duration, and retry attempts, and resumed extraction
+    increments attempts while replaying only unfinished/failed OCR pages. This
+    advances high-priority item 2.
+  - 2026-05-13: Extended `librarian page-manifest` so human and JSON summaries
+    expose OCR retry attempts and page duration without printing raw/corrected
+    page text, improving operator diagnostics for long OCR jobs.
+  - 2026-05-13: Added CLI-level regression coverage for single-file
+    `librarian import ./file --process`, including immediate processing and
+    searchable output, to pin high-priority item 1 to executable evidence.
+  - 2026-05-13: Added corpus-eval performance budgets for conversion time,
+    processing time, and peak traced memory so long-document suites can fail on
+    explicit speed/footprint regressions instead of only recording metrics.
+  - 2026-05-13: Extended `generate-corpus` with `--include-docx` to emit
+    sanitized DOCX fixtures with paragraphs, tables, headers, and footers,
+    broadening reproducible corpus-eval coverage beyond Markdown transcripts.
+  - 2026-05-13: Added `generate-corpus --include-pdf` for deterministic
+    embedded-text PDF fixtures with expected page counts and extraction-tested
+    stable phrases, further expanding sanitized large-corpus coverage.
+  - 2026-05-13: Tightened API archive upload policy so known archive/container
+    extensions are rejected before upload bytes are written, with tests and
+    threat-model/API documentation.
+  - 2026-05-13: Extended log secret redaction to plain-text logging, not only
+    JSON logs, so API keys, bearer tokens, and `sk-...` tokens are redacted
+    consistently across configured log formats.
+  - 2026-05-13: Added shared persisted-error sanitization for processing and
+    queue failures so stored/API-visible errors are credential-redacted and
+    length-capped before they reach run records or queue records.
+  - 2026-05-13: Strengthened API deletion regression coverage to assert raw
+    content blobs, raw FTS rows, cleaned chunks, run queue rows, and run events
+    are removed along with document-scoped records and owned upload files.
+  - 2026-05-13: Moved API search scope/status validation ahead of ingest
+    container construction and pinned invalid-filter regressions so malformed
+    search requests fail before opening SQLite-backed storage.
+  - 2026-05-13: Tightened SQLite search query normalization so a dangling quote
+    after real terms no longer drops punctuation-heavy/hyphenated text; the
+    recovered terms are covered by direct normalization and raw-search tests.
+  - 2026-05-13: Strengthened the v2 prompt eval harness with output character
+    ratio bounds, expanded the shipped eval suite for no-summarization and
+    Markdown-structure risks, and added opt-in real-provider coverage that runs
+    the committed suite against `cmos_v2`/`dewey_v2`.
+  - 2026-05-13: Added a committed sanitized synthetic corpus suite with
+    Markdown, DOCX tables/headers/footers, and embedded-text PDF cases, calibrated
+    the mock classifier for library-science fixtures, and wired the suite into CI
+    as an end-to-end corpus-eval smoke.
+  - 2026-05-13: Added a release evidence verifier for eval, corpus-eval, and
+    benchmark JSON artifacts, including real-provider enforcement for release
+    candidates, and documented the release-time evidence gate.
+  - 2026-05-13: Pinned the GitHub secret-scanning workflow in regression tests,
+    covering Gitleaks on pull requests, main pushes, weekly schedule, manual
+    dispatch, read-only permissions, and non-persistent checkout credentials.
+  - 2026-05-13: Added the sanitized synthetic corpus eval to the tag release
+    workflow before package/container publication and pinned that ordering in
+    release workflow tests.
+  - 2026-05-13: Re-ran the Docker release-check build after the workflow and
+    corpus-eval hardening; `docker build -t librarian-release-check .` completed
+    successfully.
+  - 2026-05-13: Smoke-tested the built Docker image with required API/import-root
+    environment and verified `/ready` returns ready, then added the container
+    readiness smoke to the release checklist.
+  - 2026-05-13: Added container regression coverage that pins the Docker image
+    to its non-root `librarian` user and owned `/data` runtime directory.
+  - 2026-05-13: Re-ran the documented strict environment check;
+    `uv run librarian doctor --strict` passed with OCR, PDF rasterization,
+    broad-format conversion, and SQLite configuration available locally.
+  - 2026-05-13: Ran a larger local sanitized synthetic corpus check under
+    `.librarian/large-synthetic-release-check`: 12 Markdown/DOCX/PDF cases,
+    895,379 input bytes, 787,193 output chars, 24/24 search hits, 1.0 search
+    recall, 0 failures, and release-evidence verification passed with
+    `--min-corpus-cases 12`.
+  - 2026-05-13: Tightened the release evidence verifier to require provenance
+    metadata (`generated_at`, Librarian version, and model fields) on eval,
+    corpus-eval, and benchmark artifacts, and re-verified the larger synthetic
+    corpus result with the stricter checker.
+  - 2026-05-13: Added repository hygiene coverage that fails if local runtime
+    data, `docs/results/`, `.env`, or provider evidence artifacts become tracked,
+    complementing the Gitleaks workflow when the local scanner is unavailable.
+  - 2026-05-13: Extended the release evidence verifier with `--version` so eval,
+    corpus-eval, and benchmark artifacts must match the release candidate tag,
+    and re-verified the larger synthetic corpus result against `v0.1.0a3`.
+  - 2026-05-13: Reworked the release checklist to use a single
+    `RELEASE_VERSION` variable for evidence verification, tagging, and pushing,
+    and pinned the docs against stale hard-coded tag commands.
+  - 2026-05-13: Added package version consistency coverage for `pyproject.toml`
+    and `src/librarian/version.py`, and changed the release checklist to use an
+    explicit `<next-version>` placeholder until the package is intentionally
+    bumped for a release candidate.
+  - 2026-05-13: Replaced the release checklist version placeholder with an
+    executable command that derives `RELEASE_VERSION` from `librarian.version`,
+    keeping evidence verification and tag commands tied to the built package.
+  - 2026-05-13: Ran local benchmark evidence with three mock-provider repeats:
+    average throughput 2,711,442 chars/sec, fastest 3,578,652 chars/sec, and
+    release-evidence verification passed against `v0.1.0a3`.
+  - 2026-05-13: Hardened release evidence verification to reject malformed
+    timestamps and inconsistent eval/corpus pass counts, then re-verified the
+    larger synthetic corpus and benchmark artifacts with the stricter checks.
+  - 2026-05-13: Improved the deterministic mock cleaner so it preserves Markdown
+    structure, made the shipped `examples/eval_cases.json` pass locally without
+    hosted credentials, verified the mock eval artifact, and wired the prompt
+    eval into CI.
+  - 2026-05-13: Added the shipped prompt eval to the tag release workflow before
+    package/container publication and pinned that ordering in release workflow
+    tests.
+  - 2026-05-13: Marked `examples/baselines/mock-eval.json` explicitly as a
+    baseline manifest rather than a release evidence artifact, with regression
+    coverage so operators do not confuse it with verifier-ready provider output.
+  - 2026-05-13: Updated `CHANGELOG.md` so Unreleased summarizes the actual
+    search, OCR, eval, API, release, observability, and security hardening work,
+    and added a regression preventing the placeholder from returning.
+  - 2026-05-13: Added a normal CI `python -m build` step before Docker image
+    construction and pinned the ordering in workflow tests, so packaging
+    failures are caught before tag release time.
+  - 2026-05-13: Added a normal CI wheel smoke-install step that installs
+    `dist/*.whl` into a fresh venv and runs `librarian version` before Docker
+    image construction.
+  - 2026-05-13: Changed CI, tag release, and release documentation build steps
+    to clear stale `dist/` artifacts before `python -m build`, then verified a
+    clean local wheel smoke install reports `librarian version` as `0.1.0a3`.
+  - 2026-05-13: Added an explicit OpenAPI response contract for
+    `/documents/{document_id}/export`, including JSON export schema and
+    `text/plain`/`text/markdown` media types, then pinned it in API schema
+    regression coverage.
+  - 2026-05-13: Added a release-workflow Gitleaks scan over full checkout
+    history before distribution/container builds, with regression coverage so
+    tag releases cannot publish artifacts before committed-secret scanning.
+  - 2026-05-13: Added a release-workflow guard that rejects tag/package version
+    mismatches before build or publish steps, preventing accidental releases
+    from stale or incorrectly bumped package metadata.
+  - 2026-05-13: Added an explicit OpenAPI `text/event-stream` contract for
+    `/runs/{run_id}/events/stream`, rounding out the documented API response
+    surface for streaming run progress.
+  - 2026-05-13: Added a release-workflow evidence gate that writes prompt eval,
+    synthetic corpus eval, and benchmark JSON artifacts to deterministic temp
+    paths, verifies them against the release tag with
+    `.github/scripts/verify_release_evidence.py`, and blocks distribution builds
+    if the evidence shape, version, pass counts, recall, or benchmark run count
+    is invalid.
+  - 2026-05-13: Changed the release workflow to keep sanitized mock eval,
+    corpus-eval, and benchmark evidence as named release assets, and ignored
+    local `release-evidence/` output in Git and Docker contexts.
+  - 2026-05-13: Split release secret scanning into a read-only prerequisite job
+    so the Gitleaks action does not inherit distribution, package, attestation,
+    or SARIF upload permissions from the publishing job.
+  - 2026-05-13: Tightened the release mock benchmark gate to require at least
+    1,000 chars/sec via the release evidence verifier, catching broken local
+    orchestration before distribution artifacts are built.
+  - 2026-05-13: Added `pip-audit` to the dev toolchain and wired Python
+    dependency vulnerability audits into CI and tag release workflows, including
+    a fixed `urllib3>=2.7.0` audit-environment floor after local audit found
+    `urllib3 2.6.3` vulnerabilities.
+  - 2026-05-13: Added the same `pip-audit --skip-editable` command to the
+    manual release verification checklist and pinned it in release-doc tests so
+    local release candidates use the same dependency audit gate as CI.
+  - 2026-05-13: Added a read-only GitHub dependency review workflow for pull
+    requests, failing high-severity dependency changes before merge, and pinned
+    both that workflow and the Dependabot Python/GitHub Actions schedule in
+    regression tests.
+  - 2026-05-13: Added API regression coverage proving security headers are
+    present on non-JSON responses too, including Prometheus text metrics,
+    Markdown document exports, and server-sent run-event streams.
+  - 2026-05-13: Added CI evidence verification for prompt eval, synthetic
+    corpus eval, and benchmark JSON outputs, using the same release evidence
+    verifier and conservative recall/throughput floors before CI reaches build
+    or Docker steps.
+  - 2026-05-13: Added a release constraints exporter that derives exact
+    third-party package pins from `uv.lock`, attaches `constraints.txt` to tag
+    releases, includes it in `SHA256SUMS.txt`, and documents constrained wheel
+    installs for alpha users.
+  - 2026-05-13: Expanded release checksum coverage so sanitized mock evidence
+    JSON assets are included in `SHA256SUMS.txt` alongside distributions, SBOM,
+    and dependency constraints.
+  - 2026-05-13: Locally smoke-tested the expanded checksum set with generated
+    distributions, SBOM, constraints, and sanitized evidence JSON; every listed
+    artifact verified successfully.
+  - 2026-05-13: Strengthened API readiness so `/ready` verifies runtime
+    `data_dir` writability in addition to SQLite integrity and migration
+    metadata, with regression coverage for storage failures returning 503.
+  - 2026-05-13: Tightened release/CI corpus evidence verification with a
+    minimum total output-to-input ratio, so evidence gates catch pathological
+    extraction or cleaning runs that preserve search hits but drop most text.
+  - 2026-05-13: Added a tag-release changelog guard that fails before build if
+    `CHANGELOG.md` lacks a matching release section or still has Unreleased
+    entries, preventing stale release notes from being published.
+  - 2026-05-13: Added tag-scoped release workflow concurrency and
+    `gh release create --verify-tag`, reducing duplicate tag-run races and
+    ensuring release creation is anchored to an existing pushed tag.
+  - 2026-05-13: Changed the release workflow artifact upload to use a
+    tag-scoped artifact name with explicit 30-day retention, improving audit
+    traceability for pre-release Actions artifacts.
+  - 2026-05-13: Added provenance attestations for generated release metadata and
+    sanitized evidence assets (`sbom.json`, `constraints.txt`, `SHA256SUMS.txt`,
+    and `release-evidence/*.json`), not only distributions and container images.
+  - 2026-05-13: Extended OpenAPI generation to document the shared stable
+    `ErrorResponse` shape across API operations while preserving conditional
+    auth security docs only when API keys are configured.
+  - 2026-05-13: Added explicit job-level timeouts across CI, release, CodeQL,
+    dependency review, and secret-scanning workflows to prevent unbounded hangs
+    in dependency installs, image builds, scans, or release publication.
+  - 2026-05-13: Added a generic API exception handler that returns a stable
+    redacted `server_error` JSON response with security headers for unhandled
+    exceptions, logs only sanitized error summaries, and extended OpenAPI
+    error docs/tests to include HTTP 500.
+  - 2026-05-13: Added deterministic scanned and mixed embedded/scanned PDF
+    fixtures to `generate-corpus` and the shipped synthetic corpus suite, then
+    ran the end-to-end corpus eval successfully over 10 sanitized cases with 3
+    OCR pages, 18/18 search hits, 1.0 search recall, and 0 failures.
+  - 2026-05-13: Added a SQLite API/worker contention regression that drives
+    multiple independent durable queue claimers while API-like repository reads
+    and writes continue, proving queued runs are claimed exactly once and
+    completed under concurrent SQLite access.
+  - 2026-05-13: Added `librarian db-stats` plus docs/tests so operators can
+    measure SQLite file bytes, WAL/SHM sidecars, page/freelist usage, table
+    counts, source bytes, and raw/chunk/cache/cleaned stored-text bytes for
+    real large-corpus growth estimates.
+  - 2026-05-13: Added final-assembly render-quality regression coverage for
+    Markdown headings, page markers, unordered/ordered lists, tables, citations,
+    paragraph boundaries, duplicate boundary sentences, context-marker removal,
+    and assistant artifact removal; the snapshot exposed and fixed an
+    additional `I have cleaned the transcript` artifact variant.
+  - 2026-05-13: Added an application-layer `SearchIndex` port and
+    `SearchLibrary` service, then routed API/CLI search through that service so
+    future semantic or hybrid indexes can replace SQLite FTS behind a stable
+    application port.
+  - 2026-05-13: Added explicit release reproducibility notes to
+    `docs/SUPPLY_CHAIN.md` and linked them from `docs/RELEASE.md`, documenting
+    tag/version checks, constraints, checksums, attestations, local rebuild
+    commands, and how to interpret mismatches.
+  - 2026-05-13: Added opt-in OCR preprocessing controls for grayscale,
+    thresholded, and deskewed image preparation before Tesseract, threaded
+    through settings, CLI/API extraction, operational config reporting, docs,
+    and extractor regressions.
+  - 2026-05-13: Added a deterministic noisy scanned-OCR PDF fixture option to
+    synthetic corpus generation, included it in the shipped synthetic corpus
+    suite, raised CI/release corpus evidence minimums to 11 cases, and verified
+    the expanded suite passes with 11/11 cases, 3 OCR pages, and 1.0 search
+    recall.
+  - 2026-05-13: Added redacted API security audit log events for invalid API
+    keys, insufficient key scope, and rate limiting, with tests proving key
+    material is not written to logs and deployment/threat-model docs updated.
+  - 2026-05-13: Added opt-in OCR page-image preservation for sidecar-backed
+    PDF page manifests, recording `image_path` in page manifests and metadata
+    so failed or low-quality OCR pages can be visually audited without changing
+    default conversion behavior.
+  - 2026-05-13: Added a read-only API endpoint for PDF page manifest status
+    under `LIBRARIAN_API_IMPORT_ROOT`, giving operators page-level OCR status,
+    warning, confidence, retry, failure, and preserved-image diagnostics without
+    shell access to `librarian page-manifest`.
+  - 2026-05-13: Tightened tag-release validation so built wheels are
+    smoke-installed with the exported `constraints.txt` pins from `uv.lock`,
+    proving the published dependency constraints work before artifacts are
+    checksummed, attested, and attached.
+  - 2026-05-13: Added durable SQLite API audit events for invalid API keys,
+    insufficient key scope, and rate-limit denials, persisting safe request
+    metadata without API key material so hosted operators can review incidents
+    beyond process log retention.
+  - 2026-05-13: Added `librarian api-audit` with pagination, event filtering,
+    and JSON output so operators can inspect durable API security audit events
+    without opening SQLite directly.
+  - 2026-05-13: Added configurable API audit-event retention so long-lived
+    deployments prune old denial records on new audit writes while allowing
+    indefinite retention with `LIBRARIAN_API_AUDIT_RETENTION_DAYS=0`.
+  - 2026-05-13: Added a structured API run-event SSE stream so hosted or GUI
+    clients can consume live JSON progress records without polling.
+  - 2026-05-13: Hardened search snippets so document-supplied markup is escaped
+    while Librarian-owned match highlights remain available for UI clients.
+  - 2026-05-13: Hardened workspace restore to reject zip members marked as
+    symlinks before restoring data files.
+  - 2026-05-13: Hardened CLI PDF page-manifest inspection so symlinked paths
+    and symlinked parents are rejected before reading manifest JSON.
+  - 2026-05-13: Hardened CLI import and directory conversion path handling so
+    manifest, report, and `new-directory` output paths are not resolved before
+    symlink validation runs.
+  - 2026-05-13: Hardened API import path handling so `manifest_path` and
+    `new-directory` `output_dir` symlink validation is preserved before
+    conversion starts.
+  - 2026-05-13: Prepared `v0.1.0a5` by draining Unreleased changelog entries
+    into a dated release section, bumping package/docs versions, and running
+    the full local release gate.
+  - 2026-05-13: Hardened API import status and PDF page-manifest read endpoints
+    so symlinked manifest paths are rejected before any JSON is opened.
+  - 2026-05-13: Hardened API uploads so renamed archives with common archive
+    signatures are rejected on the first chunk before any upload bytes are
+    persisted.
+  - 2026-05-13: Prepared `v0.1.0a6` so the post-`v0.1.0a5` API manifest-read
+    and renamed-archive upload hardening is represented in the public release.
+  - 2026-05-13: Extended renamed-archive signature rejection into CLI/import
+    text and broad-format conversion boundaries, while making the API upload
+    signature policy extension-aware so supported ZIP-container documents such
+    as `.docx` remain ingestible.
+  - 2026-05-13: Prepared `v0.1.0a7` so the CLI/import renamed-archive
+    hardening and ZIP-container upload correction are represented in the public
+    release line.
+  - 2026-05-13: Hardened API client-IP identity so untrusted
+    `X-Forwarded-For` headers cannot bypass unauthenticated rate limits or
+    spoof audit-log client hosts; forwarded addresses are honored only from
+    explicitly trusted proxy CIDRs.
+  - 2026-05-13: Prepared `v0.1.0a8` so trusted-proxy client-IP hardening is
+    represented in the public release line.
+  - 2026-05-13: Added a shipped OCR-correction prompt eval case requiring
+    common OCR artifacts to be corrected while preserving source facts, and
+    extended deterministic mock-provider coverage so CI enforces the prompt
+    risk area called out in the real-provider eval plan.
+  - 2026-05-13: Prepared and published `v0.1.0a9`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for the OCR-correction eval expansion.
+  - 2026-05-13: Added sanitized API export `Content-Disposition` headers with
+    ASCII fallback filenames and UTF-8 `filename*` values, covering normal and
+    adversarial document names so hosted download clients receive safe stable
+    filenames.
+  - 2026-05-13: Prepared and published `v0.1.0a10`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for API export filename hardening.
+  - 2026-05-13: Bounded API rate-limiter memory growth by pruning expired
+    per-identity buckets on request flow even when traffic comes from a high
+    churn of unique client identities, with direct regression coverage.
+  - 2026-05-13: Prepared and published `v0.1.0a11`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for API rate-limiter memory hardening.
+  - 2026-05-13: Hardened API export format validation so unsupported formats
+    return a stable `bad_request` response before document lookup, with
+    regression coverage proving nonexistent documents do not mask bad formats.
+  - 2026-05-13: Prepared and published `v0.1.0a12`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for API export format validation
+    hardening.
+  - 2026-05-13: Hardened API search date-window validation so `/search`,
+    `/search/results`, and `/search/facets` reject inverted
+    `created_after`/`created_before` filters before storage access.
+  - 2026-05-13: Prepared and published `v0.1.0a13`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for API search date-window validation
+    hardening.
+  - 2026-05-13: Hardened CI/release secret scanning by replacing the
+    Node-backed Gitleaks GitHub Action with a pinned
+    `zricethezav/gitleaks:v8.30.1` container invocation, with workflow tests
+    and supply-chain documentation updated.
+  - 2026-05-13: Prepared and published `v0.1.0a14`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for pinned-container Gitleaks secret
+    scanning.
+  - 2026-05-13: Aligned README, release checklist, and threat model
+    secret-scanning guidance with the pinned Gitleaks container used by
+    CI/release workflows, with regression coverage preventing the stale local
+    binary command from returning.
+  - 2026-05-13: Prepared and published `v0.1.0a15`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for pinned-container secret-scanning
+    documentation consistency.
+  - 2026-05-13: Hardened API search query validation so malformed or oversized
+    queries are rejected before storage access on `/search`, `/search/results`,
+    and `/search/facets`, with stable `invalid_search_query` and
+    `search_query_too_large` response codes.
+  - 2026-05-13: Prepared and published `v0.1.0a16`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for API search query validation
+    hardening.
+  - 2026-05-13: Hardened API batch upload item-level error handling so
+    unexpected per-file failures are redacted before being returned in batch
+    responses, preventing API keys and provider tokens from leaking through
+    partial-failure payloads.
+  - 2026-05-13: Prepared and published `v0.1.0a17`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for API batch-upload error redaction
+    hardening.
+  - 2026-05-13: Hardened API run submission failures so queue/backend
+    exceptions are redacted before returning 503 responses or persisting
+    failed-run errors, preventing API keys and provider tokens from leaking via
+    enqueue/retry failures.
+  - 2026-05-13: Prepared and published `v0.1.0a18`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for API run-submission error redaction
+    hardening.
+  - 2026-05-13: Hardened conversion, import, and corpus-eval report failures
+    so shared workflow artifacts redact API keys and provider tokens instead of
+    preserving raw exception text in item errors or failed queue-run records.
+  - 2026-05-13: Prepared and published `v0.1.0a19`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for workflow-artifact error redaction
+    hardening.
+  - 2026-05-13: Hardened CLI retry queue-submission failures so
+    `run-retry --queue` redacts API keys and provider tokens before printing
+    command errors or persisting failed retry-run errors.
+  - 2026-05-13: Prepared and published `v0.1.0a20`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for CLI retry queue-submission
+    redaction hardening.
+  - 2026-05-13: Hardened PDF OCR page failures so page extraction manifests and
+    raised conversion errors redact API keys and provider tokens from
+    Tesseract/adapter exception text.
+  - 2026-05-13: Prepared and published `v0.1.0a21`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for PDF OCR page-failure redaction
+    hardening.
+  - 2026-05-13: Hardened MarkItDown broad-format child-process failures so
+    optional conversion adapter exceptions are redacted before crossing the
+    worker queue boundary.
+  - 2026-05-13: Prepared and published `v0.1.0a22`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for MarkItDown child-process error
+    redaction hardening.
+  - 2026-05-13: Hardened OpenAI-compatible provider failures so non-retriable
+    provider errors and retry-exhaustion errors are redacted before leaving the
+    LLM adapter, without chaining raw provider exceptions that may contain API
+    keys or tokens.
+  - 2026-05-13: Prepared and published `v0.1.0a23`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for OpenAI-compatible provider error
+    redaction hardening.
+  - 2026-05-14: Hardened shared secret redaction so colon-separated API key,
+    token, secret, and password forms, including header-like `x-api-key: ...`
+    messages, are redacted in logs and sanitized API/run error payloads.
+  - 2026-05-14: Prepared and published `v0.1.0a24`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for colon-separated secret redaction
+    hardening.
+  - 2026-05-14: Hardened shared secret redaction for quoted JSON-style secret
+    fields, including double-quoted and single-quoted provider payloads, while
+    preserving non-secret JSON fields in sanitized logs and error messages.
+  - 2026-05-14: Prepared and published `v0.1.0a25`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for quoted JSON-style secret redaction
+    hardening.
+  - 2026-05-14: Hardened API exception details for readiness, imports,
+    page-manifest reads, upload ingestion, and search adapter validation paths
+    so responses preserve stable validation text while redacting credentials and
+    bounding provider/parser error payloads.
+  - 2026-05-14: Prepared and published `v0.1.0a26`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for API exception-detail redaction
+    hardening.
+  - 2026-05-14: Hardened remaining CLI exception-detail surfaces for database
+    and workspace maintenance, import/report validation, search validation,
+    synthetic corpus generation, page manifests, and directory-output
+    validation so command errors preserve useful context without leaking
+    credentials or provider/parser payloads.
+  - 2026-05-14: Prepared and published `v0.1.0a27`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for remaining CLI exception-detail
+    redaction hardening.
+  - 2026-05-14: Improved broad SQLite FTS search normalization so possessive
+    apostrophes in user queries, including straight and curly apostrophe
+    forms, do not force a standalone `s` token and can match both possessive
+    and non-possessive document wording without changing quoted phrase
+    behavior.
+  - 2026-05-14: Prepared and published `v0.1.0a28`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for possessive search normalization.
+  - 2026-05-14: Improved broad SQLite FTS search normalization for hyphenated
+    and slash-separated compounds so searches like `follow-up care` match both
+    separated-token and concatenated document wording while preserving exact
+    quoted phrase behavior.
+  - 2026-05-14: Prepared and published `v0.1.0a29`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for compound search normalization.
+  - 2026-05-14: Added CLI/API classification-prefix search filters so users can
+    retrieve Dewey-style result families such as `636` while preserving exact
+    `classification_code` filters for narrower searches.
+  - 2026-05-14: Prepared and published `v0.1.0a30`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for classification-prefix search
+    filters.
+  - 2026-05-14: Added bounded search facet buckets with an explicit
+    `facet_limit` so broad classification and filename facets remain
+    predictable on large libraries while source totals still report the full
+    matching document count.
+  - 2026-05-14: Prepared and published `v0.1.0a31`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for bounded search facet buckets.
+  - 2026-05-14: Added repository-backed total run counts to `GET /runs` so API
+    clients can page through large run histories using explicit `total`,
+    `limit`, and `offset` metadata instead of guessing from the current page.
+  - 2026-05-14: Prepared and published `v0.1.0a32`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, and the GHCR image manifest for run-list total metadata.
+  - 2026-05-14: Added explicit eval evidence artifact metadata for prompt
+    eval, corpus-eval, and benchmark JSON so deterministic mock smoke evidence
+    cannot be confused with real-provider release evidence, and the verifier
+    rejects mismatched provider/tier claims.
+  - 2026-05-14: Prepared and published `v0.1.0a33`, including local release
+    gates, passing GitHub branch checks, release workflow evidence, release
+    assets, GHCR image manifest, and attached mock-smoke eval artifact metadata
+    verification for eval evidence tier enforcement.
+- 2026-05-14: Strengthened release evidence verification so eval and
+  corpus-eval summary counts must match per-case details, benchmark summaries
+  must match per-run details, and hidden failed cases or malformed run
+  records cannot pass release gates.
+- 2026-05-14: Prepared and published `v0.1.0a34`, including local release
+  gates, passing GitHub branch checks, release workflow evidence, release
+  assets, GHCR image manifest, and attached eval/corpus-eval/benchmark
+  summary-detail consistency verification.
+- 2026-05-14: Added corpus-eval assertions for PDF page-source counts,
+  minimum OCR pages, and minimum corrected OCR pages, and enabled them in the
+  shipped synthetic PDF/OCR cases so scanned-page coverage regressions fail
+  evaluation instead of only changing diagnostics.
+- 2026-05-14: Prepared and published `v0.1.0a35`, including local release
+  gates, passing GitHub branch checks, release workflow evidence, release
+  assets, GHCR image manifest, and attached corpus-eval evidence showing
+  embedded/OCR page-source counts for the shipped synthetic PDF cases.
+- 2026-05-14: Tightened release evidence verification so eval, corpus-eval,
+  and benchmark detail records must include complete case names, tags, warnings,
+  classification/search/page diagnostics, model/chunk/timing metrics, and
+  positive size/throughput measurements before evidence can pass.
+- 2026-05-14: Prepared and published `v0.1.0a36`, including local release
+  gates, passing GitHub branch checks, release workflow evidence, release
+  assets, GHCR image manifest, and downloaded evidence spot checks for the
+  stricter detailed eval/corpus-eval/benchmark fields.
+- 2026-05-14: Made SQLite FTS ordering deterministic by adding newest-document
+  and document-ID tie-breakers after BM25 score for both cleaned and raw search
+  results, keeping paginated retrieval stable when relevance scores tie.
+- 2026-05-14: Prepared and published `v0.1.0a37`, including local release
+  gates, passing GitHub branch checks, release workflow evidence, release
+  assets, GHCR image manifest, and attached eval/corpus-eval/benchmark
+  evidence verification.
+- 2026-05-14: Added corpus-eval evidence fields for page status counts, OCR
+  warning counts, retry attempts, and max page duration, and required those
+  page-level diagnostics in the release evidence verifier so published
+  corpus-eval artifacts prove more of the OCR durability surface.
+- 2026-05-14: Prepared and published `v0.1.0a38`, including local release
+  gates, passing GitHub branch checks, release workflow evidence verification
+  for the new corpus-eval page diagnostics, release assets, GHCR image
+  manifest, and downloaded evidence spot checks for OCR page status/source,
+  retry, warning, and timing fields.
+- 2026-05-14: Strengthened the release evidence verifier to recompute
+  corpus-eval page retry totals, failed-page totals, and max page duration from
+  per-case records, rejecting OCR page diagnostic summaries that do not match
+  detailed evidence.
+- 2026-05-14: Prepared and published `v0.1.0a39`, including local release
+  gates, passing GitHub branch checks, release workflow evidence verification,
+  release assets, GHCR image manifest, and downloaded corpus-eval evidence
+  spot checks proving page retry totals, failed-page totals, and max page
+  duration summaries match per-case diagnostics.
+- 2026-05-14: Expanded the release evidence verifier to recompute corpus-eval
+  size, OCR, correction, peak-memory, search, failure, and page-diagnostic
+  aggregate summaries from per-case records, rejecting mismatched corpus
+  evidence summaries before release artifacts can pass.
+- 2026-05-14: Prepared and published `v0.1.0a40`, including local release
+  gates, passing GitHub branch checks, release workflow evidence verification,
+  release assets, GHCR image manifest, and downloaded corpus-eval evidence
+  spot checks proving aggregate corpus summaries match per-case diagnostics.
+- 2026-05-14: Expanded the release evidence verifier to recompute prompt-eval
+  size, throughput, warning, and failure aggregate summaries from per-case
+  records, rejecting mismatched prompt-eval evidence summaries before release
+  artifacts can pass.
+- 2026-05-14: Prepared and published `v0.1.0a41`, including local release
+  gates, passing GitHub branch checks, release workflow evidence verification,
+  release assets, GHCR image manifest, and downloaded prompt-eval evidence
+  spot checks proving aggregate prompt summaries match per-case diagnostics.
+- 2026-05-14: Expanded the release evidence verifier to recompute benchmark
+  input-size, chunk-count, duration, average-throughput, and fastest-throughput
+  aggregate summaries from per-run records, rejecting mismatched benchmark
+  evidence summaries before release artifacts can pass.
+- 2026-05-14: Prepared and published `v0.1.0a42`, including local release
+  gates, passing GitHub branch checks, release workflow evidence verification,
+  release assets, GHCR image manifest, and downloaded benchmark evidence
+  spot checks proving aggregate benchmark summaries match per-run diagnostics.
+- 2026-05-14: Strengthened release evidence verification to cross-check
+  per-record derived metrics, rejecting eval/corpus output ratios, corpus
+  search recall, and benchmark run throughput when they do not match raw size,
+  timing, and search diagnostics.
+- 2026-05-14: Prepared and published `v0.1.0a43`, including focused local
+  checks, disk-constrained local release gates, passing GitHub branch checks,
+  release workflow evidence verification, release assets, GHCR image manifest,
+  and downloaded evidence spot checks proving per-record derived metrics match
+  raw diagnostics.
+- 2026-05-14: Examined Dolphin, olmOCR, and LongCut for transferable
+  capabilities. Identified olmOCR-style structured page OCR/eval, Dolphin-style
+  layout/element manifests, and LongCut-style transcript timestamp/sentence
+  normalization as the most useful future upgrade paths.
+- 2026-05-14: Added timestamped transcript normalization as the next concrete
+  transcript-cleaner upgrade: SRT/VTT-style and timestamp-prefixed transcript
+  parsing, sentence-like segment merging with abbreviation/decimal safeguards,
+  speaker preservation, and Markdown/text/SRT/CSV rendering through the
+  `librarian transcript-normalize` CLI command.

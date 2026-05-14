@@ -46,6 +46,7 @@ from librarian.application.import_library import (
 from librarian.application.jobs import QueueWorker
 from librarian.application.ports import SearchScope
 from librarian.application.synthetic_corpus import generate_synthetic_corpus
+from librarian.application.transcripts import TranscriptFormat, normalize_transcript_file
 from librarian.config import Settings
 from librarian.domain.ids import DocumentId, RunId, digest_text
 from librarian.domain.models import DocumentStatus, RunStage, RunStatus
@@ -571,6 +572,36 @@ def convert_dir(
             raise typer.Exit(code=1)
 
     asyncio.run(run())
+
+
+@app.command("transcript-normalize")
+def transcript_normalize(
+    path: Annotated[Path, typer.Argument(exists=True, readable=True, dir_okay=False)],
+    output: Annotated[Path, typer.Option(help="Output transcript path.")],
+    format: Annotated[
+        str,
+        typer.Option(help="Output format: md, txt, srt, or csv."),
+    ] = "md",
+    merge_sentences: Annotated[
+        bool,
+        typer.Option(help="Merge short timestamp segments into sentence-like spans."),
+    ] = True,
+    overwrite: Annotated[bool, typer.Option(help="Overwrite existing output.")] = False,
+) -> None:
+    """Normalize a timestamped transcript without calling an LLM."""
+    transcript_format = _transcript_format(format)
+    try:
+        segment_count = normalize_transcript_file(
+            path.resolve(),
+            output.resolve(),
+            format=transcript_format,
+            merge_sentences=merge_sentences,
+            overwrite=overwrite,
+        )
+    except (FileExistsError, OSError, UnicodeDecodeError, ValueError) as exc:
+        console.print(sanitize_error_message(exc))
+        raise typer.Exit(1) from exc
+    console.print(f"Normalized {segment_count} transcript segment(s) -> {output.resolve()}")
 
 
 @app.command("import")
@@ -1396,6 +1427,18 @@ def _conversion_format(value: str) -> ConversionFormat:
     if normalized in {"txt", "text"}:
         return ConversionFormat.TEXT
     raise typer.BadParameter("format must be one of: md, txt")
+
+
+def _transcript_format(value: str) -> TranscriptFormat:
+    normalized = value.lower()
+    aliases = {
+        "markdown": TranscriptFormat.MARKDOWN,
+        "text": TranscriptFormat.TEXT,
+    }
+    try:
+        return aliases.get(normalized, TranscriptFormat(normalized))
+    except ValueError as exc:
+        raise typer.BadParameter("format must be one of: md, txt, srt, csv") from exc
 
 
 def _directory_output_mode(value: str) -> DirectoryOutputMode:

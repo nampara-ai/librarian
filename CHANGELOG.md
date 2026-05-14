@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.1.0a44 - 2026-05-14
+
+- Added timestamped transcript normalization utilities and a
+  `librarian transcript-normalize` CLI command that parses SRT/VTT-style
+  timestamp ranges and timestamp-prefixed transcript lines, reconstructs
+  sentence-like spans, preserves speaker labels, and exports Markdown, text,
+  SRT, or CSV without calling an LLM.
+- Documented transcript normalization in the README, quickstart, and conversion
+  guide.
+
 ## 0.1.0a43 - 2026-05-14
 
 - Strengthened release evidence verification to cross-check per-record derived

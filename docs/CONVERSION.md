@@ -33,6 +33,19 @@ When two source files would produce the same output path, Librarian appends a nu
 Batch conversion always writes `.json` provenance sidecars next to generated outputs so later
 recursive runs can identify and skip Librarian-generated files.
 
+Normalize a timestamped transcript without calling an LLM:
+
+```bash
+librarian transcript-normalize ./input/captions.srt --format md --output ./output/captions.md
+librarian transcript-normalize ./input/captions.vtt --format srt --output ./output/captions.srt
+librarian transcript-normalize ./input/transcript.txt --format csv --output ./output/transcript.csv
+```
+
+`transcript-normalize` accepts SRT/VTT-style timestamp ranges and line-oriented timestamp
+prefixes. By default it merges short timestamp segments into sentence-like spans while preserving
+speaker labels and source timestamps; use `--no-merge-sentences` to keep original segment
+granularity. Output formats are `md`, `txt`, `srt`, and `csv`.
+
 Local conversion and import paths enforce configurable input limits before expensive parsing:
 `LIBRARIAN_MAX_SOURCE_BYTES`, `LIBRARIAN_TEXT_MAX_INPUT_BYTES`,
 `LIBRARIAN_DOCX_MAX_INPUT_BYTES`, `LIBRARIAN_PDF_MAX_INPUT_BYTES`, and

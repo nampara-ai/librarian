@@ -204,6 +204,37 @@ def test_cli_search_details_reports_total_without_changing_id_output(tmp_path: P
     assert phrase.exit_code == 0
     assert "Showing 1 of 1 results (offset=0, limit=20)" in _strip_ansi(phrase.output)
 
+
+def test_cli_transcript_normalize_writes_requested_format(tmp_path: Path) -> None:
+    source = tmp_path / "transcript.txt"
+    output = tmp_path / "transcript.srt"
+    source.write_text(
+        """[00:00] Ada: This is the first
+[00:01] sentence.
+[00:02] This is next.""",
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "transcript-normalize",
+            str(source),
+            "--output",
+            str(output),
+            "--format",
+            "srt",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Normalized 3 transcript segment(s)" in result.output
+    rendered = output.read_text(encoding="utf-8")
+    assert "00:00:00,000 --> 00:00:02,000" in rendered
+    assert "Ada: This is the first sentence." in rendered
+
+
 def test_cli_search_redacts_validation_details(monkeypatch: pytest.MonkeyPatch) -> None:
     class FailingSearchLibrary:
         async def search(self, *_args: object, **_kwargs: object) -> list[str]:
