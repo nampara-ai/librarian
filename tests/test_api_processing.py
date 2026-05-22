@@ -202,7 +202,7 @@ def test_api_upload_run_and_get_content(tmp_path: Path) -> None:
         assert exported_md.headers["x-content-type-options"] == "nosniff"
         assert exported_md.headers["cache-control"] == "no-store"
         assert exported_md.headers["content-disposition"] == (
-            'attachment; filename="notes.md"; filename*=UTF-8\'\'notes.md'
+            "attachment; filename=\"notes.md\"; filename*=UTF-8''notes.md"
         )
         assert "# notes" in exported_md.text
 
@@ -231,7 +231,7 @@ def test_api_search_results_include_transcript_citation(tmp_path: Path) -> None:
 
         search = client.post(
             "/search/results",
-            json={"query": "\"follow up care plan\"", "scope": "raw"},
+            json={"query": '"follow up care plan"', "scope": "raw"},
         )
 
     assert search.status_code == 200
@@ -255,11 +255,7 @@ def test_api_export_can_include_transcript_citation(tmp_path: Path) -> None:
         chunk_target_chars=200,
         chunk_overlap_chars=20,
     )
-    body = (
-        b"1\n"
-        b"00:00:08,000 --> 00:00:12,000\n"
-        b"The follow up care plan starts tomorrow.\n"
-    )
+    body = b"1\n00:00:08,000 --> 00:00:12,000\nThe follow up care plan starts tomorrow.\n"
 
     with TestClient(create_app(settings)) as client:
         upload = client.post(
@@ -325,8 +321,7 @@ def test_api_export_uses_safe_content_disposition_filename(tmp_path: Path) -> No
 
     assert exported.status_code == 200
     assert exported.headers["content-disposition"] == (
-        'attachment; filename="_bad_name_.txt"; '
-        "filename*=UTF-8''%22bad%3Bname%22.txt"
+        "attachment; filename=\"_bad_name_.txt\"; filename*=UTF-8''%22bad%3Bname%22.txt"
     )
     assert "\r" not in exported.headers["content-disposition"]
     assert "\n" not in exported.headers["content-disposition"]
@@ -485,18 +480,53 @@ def test_api_accepts_scoped_read_only_keys(
 
 
 def test_api_read_scoped_keys_cannot_read_operational_endpoints(tmp_path: Path) -> None:
+    import_root = tmp_path / "imports"
+    import_root.mkdir()
+    manifest = import_root / "fixture.md.pages.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "artifact_type": "pdf-page-extraction-manifest",
+                "source_sha256": "abc123",
+                "page_count": 1,
+                "pages": [
+                    {
+                        "page_number": 1,
+                        "source": "embedded",
+                        "status": "succeeded",
+                        "chars": 10,
+                        "corrected": False,
+                        "attempts": 0,
+                        "warnings": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     settings = Settings(
         data_dir=tmp_path / ".librarian",
         database_path=tmp_path / ".librarian" / "librarian.sqlite",
         api_keys="read:reader,write:writer",
+        api_import_root=import_root,
     )
     with TestClient(create_app(settings)) as client:
         rejected_config = client.get("/config", headers={"x-api-key": "reader"})
         rejected_metrics = client.get("/metrics", headers={"x-api-key": "reader"})
         rejected_prometheus = client.get("/metrics/prometheus", headers={"x-api-key": "reader"})
+        rejected_manifest = client.get(
+            "/imports/page-manifest",
+            headers={"x-api-key": "reader"},
+            params={"manifest_path": str(manifest)},
+        )
         accepted_config = client.get("/config", headers={"x-api-key": "writer"})
         accepted_metrics = client.get("/metrics", headers={"x-api-key": "writer"})
         accepted_prometheus = client.get("/metrics/prometheus", headers={"x-api-key": "writer"})
+        accepted_manifest = client.get(
+            "/imports/page-manifest",
+            headers={"x-api-key": "writer"},
+            params={"manifest_path": str(manifest)},
+        )
 
     assert rejected_config.status_code == 403
     assert rejected_config.json()["code"] == "insufficient_scope"
@@ -504,9 +534,12 @@ def test_api_read_scoped_keys_cannot_read_operational_endpoints(tmp_path: Path) 
     assert rejected_metrics.json()["code"] == "insufficient_scope"
     assert rejected_prometheus.status_code == 403
     assert rejected_prometheus.json()["code"] == "insufficient_scope"
+    assert rejected_manifest.status_code == 403
+    assert rejected_manifest.json()["code"] == "insufficient_scope"
     assert accepted_config.status_code == 200
     assert accepted_metrics.status_code == 200
     assert accepted_prometheus.status_code == 200
+    assert accepted_manifest.status_code == 200
 
 
 def test_api_accepts_hashed_scoped_keys(tmp_path: Path) -> None:

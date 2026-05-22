@@ -15,7 +15,6 @@ build
 *.egg-info
 .librarian
 docs/results
-release-evidence
 library
 output
 input

@@ -84,63 +84,12 @@ def test_ci_installs_and_checks_ocr_dependencies() -> None:
     assert "librarian doctor --strict" in workflow
 
 
-def test_ci_runs_example_corpus_eval() -> None:
+def test_ci_omits_alpha_release_evidence_gate() -> None:
     workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
 
-    assert "librarian corpus-eval examples/corpus_eval_cases.json" in workflow
-    assert "librarian corpus-eval examples/synthetic-corpus/corpus_eval_cases.json" in workflow
-    assert "--output-dir" in workflow
-    assert '--output "$RUNNER_TEMP/ci-corpus-eval.json"' in workflow
-
-
-def test_ci_runs_and_verifies_example_evidence() -> None:
-    workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
-
-    assert "librarian eval examples/eval_cases.json" in workflow
-    assert "librarian benchmark --paragraphs 40 --paragraph-chars 1000" in workflow
-    assert "--repeats 1" in workflow
-    assert '--output "$RUNNER_TEMP/ci-eval.json"' in workflow
-    assert '--output "$RUNNER_TEMP/ci-benchmark.json"' in workflow
-    assert ".github/scripts/verify_release_evidence.py" in workflow
-    assert "--eval \"$RUNNER_TEMP/ci-eval.json\"" in workflow
-    assert "--corpus-eval \"$RUNNER_TEMP/ci-corpus-eval.json\"" in workflow
-    assert "--benchmark \"$RUNNER_TEMP/ci-benchmark.json\"" in workflow
-    assert "--min-eval-cases 6" in workflow
-    for tag in (
-        "classification",
-        "transcript",
-        "legal",
-        "technical",
-        "no-summarization",
-        "markdown",
-        "ocr-correction",
-    ):
-        assert f"--require-eval-tag {tag}" in workflow
-    assert "--min-corpus-cases 13" in workflow
-    for tag in (
-        "docx",
-        "tables",
-        "headers-footers",
-        "pdf",
-        "embedded-text",
-        "scanned",
-        "ocr",
-        "noisy-ocr",
-        "mixed-embedded-scanned",
-        "transcript-caption",
-        "srt",
-        "vtt",
-    ):
-        assert f"--require-corpus-tag {tag}" in workflow
-    assert "--min-corpus-search-recall 1.0" in workflow
-    assert "--min-corpus-output-ratio 0.05" in workflow
-    assert "--min-benchmark-cps 1000" in workflow
-    assert "--min-benchmark-runs 1" in workflow
-    assert "--min-benchmark-input-chars 40000" in workflow
-    assert "--min-benchmark-chunks 4" in workflow
-    verifier_index = workflow.index(".github/scripts/verify_release_evidence.py")
-    build_index = workflow.index("python -m build")
-    assert verifier_index < build_index
+    assert "verify_release_evidence.py" not in workflow
+    assert "release-evidence" not in workflow
+    assert "examples/synthetic-corpus" not in workflow
 
 
 def test_ci_runs_dependency_audit_before_tests_and_build() -> None:

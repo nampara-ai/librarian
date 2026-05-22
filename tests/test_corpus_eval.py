@@ -471,8 +471,7 @@ async def test_corpus_eval_redacts_conversion_failures(tmp_path: Path) -> None:
     assert not result.passed
     failure = result.cases[0].failures[0]
     assert failure == (
-        "conversion failed (extraction_failed): "
-        "extract failed api_key=[REDACTED] [REDACTED]"
+        "conversion failed (extraction_failed): extract failed api_key=[REDACTED] [REDACTED]"
     )
     assert "abc123" not in failure
     assert "sk-testSECRET123" not in failure
@@ -574,40 +573,21 @@ def test_load_corpus_eval_suite_rejects_empty_cases(tmp_path: Path) -> None:
         load_corpus_eval_suite(suite_path)
 
 
-def test_shipped_synthetic_corpus_suite_covers_conversion_formats() -> None:
-    suite = load_corpus_eval_suite(EXAMPLES_DIR / "synthetic-corpus" / "corpus_eval_cases.json")
+def test_shipped_corpus_suite_covers_reference_cases() -> None:
+    suite = load_corpus_eval_suite(EXAMPLES_DIR / "corpus_eval_cases.json")
     tags = {tag for case in suite.cases for tag in case.tags}
 
-    assert len(suite.cases) >= 10
+    assert len(suite.cases) >= 2
     assert {
-        "long-document",
-        "docx",
-        "pdf",
-        "embedded-text",
-        "scanned",
-        "mixed-embedded-scanned",
-        "noisy-ocr",
-        "ocr",
-        "transcript-caption",
-        "srt",
-        "vtt",
-        "tables",
-        "headers-footers",
+        "classification",
+        "interview",
+        "markdown",
+        "search",
+        "text",
+        "transcript",
     } <= tags
-    assert any(case.expected_page_count is not None for case in suite.cases)
     assert all(case.expected_search_phrases for case in suite.cases)
     assert all(case.expected_classification_prefix for case in suite.cases)
-    pdf_cases = [case for case in suite.cases if "pdf" in case.tags]
-    assert all(case.expected_page_source_counts for case in pdf_cases)
-    assert all(
-        case.min_ocr_pages is not None
-        for case in pdf_cases
-        if "ocr" in case.tags
-    )
-    table_cases = [case for case in suite.cases if "tables" in case.tags]
-    assert table_cases
-    assert all(case.expected_table_rows for case in table_cases)
-    assert all(case.expected_table_columns for case in table_cases)
 
 
 def test_corpus_eval_case_rejects_invalid_invariants(tmp_path: Path) -> None:

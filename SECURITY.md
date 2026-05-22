@@ -2,8 +2,8 @@
 
 ## Supported Versions
 
-Librarian is pre-1.0 alpha software. Security fixes are applied to `main` until the first public
-release line is tagged.
+Librarian 1.x receives security fixes on `main` and through patch releases when a fix affects a
+published release.
 
 ## Reporting A Vulnerability
 
@@ -30,8 +30,8 @@ We will acknowledge reports within 5 business days and coordinate a fix or discl
 
 ## Threat Model
 
-See `docs/THREAT_MODEL.md` for the current threat model covering API imports, archive policy,
-provider data flow, logging, SQLite operations, and residual hosted-mode risks.
+See `docs/OPERATIONS.md` for the current operational security guidance covering API imports,
+archive policy, provider data flow, logging, SQLite operations, and hosted-mode risks.
 
 ## Dependency Security
 

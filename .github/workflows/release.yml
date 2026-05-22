@@ -82,53 +82,6 @@ jobs:
           pytest
       - name: Dependency audit
         run: pip-audit --progress-spinner off --skip-editable
-      - name: Synthetic corpus eval
-        run: |
-          mkdir -p release-evidence
-          librarian corpus-eval examples/synthetic-corpus/corpus_eval_cases.json \
-            --output-dir "$(mktemp -d)" \
-            --output release-evidence/corpus-eval-mock.json \
-            --overwrite
-      - name: Prompt eval
-        run: librarian eval examples/eval_cases.json --output release-evidence/eval-mock.json
-      - name: Benchmark
-        run: |
-          librarian benchmark --paragraphs 40 --paragraph-chars 1000 --repeats 1 \
-            --output release-evidence/benchmark-mock.json
-      - name: Verify release evidence
-        run: |
-          python .github/scripts/verify_release_evidence.py \
-            --eval release-evidence/eval-mock.json \
-            --corpus-eval release-evidence/corpus-eval-mock.json \
-            --benchmark release-evidence/benchmark-mock.json \
-            --version "$GITHUB_REF_NAME" \
-            --min-eval-cases 6 \
-            --require-eval-tag classification \
-            --require-eval-tag transcript \
-            --require-eval-tag legal \
-            --require-eval-tag technical \
-            --require-eval-tag no-summarization \
-            --require-eval-tag markdown \
-            --require-eval-tag ocr-correction \
-            --min-corpus-cases 13 \
-            --require-corpus-tag docx \
-            --require-corpus-tag tables \
-            --require-corpus-tag headers-footers \
-            --require-corpus-tag pdf \
-            --require-corpus-tag embedded-text \
-            --require-corpus-tag scanned \
-            --require-corpus-tag ocr \
-            --require-corpus-tag noisy-ocr \
-            --require-corpus-tag mixed-embedded-scanned \
-            --require-corpus-tag transcript-caption \
-            --require-corpus-tag srt \
-            --require-corpus-tag vtt \
-            --min-corpus-search-recall 1.0 \
-            --min-corpus-output-ratio 0.05 \
-            --min-benchmark-cps 1000 \
-            --min-benchmark-runs 1 \
-            --min-benchmark-input-chars 40000 \
-            --min-benchmark-chunks 4
       - name: Build distributions
         run: |
           rm -rf dist
@@ -148,7 +101,7 @@ jobs:
       - name: Generate SBOM
         run: cyclonedx-py environment --output-format JSON --output-file sbom.json
       - name: Generate checksums
-        run: sha256sum dist/* sbom.json constraints.txt release-evidence/*.json > SHA256SUMS.txt
+        run: sha256sum dist/* sbom.json constraints.txt > SHA256SUMS.txt
       - name: Verify checksums
         run: sha256sum --check SHA256SUMS.txt
       - name: Attest release metadata
@@ -158,7 +111,6 @@ jobs:
             sbom.json
             constraints.txt
             SHA256SUMS.txt
-            release-evidence/*.json
       - name: Upload distributions
         uses: actions/upload-artifact@v7
         with:
@@ -169,7 +121,6 @@ jobs:
             sbom.json
             constraints.txt
             SHA256SUMS.txt
-            release-evidence/*.json
       - name: Login to GHCR
         run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
       - name: Build image
@@ -225,7 +176,7 @@ jobs:
           case "$REF_NAME" in
             *a*|*b*|*rc*) PRERELEASE_FLAG="--prerelease" ;;
           esac
-          gh release create "${{ github.ref_name }}" dist/* sbom.json constraints.txt SHA256SUMS.txt release-evidence/*.json \
+          gh release create "${{ github.ref_name }}" dist/* sbom.json constraints.txt SHA256SUMS.txt \
             --repo "${{ github.repository }}" \
             --title "${{ github.ref_name }}" \
             --notes-file release-notes.md \

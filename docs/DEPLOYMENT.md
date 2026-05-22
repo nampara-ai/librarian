@@ -27,7 +27,7 @@ period so in-flight runs can finish or be reclaimed by the durable queue lease.
 Compose also rotates Docker JSON logs at 10 MiB per file with five retained files per service.
 Compose requires `LIBRARIAN_API_KEY` or `LIBRARIAN_API_KEYS`; authenticated requests must send
 one configured value as `x-api-key`.
-Inspect durable queue state with `librarian queue --limit 100 --offset 0`.
+Inspect durable queue state with `librarian admin queue --limit 100 --offset 0`.
 
 ## Direct Docker Run
 
@@ -38,7 +38,7 @@ import root:
 docker run --rm -p 8080:8080 \
   -e LIBRARIAN_API_KEY=change-me \
   -e LIBRARIAN_API_IMPORT_ROOT=/data/imports \
-  ghcr.io/nampara-ai/librarian:v0.1.0a72
+  ghcr.io/nampara-ai/librarian:v1.0.0
 ```
 
 ## Environment
@@ -105,7 +105,7 @@ Authentication failures, scope denials, and rate-limit denials are emitted as `l
 warning log events without API key material and persisted to the local SQLite `api_audit_events`
 table with method, path, client host, credential-presence/scope metadata, retry-after seconds, and
 timestamp. Audit rows older than `LIBRARIAN_API_AUDIT_RETENTION_DAYS=90` are pruned when new audit
-events are written; set it to `0` to keep rows indefinitely. Use `librarian api-audit --json` for a
+events are written; set it to `0` to keep rows indefinitely. Use `librarian admin api-audit --json` for a
 paginated operator view. Retain those logs and database backups when exposing the API beyond
 localhost.
 Set `LIBRARIAN_API_MAX_REQUEST_BYTES` to reject oversized HTTP requests by `Content-Length` or
@@ -169,18 +169,18 @@ nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, a restrictive
 
 SQLite is the first durable backend. Use a persistent disk or volume and run `librarian migrate`
 before starting services in environments where startup ordering matters. SQLite is suitable for
-single-node alpha deployments; a networked queue/database adapter should be added before horizontal
+single-node production deployments; a networked queue/database adapter should be added before horizontal
 multi-node production.
 
 For long-lived databases, run maintenance during a quiet window:
 
 ```bash
-librarian workspace-backup /backups/librarian-workspace-$(date +%Y%m%d%H%M%S).zip
-librarian db-backup /backups/librarian-$(date +%Y%m%d%H%M%S).sqlite
-librarian db-check
-librarian db-stats
-librarian db-maintain
-librarian db-maintain --vacuum
+librarian admin workspace-backup /backups/librarian-workspace-$(date +%Y%m%d%H%M%S).zip
+librarian admin db-backup /backups/librarian-$(date +%Y%m%d%H%M%S).sqlite
+librarian admin db-check
+librarian admin db-stats
+librarian admin db-maintain
+librarian admin db-maintain --vacuum
 ```
 
 Librarian opens SQLite connections with WAL mode, foreign keys, `synchronous=NORMAL`, and a 5-second
@@ -192,25 +192,25 @@ rejects symlink destinations or symlinked destination parents, and verifies the 
 `PRAGMA integrity_check` before replacing the destination path. The maintenance command runs SQLite
 optimize and a WAL checkpoint.
 `--vacuum` additionally compacts the database file and can take longer on large corpora.
-Use `librarian db-stats` to inspect current database file bytes, WAL/SHM sidecar bytes, SQLite page
+Use `librarian admin db-stats` to inspect current database file bytes, WAL/SHM sidecar bytes, SQLite page
 usage, row counts, source-file bytes, and stored raw/chunk/cleaned text bytes. For large corpora,
 record this output before and after representative imports to estimate local disk growth; the
 stored-text totals show how much of the database is raw extraction, chunk, cache, and cleaned-output
-payload rather than schema/index overhead. `librarian db-stats --json` is suitable for deployment
+payload rather than schema/index overhead. `librarian admin db-stats --json` is suitable for deployment
 runbooks and periodic capacity snapshots.
 To restore, stop API and worker processes first, then run:
 
 ```bash
-librarian db-restore /backups/librarian-20260512120000.sqlite --yes
+librarian admin db-restore /backups/librarian-20260512120000.sqlite --yes
 ```
 
 The restore command verifies the backup, rejects symlink destinations or symlinked destination
-parents, and removes stale SQLite WAL sidecars around the replacement. Run `librarian db-check` after
+parents, and removes stale SQLite WAL sidecars around the replacement. Run `librarian admin db-check` after
 restore to verify integrity, foreign keys, and migration metadata.
 To restore a full workspace archive, stop API and worker processes first, then run:
 
 ```bash
-librarian workspace-restore /backups/librarian-workspace-20260512120000.zip --yes
+librarian admin workspace-restore /backups/librarian-workspace-20260512120000.zip --yes
 ```
 
 Workspace restore rejects archives whose total uncompressed size exceeds 10 GiB by default. Use
@@ -228,4 +228,4 @@ archives outside Librarian using your approved malware tooling, then import the 
 non-container document extensions, while supported ZIP-container document types such as `.docx`,
 `.pptx`, `.xlsx`, and `.epub` remain accepted by extension.
 
-See `docs/THREAT_MODEL.md` for API import trust boundaries and residual hosted-mode risks.
+See `docs/OPERATIONS.md` for API import trust boundaries, storage runbooks, and residual hosted-mode risks.

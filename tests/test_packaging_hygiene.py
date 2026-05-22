@@ -25,34 +25,35 @@ def test_package_version_metadata_is_consistent() -> None:
     assert pyproject["project"]["version"] == version_module.__version__
 
 
-def test_dev_dependencies_include_dependency_audit_tool_and_fixed_urllib3_floor() -> None:
+def test_dependencies_include_security_audit_tool_and_vulnerability_floors() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    runtime_dependencies = pyproject["project"]["dependencies"]
     dev_dependencies = pyproject["project"]["optional-dependencies"]["dev"]
 
+    assert "idna>=3.15" in runtime_dependencies
+    assert "starlette>=1.0.1" in runtime_dependencies
     assert "pip-audit>=2.9.0" in dev_dependencies
     assert "urllib3>=2.7.0" in dev_dependencies
 
 
-def test_gitignore_excludes_private_runtime_and_eval_artifacts() -> None:
+def test_gitignore_excludes_private_runtime_artifacts() -> None:
     gitignore = Path(".gitignore").read_text(encoding="utf-8").splitlines()
 
     assert ".env" in gitignore
     assert ".env.*" in gitignore
     assert ".librarian/" in gitignore
     assert "docs/results/" in gitignore
-    assert "release-evidence/" in gitignore
     assert "*.sqlite" in gitignore
     assert "*.sqlite-wal" in gitignore
 
 
-def test_dockerignore_excludes_private_runtime_and_eval_artifacts() -> None:
+def test_dockerignore_excludes_private_runtime_artifacts() -> None:
     dockerignore = Path(".dockerignore").read_text(encoding="utf-8").splitlines()
 
     assert ".env" in dockerignore
     assert ".env.*" in dockerignore
     assert ".librarian" in dockerignore
     assert "docs/results" in dockerignore
-    assert "release-evidence" in dockerignore
     assert "*.sqlite" in dockerignore
     assert "*.sqlite-wal" in dockerignore
 
@@ -66,7 +67,6 @@ def test_sensitive_local_artifacts_are_not_tracked() -> None:
     forbidden_prefixes = (
         ".librarian/",
         "docs/results/",
-        "release-evidence/",
     )
     forbidden_substrings = (
         "eval-provider",
