@@ -100,6 +100,7 @@ include = ["src", "tests"]
 venvPath = "."
 venv = ".venv"
 reportUnusedFunction = false
+reportUnknownMemberType = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
