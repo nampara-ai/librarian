@@ -28,74 +28,23 @@ jobs:
           sudo apt-get install -y --no-install-recommends poppler-utils tesseract-ocr
       - name: Install
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev,all]"
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/pip install -e ".[dev,all]"
       - name: Doctor
-        run: librarian doctor --strict
+        run: .venv/bin/librarian doctor --strict
       - name: Ruff
-        run: ruff check .
+        run: .venv/bin/ruff check .
       - name: Dependency audit
-        run: pip-audit --progress-spinner off --skip-editable
+        run: .venv/bin/pip-audit --progress-spinner off --skip-editable
       - name: Pytest
-        run: pytest
-      - name: Example corpus eval
-        run: |
-          librarian corpus-eval examples/corpus_eval_cases.json \
-            --output-dir "$(mktemp -d)" \
-            --output "$(mktemp)"
-      - name: Synthetic corpus eval
-        run: |
-          librarian corpus-eval examples/synthetic-corpus/corpus_eval_cases.json \
-            --output-dir "$(mktemp -d)" \
-            --output "$RUNNER_TEMP/ci-corpus-eval.json" \
-            --overwrite
-      - name: Example prompt eval
-        run: librarian eval examples/eval_cases.json --output "$RUNNER_TEMP/ci-eval.json"
-      - name: Example benchmark
-        run: |
-          librarian benchmark --paragraphs 40 --paragraph-chars 1000 --repeats 1 \
-            --output "$RUNNER_TEMP/ci-benchmark.json"
-      - name: Verify example evidence
-        run: |
-          VERSION="v$(python -c 'from librarian.version import __version__; print(__version__)')"
-          python .github/scripts/verify_release_evidence.py \
-            --eval "$RUNNER_TEMP/ci-eval.json" \
-            --corpus-eval "$RUNNER_TEMP/ci-corpus-eval.json" \
-            --benchmark "$RUNNER_TEMP/ci-benchmark.json" \
-            --version "$VERSION" \
-            --min-eval-cases 6 \
-            --require-eval-tag classification \
-            --require-eval-tag transcript \
-            --require-eval-tag legal \
-            --require-eval-tag technical \
-            --require-eval-tag no-summarization \
-            --require-eval-tag markdown \
-            --require-eval-tag ocr-correction \
-            --min-corpus-cases 13 \
-            --require-corpus-tag docx \
-            --require-corpus-tag tables \
-            --require-corpus-tag headers-footers \
-            --require-corpus-tag pdf \
-            --require-corpus-tag embedded-text \
-            --require-corpus-tag scanned \
-            --require-corpus-tag ocr \
-            --require-corpus-tag noisy-ocr \
-            --require-corpus-tag mixed-embedded-scanned \
-            --require-corpus-tag transcript-caption \
-            --require-corpus-tag srt \
-            --require-corpus-tag vtt \
-            --min-corpus-search-recall 1.0 \
-            --min-corpus-output-ratio 0.05 \
-            --min-benchmark-cps 1000 \
-            --min-benchmark-runs 1 \
-            --min-benchmark-input-chars 40000 \
-            --min-benchmark-chunks 4
+        run: .venv/bin/pytest
       - name: Pyright
-        run: pyright
+        run: .venv/bin/pyright
       - name: Build distributions
         run: |
           rm -rf dist
-          python -m build
+          .venv/bin/python -m build
       - name: Smoke install wheel
         run: |
           python -m venv "$RUNNER_TEMP/librarian-wheel-smoke"

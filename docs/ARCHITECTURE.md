@@ -17,7 +17,7 @@ Librarian uses hexagonal architecture so the core can run through a CLI, an API 
 Adapters
   CLI: Typer
   API: FastAPI
-  Storage: SQLite repository and SQLite-backed alpha content store
+  Storage: SQLite repository and SQLite-backed content store
   LLM: OpenAI-compatible, mock
   Extraction: txt, md, csv, json, docx, pdf, OCR images
 
@@ -80,14 +80,14 @@ The default execution model should favor throughput:
 - `balanced`: parallel chunk groups with local carry-forward inside each group.
 - `max-coherence`: sequential carry-forward across the full document.
 
-The prototype used a max-coherence style. Production defaults should start with `balanced` after benchmarking.
+The default production mode is `balanced`, which keeps local context while preserving parallelism.
 
 ## Content Storage
 
-The alpha content store persists raw text, chunks, cleaned chunks, final outputs, and the FTS mirror
+The content store persists raw text, chunks, cleaned chunks, final outputs, and the FTS mirror
 in SQLite. This keeps the first release portable and easy to back up, but it duplicates large text
 payloads. A filesystem or object-store content adapter remains a future option for very large
-hosted deployments; SQLite is still the supported alpha backend.
+hosted deployments; SQLite is the supported 1.0 backend.
 
 Search goes through the application-layer `SearchIndex` port. The default adapter is SQLite FTS over
 cleaned and raw outputs, with snippets, facets, pagination, and filters. Results use BM25 ranking
@@ -121,11 +121,11 @@ Run events can be fetched as JSON or streamed over server-sent events.
 
 ## Benchmarking
 
-The `librarian benchmark` command uses deterministic synthetic text and the configured cleaner to measure chunking and cleaning throughput. This is the baseline harness for comparing chunking policies, coherence modes, providers, and concurrency settings.
+The `librarian maintainer benchmark` command uses deterministic synthetic text and the configured cleaner to measure chunking and cleaning throughput. This is the baseline harness for comparing chunking policies, coherence modes, providers, and concurrency settings.
 
 ## Evaluation
 
-The `librarian eval` command runs JSON eval suites against the configured chunking, prompt, and
-provider stack. Evals are intentionally file-based so contributors can add sanitized cases without
-coupling the harness to private corpora. See `docs/EVALUATION.md` for provider tuning commands and
-the baseline tuning matrix.
+The `librarian maintainer eval` command runs JSON eval suites against the configured chunking,
+prompt, and provider stack. Evals are intentionally file-based so contributors can add sanitized
+cases without coupling the harness to private corpora. Operational tuning guidance lives in
+`docs/OPERATIONS.md`.

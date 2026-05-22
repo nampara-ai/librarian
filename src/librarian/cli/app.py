@@ -68,6 +68,13 @@ from librarian.storage.sqlite import SQLiteDatabase, SQLiteRunQueue
 from librarian.version import __version__
 
 app = typer.Typer(no_args_is_help=True)
+admin_app = typer.Typer(no_args_is_help=True, help="Operator and storage administration.")
+maintainer_app = typer.Typer(
+    no_args_is_help=True,
+    help="Release, evaluation, and diagnostic maintainer tools.",
+)
+app.add_typer(admin_app, name="admin")
+app.add_typer(maintainer_app, name="maintainer")
 console = Console()
 _DEFAULT_WORKSPACE_RESTORE_MAX_EXPANDED_BYTES = 10 * 1024 * 1024 * 1024
 _MAX_WORKSPACE_BACKUP_MANIFEST_BYTES = 64 * 1024
@@ -140,7 +147,7 @@ def migrate() -> None:
     console.print(f"Applied migrations to {settings.database_path}")
 
 
-@app.command("db-maintain")
+@admin_app.command("db-maintain")
 def db_maintain(
     vacuum: Annotated[
         bool,
@@ -165,7 +172,7 @@ def db_maintain(
     asyncio.run(run())
 
 
-@app.command("db-check")
+@admin_app.command("db-check")
 def db_check() -> None:
     """Verify SQLite integrity, foreign keys, and migrations."""
     settings = Settings()
@@ -189,7 +196,7 @@ def db_check() -> None:
     asyncio.run(run())
 
 
-@app.command("db-stats")
+@admin_app.command("db-stats")
 def db_stats(
     json_output: Annotated[
         bool,
@@ -260,7 +267,7 @@ def db_stats(
     asyncio.run(run())
 
 
-@app.command("api-audit")
+@admin_app.command("api-audit")
 def api_audit(
     limit: Annotated[
         int,
@@ -318,7 +325,7 @@ def api_audit(
     asyncio.run(run())
 
 
-@app.command("db-backup")
+@admin_app.command("db-backup")
 def db_backup(
     output: Annotated[Path, typer.Argument(help="Destination SQLite backup path.")],
     overwrite: Annotated[
@@ -345,7 +352,7 @@ def db_backup(
     asyncio.run(run())
 
 
-@app.command("db-restore")
+@admin_app.command("db-restore")
 def db_restore(
     backup: Annotated[Path, typer.Argument(help="Source SQLite backup path.")],
     yes: Annotated[
@@ -375,7 +382,7 @@ def db_restore(
     asyncio.run(run())
 
 
-@app.command("workspace-backup")
+@admin_app.command("workspace-backup")
 def workspace_backup(
     output: Annotated[Path, typer.Argument(help="Destination workspace .zip path.")],
     overwrite: Annotated[
@@ -414,7 +421,7 @@ def workspace_backup(
     asyncio.run(run())
 
 
-@app.command("workspace-restore")
+@admin_app.command("workspace-restore")
 def workspace_restore(
     archive: Annotated[Path, typer.Argument(help="Source workspace .zip archive.")],
     yes: Annotated[
@@ -463,7 +470,7 @@ def workspace_restore(
     asyncio.run(run())
 
 
-@app.command()
+@maintainer_app.command()
 def chunk(
     path: Annotated[Path, typer.Argument(exists=True, readable=True, dir_okay=False)],
     target_chars: Annotated[int, typer.Option(help="Target chunk size in characters.")] = 12_000,
@@ -762,7 +769,7 @@ def import_directory(
     asyncio.run(run())
 
 
-@app.command("runs")
+@admin_app.command("runs")
 def list_runs(
     limit: Annotated[int, typer.Option(help="Maximum runs.", min=1, max=500)] = 100,
     offset: Annotated[int, typer.Option(help="Runs to skip.", min=0)] = 0,
@@ -787,7 +794,7 @@ def list_runs(
     asyncio.run(run())
 
 
-@app.command("run-cancel")
+@admin_app.command("run-cancel")
 def cancel_run(
     run_id: Annotated[str, typer.Argument(help="Run ID to cancel.")],
 ) -> None:
@@ -813,7 +820,7 @@ def cancel_run(
     asyncio.run(run())
 
 
-@app.command("run-retry")
+@admin_app.command("run-retry")
 def retry_run(
     run_id: Annotated[str, typer.Argument(help="Failed run ID to retry.")],
     queue: Annotated[bool, typer.Option(help="Enqueue retry instead of processing now.")] = False,
@@ -850,7 +857,7 @@ def retry_run(
     asyncio.run(run())
 
 
-@app.command("queue")
+@admin_app.command("queue")
 def inspect_queue(
     limit: Annotated[int, typer.Option(help="Maximum queue rows.", min=1, max=500)] = 100,
     offset: Annotated[int, typer.Option(help="Queue rows to skip.", min=0)] = 0,
@@ -1225,7 +1232,7 @@ def export(
     asyncio.run(run())
 
 
-@app.command()
+@maintainer_app.command()
 def benchmark(
     paragraphs: Annotated[int, typer.Option(help="Synthetic paragraph count.", min=1)] = 100,
     paragraph_chars: Annotated[int, typer.Option(help="Characters per paragraph.", min=1)] = 1_000,
@@ -1261,7 +1268,7 @@ def benchmark(
     asyncio.run(run())
 
 
-@app.command("eval")
+@maintainer_app.command("eval")
 def eval_suite(
     path: Annotated[Path, typer.Argument(exists=True, readable=True, dir_okay=False)],
     output: Annotated[Path | None, typer.Option(help="Optional JSON output path.")] = None,
@@ -1283,7 +1290,7 @@ def eval_suite(
     asyncio.run(run())
 
 
-@app.command("corpus-eval")
+@maintainer_app.command("corpus-eval")
 def corpus_eval(
     path: Annotated[Path, typer.Argument(exists=True, readable=True, dir_okay=False)],
     output_dir: Annotated[
@@ -1318,7 +1325,7 @@ def corpus_eval(
     asyncio.run(run())
 
 
-@app.command("generate-corpus")
+@maintainer_app.command("generate-corpus")
 def generate_corpus(
     output_dir: Annotated[
         Path,
@@ -1378,7 +1385,7 @@ def generate_corpus(
     console.print(f"Size: {result.total_bytes:,} bytes, {result.total_chars:,} characters")
 
 
-@app.command("page-manifest")
+@admin_app.command("page-manifest")
 def page_manifest(
     path: Annotated[Path, typer.Argument(exists=True, readable=True, dir_okay=False)],
     limit: Annotated[int, typer.Option(help="Maximum page rows to print.", min=1, max=1_000)] = 50,

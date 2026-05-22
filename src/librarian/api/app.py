@@ -81,7 +81,9 @@ _SECURITY_HEADERS = {
     "Cache-Control": "no-store",
 }
 _MAX_UPLOAD_FILENAME_BYTES = 255
-_READ_SCOPE_RESTRICTED_PATHS = frozenset({"/config", "/metrics", "/metrics/prometheus"})
+_READ_SCOPE_RESTRICTED_PATHS = frozenset(
+    {"/config", "/imports/page-manifest", "/metrics", "/metrics/prometheus"}
+)
 _OPENAPI_ERROR_STATUS_CODES = ("400", "401", "403", "404", "413", "422", "429", "500", "503")
 _PRIVATE_INGEST_ERROR_DETAIL = "Document ingest failed"
 @dataclass(frozen=True, slots=True)

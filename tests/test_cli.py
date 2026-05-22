@@ -27,8 +27,8 @@ def test_cli_read_only_commands_do_not_require_llm_credentials(tmp_path: Path) -
         "LIBRARIAN_LLM_API_KEY_ENV": "LIBRARIAN_TEST_MISSING_API_KEY",
     }
 
-    runs = runner.invoke(app, ["runs"], env=env)
-    queue = runner.invoke(app, ["queue"], env=env)
+    runs = runner.invoke(app, ["admin", "runs"], env=env)
+    queue = runner.invoke(app, ["admin", "queue"], env=env)
     search = runner.invoke(app, ["search", "horse"], env=env)
     search_details = runner.invoke(app, ["search", "horse", "--details"], env=env)
     show = runner.invoke(app, ["show", "doc_missing"], env=env)
@@ -104,13 +104,13 @@ def test_cli_rejects_unbounded_limits() -> None:
     search_status = runner.invoke(app, ["search", "horse", "--document-status", "unknown"])
     search_scope = runner.invoke(app, ["search", "horse", "--scope", "all"])
     search_date = runner.invoke(app, ["search", "horse", "--created-after", "not-a-date"])
-    runs = runner.invoke(app, ["runs", "--limit=0"])
-    queue = runner.invoke(app, ["queue", "--limit=10000"])
-    queue_offset = runner.invoke(app, ["queue", "--offset=-1"])
+    runs = runner.invoke(app, ["admin", "runs", "--limit=0"])
+    queue = runner.invoke(app, ["admin", "queue", "--limit=10000"])
+    queue_offset = runner.invoke(app, ["admin", "queue", "--offset=-1"])
     status = runner.invoke(app, ["status", "run_missing", "--event-limit=0"])
-    benchmark_paragraphs = runner.invoke(app, ["benchmark", "--paragraphs=0"])
-    benchmark_chars = runner.invoke(app, ["benchmark", "--paragraph-chars=0"])
-    benchmark_repeats = runner.invoke(app, ["benchmark", "--repeats=0"])
+    benchmark_paragraphs = runner.invoke(app, ["maintainer", "benchmark", "--paragraphs=0"])
+    benchmark_chars = runner.invoke(app, ["maintainer", "benchmark", "--paragraph-chars=0"])
+    benchmark_repeats = runner.invoke(app, ["maintainer", "benchmark", "--repeats=0"])
 
     assert search.exit_code != 0
     assert search_status.exit_code != 0
@@ -217,9 +217,7 @@ def test_cli_search_details_reports_transcript_citation(tmp_path: Path) -> None:
         container = await build_container(settings)
         source = tmp_path / "captions.srt"
         source.write_text(
-            "1\n"
-            "00:00:08,000 --> 00:00:12,000\n"
-            "The follow up care plan starts tomorrow.\n",
+            "1\n00:00:08,000 --> 00:00:12,000\nThe follow up care plan starts tomorrow.\n",
             encoding="utf-8",
         )
         await container.ingest_document.execute(source)
@@ -230,7 +228,7 @@ def test_cli_search_details_reports_transcript_citation(tmp_path: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["search", "\"follow up care plan\"", "--scope", "raw", "--details"],
+        ["search", '"follow up care plan"', "--scope", "raw", "--details"],
         env={
             "LIBRARIAN_DATA_DIR": str(tmp_path / ".librarian"),
             "LIBRARIAN_DATABASE_PATH": str(tmp_path / ".librarian" / "librarian.sqlite"),
@@ -517,7 +515,7 @@ def test_cli_db_maintain_runs_sqlite_maintenance(tmp_path: Path) -> None:
         "LIBRARIAN_DATABASE_PATH": str(tmp_path / ".librarian" / "librarian.sqlite"),
     }
 
-    result = runner.invoke(app, ["db-maintain", "--vacuum"], env=env)
+    result = runner.invoke(app, ["admin", "db-maintain", "--vacuum"], env=env)
 
     assert result.exit_code == 0
     assert "SQLite maintenance complete" in result.output
@@ -532,7 +530,7 @@ def test_cli_db_check_verifies_sqlite_database(tmp_path: Path) -> None:
     }
     assert runner.invoke(app, ["migrate"], env=env).exit_code == 0
 
-    result = runner.invoke(app, ["db-check"], env=env)
+    result = runner.invoke(app, ["admin", "db-check"], env=env)
 
     assert result.exit_code == 0
     assert "SQLite verification complete" in result.output
@@ -555,7 +553,7 @@ def test_cli_db_check_redacts_exception_details(
         "LIBRARIAN_DATABASE_PATH": str(tmp_path / ".librarian" / "librarian.sqlite"),
     }
 
-    result = runner.invoke(app, ["db-check"], env=env)
+    result = runner.invoke(app, ["admin", "db-check"], env=env)
 
     output = _strip_ansi(result.output)
     assert result.exit_code != 0
@@ -597,7 +595,7 @@ def test_cli_db_stats_reports_machine_readable_storage_sizing(tmp_path: Path) ->
             ("raw:doc_cli_stats", "cli raw text"),
         )
 
-    result = runner.invoke(app, ["db-stats", "--json"], env=env)
+    result = runner.invoke(app, ["admin", "db-stats", "--json"], env=env)
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
@@ -649,7 +647,9 @@ def test_cli_api_audit_lists_redacted_security_events(tmp_path: Path) -> None:
             ),
         )
 
-    result = runner.invoke(app, ["api-audit", "--json", "--event", "api_auth_failed"], env=env)
+    result = runner.invoke(
+        app, ["admin", "api-audit", "--json", "--event", "api_auth_failed"], env=env
+    )
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
@@ -681,9 +681,11 @@ def test_cli_db_backup_creates_sqlite_backup(tmp_path: Path) -> None:
     migrate = runner.invoke(app, ["migrate"], env=env)
     assert migrate.exit_code == 0
 
-    result = runner.invoke(app, ["db-backup", str(backup_path)], env=env)
-    rejected = runner.invoke(app, ["db-backup", str(backup_path)], env=env)
-    overwritten = runner.invoke(app, ["db-backup", str(backup_path), "--overwrite"], env=env)
+    result = runner.invoke(app, ["admin", "db-backup", str(backup_path)], env=env)
+    rejected = runner.invoke(app, ["admin", "db-backup", str(backup_path)], env=env)
+    overwritten = runner.invoke(
+        app, ["admin", "db-backup", str(backup_path), "--overwrite"], env=env
+    )
 
     assert result.exit_code == 0
     assert "SQLite backup complete" in result.output
@@ -701,10 +703,10 @@ def test_cli_db_restore_requires_confirmation_and_restores_backup(tmp_path: Path
     }
     backup_path = tmp_path / "backup.sqlite"
     assert runner.invoke(app, ["migrate"], env=env).exit_code == 0
-    assert runner.invoke(app, ["db-backup", str(backup_path)], env=env).exit_code == 0
+    assert runner.invoke(app, ["admin", "db-backup", str(backup_path)], env=env).exit_code == 0
 
-    refused = runner.invoke(app, ["db-restore", str(backup_path)], env=env)
-    restored = runner.invoke(app, ["db-restore", str(backup_path), "--yes"], env=env)
+    refused = runner.invoke(app, ["admin", "db-restore", str(backup_path)], env=env)
+    restored = runner.invoke(app, ["admin", "db-restore", str(backup_path), "--yes"], env=env)
 
     assert refused.exit_code != 0
     assert "Refusing to restore without --yes" in refused.output
@@ -724,9 +726,11 @@ def test_cli_workspace_backup_includes_database_and_uploads(tmp_path: Path) -> N
     backup_path = tmp_path / "workspace.zip"
     assert runner.invoke(app, ["migrate"], env=env).exit_code == 0
 
-    result = runner.invoke(app, ["workspace-backup", str(backup_path)], env=env)
-    rejected = runner.invoke(app, ["workspace-backup", str(backup_path)], env=env)
-    overwritten = runner.invoke(app, ["workspace-backup", str(backup_path), "--overwrite"], env=env)
+    result = runner.invoke(app, ["admin", "workspace-backup", str(backup_path)], env=env)
+    rejected = runner.invoke(app, ["admin", "workspace-backup", str(backup_path)], env=env)
+    overwritten = runner.invoke(
+        app, ["admin", "workspace-backup", str(backup_path), "--overwrite"], env=env
+    )
 
     assert result.exit_code == 0
     assert "Workspace backup complete" in result.output
@@ -756,7 +760,7 @@ def test_cli_workspace_backup_skips_symlinked_files(tmp_path: Path) -> None:
     backup_path = tmp_path / "workspace.zip"
     assert runner.invoke(app, ["migrate"], env=env).exit_code == 0
 
-    result = runner.invoke(app, ["workspace-backup", str(backup_path)], env=env)
+    result = runner.invoke(app, ["admin", "workspace-backup", str(backup_path)], env=env)
 
     assert result.exit_code == 0
     with zipfile.ZipFile(backup_path) as archive:
@@ -780,7 +784,9 @@ def test_cli_workspace_backup_rejects_symlink_parent(tmp_path: Path) -> None:
     linked_parent.symlink_to(outside, target_is_directory=True)
     assert runner.invoke(app, ["migrate"], env=env).exit_code == 0
 
-    result = runner.invoke(app, ["workspace-backup", str(linked_parent / "workspace.zip")], env=env)
+    result = runner.invoke(
+        app, ["admin", "workspace-backup", str(linked_parent / "workspace.zip")], env=env
+    )
 
     assert result.exit_code != 0
     assert isinstance(result.exception, ValueError)
@@ -800,11 +806,15 @@ def test_cli_workspace_restore_requires_confirmation_and_restores_uploads(tmp_pa
     source_file.write_text("uploaded source", encoding="utf-8")
     backup_path = tmp_path / "workspace.zip"
     assert runner.invoke(app, ["migrate"], env=env).exit_code == 0
-    assert runner.invoke(app, ["workspace-backup", str(backup_path)], env=env).exit_code == 0
+    assert (
+        runner.invoke(app, ["admin", "workspace-backup", str(backup_path)], env=env).exit_code == 0
+    )
     source_file.unlink()
 
-    refused = runner.invoke(app, ["workspace-restore", str(backup_path)], env=env)
-    restored = runner.invoke(app, ["workspace-restore", str(backup_path), "--yes"], env=env)
+    refused = runner.invoke(app, ["admin", "workspace-restore", str(backup_path)], env=env)
+    restored = runner.invoke(
+        app, ["admin", "workspace-restore", str(backup_path), "--yes"], env=env
+    )
 
     assert refused.exit_code != 0
     assert "Refusing to restore workspace without --yes" in refused.output
@@ -822,7 +832,7 @@ def test_cli_workspace_restore_rejects_unsafe_archive_path(tmp_path: Path) -> No
     archive_path = tmp_path / "unsafe.zip"
     assert runner.invoke(app, ["migrate"], env=env).exit_code == 0
     db_backup = tmp_path / "db.sqlite"
-    assert runner.invoke(app, ["db-backup", str(db_backup)], env=env).exit_code == 0
+    assert runner.invoke(app, ["admin", "db-backup", str(db_backup)], env=env).exit_code == 0
     with zipfile.ZipFile(archive_path, "w") as archive:
         archive.writestr(
             "workspace-backup.json",
@@ -836,7 +846,7 @@ def test_cli_workspace_restore_rejects_unsafe_archive_path(tmp_path: Path) -> No
         archive.write(db_backup, "data/librarian.sqlite")
         archive.writestr("../escape.txt", "bad")
 
-    result = runner.invoke(app, ["workspace-restore", str(archive_path), "--yes"], env=env)
+    result = runner.invoke(app, ["admin", "workspace-restore", str(archive_path), "--yes"], env=env)
 
     assert result.exit_code != 0
     assert "unsafe path" in result.output
@@ -851,7 +861,7 @@ def test_cli_workspace_restore_rejects_symlink_archive_member(tmp_path: Path) ->
     archive_path = tmp_path / "symlink-member.zip"
     assert runner.invoke(app, ["migrate"], env=env).exit_code == 0
     db_backup = tmp_path / "db.sqlite"
-    assert runner.invoke(app, ["db-backup", str(db_backup)], env=env).exit_code == 0
+    assert runner.invoke(app, ["admin", "db-backup", str(db_backup)], env=env).exit_code == 0
     link_info = zipfile.ZipInfo("data/uploads/link")
     link_info.create_system = 3
     link_info.external_attr = 0o120777 << 16
@@ -868,7 +878,7 @@ def test_cli_workspace_restore_rejects_symlink_archive_member(tmp_path: Path) ->
         archive.write(db_backup, "data/librarian.sqlite")
         archive.writestr(link_info, "../outside")
 
-    result = runner.invoke(app, ["workspace-restore", str(archive_path), "--yes"], env=env)
+    result = runner.invoke(app, ["admin", "workspace-restore", str(archive_path), "--yes"], env=env)
 
     assert result.exit_code != 0
     assert "symlink member" in result.output
@@ -895,7 +905,7 @@ def test_cli_workspace_restore_does_not_apply_data_when_database_invalid(tmp_pat
         archive.writestr("data/librarian.sqlite", "not sqlite")
         archive.writestr("data/uploads/manual/source.txt", "should not restore")
 
-    result = runner.invoke(app, ["workspace-restore", str(archive_path), "--yes"], env=env)
+    result = runner.invoke(app, ["admin", "workspace-restore", str(archive_path), "--yes"], env=env)
 
     assert result.exit_code != 0
     assert "failed integrity check" in result.output
@@ -914,14 +924,16 @@ def test_cli_workspace_restore_rejects_existing_symlink_path(tmp_path: Path) -> 
     source_file.write_text("uploaded source", encoding="utf-8")
     backup_path = tmp_path / "workspace.zip"
     assert runner.invoke(app, ["migrate"], env=env).exit_code == 0
-    assert runner.invoke(app, ["workspace-backup", str(backup_path)], env=env).exit_code == 0
+    assert (
+        runner.invoke(app, ["admin", "workspace-backup", str(backup_path)], env=env).exit_code == 0
+    )
     source_file.unlink()
     uploads.rmdir()
     (tmp_path / ".librarian" / "uploads").rmdir()
     (tmp_path / ".librarian" / "actual").mkdir()
     (tmp_path / ".librarian" / "uploads").symlink_to(tmp_path / ".librarian" / "actual")
 
-    result = runner.invoke(app, ["workspace-restore", str(backup_path), "--yes"], env=env)
+    result = runner.invoke(app, ["admin", "workspace-restore", str(backup_path), "--yes"], env=env)
 
     assert result.exit_code != 0
     assert "crosses symlink" in result.output
@@ -939,7 +951,12 @@ def test_cli_workspace_restore_rejects_symlinked_data_dir(tmp_path: Path) -> Non
     (uploads / "source.txt").write_text("uploaded source", encoding="utf-8")
     backup_path = tmp_path / "workspace.zip"
     assert runner.invoke(app, ["migrate"], env=source_env).exit_code == 0
-    assert runner.invoke(app, ["workspace-backup", str(backup_path)], env=source_env).exit_code == 0
+    assert (
+        runner.invoke(
+            app, ["admin", "workspace-backup", str(backup_path)], env=source_env
+        ).exit_code
+        == 0
+    )
     outside = tmp_path / "outside"
     outside.mkdir()
     data_dir = tmp_path / "restore" / ".librarian"
@@ -950,7 +967,9 @@ def test_cli_workspace_restore_rejects_symlinked_data_dir(tmp_path: Path) -> Non
         "LIBRARIAN_DATABASE_PATH": str(tmp_path / "restore.sqlite"),
     }
 
-    result = runner.invoke(app, ["workspace-restore", str(backup_path), "--yes"], env=restore_env)
+    result = runner.invoke(
+        app, ["admin", "workspace-restore", str(backup_path), "--yes"], env=restore_env
+    )
 
     assert result.exit_code != 0
     assert "data_dir crosses symlink" in result.output
@@ -968,11 +987,14 @@ def test_cli_workspace_restore_rejects_archive_expansion_over_budget(tmp_path: P
     (uploads / "source.txt").write_text("uploaded source", encoding="utf-8")
     backup_path = tmp_path / "workspace.zip"
     assert runner.invoke(app, ["migrate"], env=env).exit_code == 0
-    assert runner.invoke(app, ["workspace-backup", str(backup_path)], env=env).exit_code == 0
+    assert (
+        runner.invoke(app, ["admin", "workspace-backup", str(backup_path)], env=env).exit_code == 0
+    )
 
     result = runner.invoke(
         app,
         [
+            "admin",
             "workspace-restore",
             str(backup_path),
             "--yes",
@@ -997,7 +1019,7 @@ def test_cli_workspace_restore_rejects_oversized_manifest(tmp_path: Path) -> Non
         archive.writestr("workspace-backup.json", " " * (64 * 1024 + 1))
         archive.writestr("data/librarian.sqlite", "not reached")
 
-    result = runner.invoke(app, ["workspace-restore", str(archive_path), "--yes"], env=env)
+    result = runner.invoke(app, ["admin", "workspace-restore", str(archive_path), "--yes"], env=env)
 
     assert result.exit_code != 0
     assert "manifest expands to more than 65536 bytes" in result.output
@@ -1025,7 +1047,7 @@ def test_cli_workspace_restore_rejects_duplicate_archive_path(tmp_path: Path) ->
             warnings.simplefilter("ignore", UserWarning)
             archive.writestr("data/librarian.sqlite", "second")
 
-    result = runner.invoke(app, ["workspace-restore", str(archive_path), "--yes"], env=env)
+    result = runner.invoke(app, ["admin", "workspace-restore", str(archive_path), "--yes"], env=env)
 
     assert result.exit_code != 0
     assert "duplicate path: data/librarian.sqlite" in result.output
@@ -1193,6 +1215,7 @@ def test_cli_corpus_eval_writes_results(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
         [
+            "maintainer",
             "corpus-eval",
             str(suite),
             "--output-dir",
@@ -1222,6 +1245,7 @@ def test_cli_benchmark_rejects_symlink_output(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
         [
+            "maintainer",
             "benchmark",
             "--paragraphs",
             "1",
@@ -1251,6 +1275,7 @@ def test_cli_output_writer_rejects_symlink_parent(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
         [
+            "maintainer",
             "benchmark",
             "--paragraphs",
             "1",
@@ -1313,9 +1338,7 @@ def test_cli_export_can_include_transcript_citation(tmp_path: Path) -> None:
         container = await build_container(settings)
         source = tmp_path / "captions.srt"
         source.write_text(
-            "1\n"
-            "00:00:08,000 --> 00:00:12,000\n"
-            "The follow up care plan starts tomorrow.\n",
+            "1\n00:00:08,000 --> 00:00:12,000\nThe follow up care plan starts tomorrow.\n",
             encoding="utf-8",
         )
         ingested = await container.ingest_document.execute(source)
@@ -1367,7 +1390,9 @@ def test_cli_eval_rejects_symlink_output(tmp_path: Path) -> None:
         "LIBRARIAN_DATABASE_PATH": str(tmp_path / ".librarian" / "librarian.sqlite"),
     }
 
-    result = runner.invoke(app, ["eval", str(suite), "--output", str(output)], env=env)
+    result = runner.invoke(
+        app, ["maintainer", "eval", str(suite), "--output", str(output)], env=env
+    )
 
     assert result.exit_code != 0
     assert outside.read_text(encoding="utf-8") == "keep"
@@ -1406,6 +1431,7 @@ def test_cli_corpus_eval_rejects_symlink_output(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
         [
+            "maintainer",
             "corpus-eval",
             str(suite),
             "--output-dir",
@@ -1427,6 +1453,7 @@ def test_cli_generate_corpus_writes_suite_and_files(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
         [
+            "maintainer",
             "generate-corpus",
             "--output-dir",
             str(output_dir),
@@ -1450,7 +1477,9 @@ def test_cli_generate_corpus_writes_suite_and_files(tmp_path: Path) -> None:
     assert "canter transitions" in text
     assert "saddle fit" in text
 
-    repeated = runner.invoke(app, ["generate-corpus", "--output-dir", str(output_dir)])
+    repeated = runner.invoke(
+        app, ["maintainer", "generate-corpus", "--output-dir", str(output_dir)]
+    )
 
     assert repeated.exit_code != 0
     assert "Corpus eval suite already exists" in _strip_ansi(repeated.output)
@@ -1463,6 +1492,7 @@ def test_cli_generate_corpus_can_include_docx_fixtures(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
         [
+            "maintainer",
             "generate-corpus",
             "--output-dir",
             str(output_dir),
@@ -1504,6 +1534,7 @@ def test_cli_generate_corpus_can_include_embedded_pdf_fixtures(tmp_path: Path) -
     result = runner.invoke(
         app,
         [
+            "maintainer",
             "generate-corpus",
             "--output-dir",
             str(output_dir),
@@ -1542,6 +1573,7 @@ def test_cli_generate_corpus_can_include_scanned_pdf_fixtures(tmp_path: Path) ->
     result = runner.invoke(
         app,
         [
+            "maintainer",
             "generate-corpus",
             "--output-dir",
             str(output_dir),
@@ -1579,6 +1611,7 @@ def test_cli_generate_corpus_can_include_noisy_ocr_pdf_fixture(tmp_path: Path) -
     result = runner.invoke(
         app,
         [
+            "maintainer",
             "generate-corpus",
             "--output-dir",
             str(output_dir),
@@ -1615,6 +1648,7 @@ def test_cli_generate_corpus_can_include_transcript_caption_fixtures(tmp_path: P
     result = runner.invoke(
         app,
         [
+            "maintainer",
             "generate-corpus",
             "--output-dir",
             str(output_dir),
@@ -1650,6 +1684,7 @@ def test_cli_generate_corpus_rejects_symlink_suite_path(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
         [
+            "maintainer",
             "generate-corpus",
             "--output-dir",
             str(output_dir),
@@ -1671,6 +1706,7 @@ def test_cli_generate_corpus_rejects_symlink_output_dir(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
         [
+            "maintainer",
             "generate-corpus",
             "--output-dir",
             str(output_dir),
@@ -1693,6 +1729,7 @@ def test_cli_generate_corpus_rejects_symlink_output_parent(tmp_path: Path) -> No
     result = runner.invoke(
         app,
         [
+            "maintainer",
             "generate-corpus",
             "--output-dir",
             str(linked_parent / "synthetic"),
@@ -1768,7 +1805,7 @@ def test_cli_page_manifest_summarizes_pdf_page_state(tmp_path: Path) -> None:
     )
     runner = CliRunner()
 
-    result = runner.invoke(app, ["page-manifest", str(manifest), "--failures-only"])
+    result = runner.invoke(app, ["admin", "page-manifest", str(manifest), "--failures-only"])
 
     output = _strip_ansi(result.output)
     assert result.exit_code == 0
@@ -1845,7 +1882,9 @@ def test_cli_page_manifest_prints_machine_readable_summary(tmp_path: Path) -> No
     )
     runner = CliRunner()
 
-    result = runner.invoke(app, ["page-manifest", str(manifest), "--json", "--failures-only"])
+    result = runner.invoke(
+        app, ["admin", "page-manifest", str(manifest), "--json", "--failures-only"]
+    )
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
@@ -1895,7 +1934,7 @@ def test_cli_page_manifest_rejects_unexpected_artifact(tmp_path: Path) -> None:
     )
     runner = CliRunner()
 
-    result = runner.invoke(app, ["page-manifest", str(manifest)])
+    result = runner.invoke(app, ["admin", "page-manifest", str(manifest)])
 
     assert result.exit_code != 0
     assert "unexpected artifact_type" in _strip_ansi(result.output)
@@ -1917,7 +1956,7 @@ def test_cli_page_manifest_redacts_validation_details(
     monkeypatch.setattr("librarian.cli.app._read_pdf_page_manifest", fail_read_manifest)
     runner = CliRunner()
 
-    result = runner.invoke(app, ["page-manifest", str(manifest)])
+    result = runner.invoke(app, ["admin", "page-manifest", str(manifest)])
 
     output = _strip_ansi(result.output)
     assert result.exit_code != 0
@@ -1937,7 +1976,7 @@ def test_cli_page_manifest_rejects_symlink_path(tmp_path: Path) -> None:
     link.symlink_to(manifest)
     runner = CliRunner()
 
-    result = runner.invoke(app, ["page-manifest", str(link)])
+    result = runner.invoke(app, ["admin", "page-manifest", str(link)])
 
     assert result.exit_code != 0
     assert "must not be a symlink" in _strip_ansi(result.output)
@@ -1955,7 +1994,7 @@ def test_cli_page_manifest_rejects_symlink_parent(tmp_path: Path) -> None:
     linked_dir.symlink_to(real_dir, target_is_directory=True)
     runner = CliRunner()
 
-    result = runner.invoke(app, ["page-manifest", str(linked_dir / manifest.name)])
+    result = runner.invoke(app, ["admin", "page-manifest", str(linked_dir / manifest.name)])
 
     assert result.exit_code != 0
     assert "crosses symlinked parent" in _strip_ansi(result.output)
@@ -2052,7 +2091,7 @@ def test_cli_retry_queue_failure_marks_retry_failed(
         "LIBRARIAN_DATABASE_PATH": str(tmp_path / ".librarian" / "librarian.sqlite"),
     }
 
-    result = runner.invoke(app, ["run-retry", run_id, "--queue"], env=env)
+    result = runner.invoke(app, ["admin", "run-retry", run_id, "--queue"], env=env)
 
     assert result.exit_code != 0
     output = _strip_ansi(result.output)

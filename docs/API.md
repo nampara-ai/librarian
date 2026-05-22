@@ -75,7 +75,8 @@ validated before conversion starts and must not be symlinks or cross symlinked p
   `LIBRARIAN_API_IMPORT_ROOT` and return page-level OCR/conversion progress, including status/source
   counts, warning counts, attempts, average OCR confidence, corrected page count, optional
   `image_path`, selected OCR `rotation_degrees`, and a bounded page list. The manifest path must not
-  be a symlink or cross symlinked parents. Use `failures_only=true` to inspect failed pages.
+  be a symlink or cross symlinked parents. Use `failures_only=true` to inspect failed pages. This is
+  an operational endpoint and requires write scope when scoped API keys are configured.
 
 ## Runs
 
@@ -174,8 +175,8 @@ Example:
 
 - `librarian import` maps to `POST /imports`.
 - `librarian process` maps to `POST /runs`.
-- `librarian run-cancel` maps to `POST /runs/{id}/cancel`.
-- `librarian run-retry` maps to `POST /runs/{id}/retry`.
+- `librarian admin run-cancel` maps to `POST /runs/{id}/cancel`.
+- `librarian admin run-retry` maps to `POST /runs/{id}/retry`.
 - `librarian search` maps to `POST /search`; `--details` maps to `POST /search/results`
   and prints the same total/limit/offset pagination metadata. `--phrase` maps to `phrase: true`.
 - `librarian delete` deletes local document records and owned upload files, equivalent to
