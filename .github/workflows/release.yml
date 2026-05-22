@@ -55,11 +55,12 @@ jobs:
           sudo apt-get install -y --no-install-recommends poppler-utils tesseract-ocr
       - name: Install
         run: |
-          python -m pip install --upgrade "pip>=26.1"
-          pip install -e ".[dev,all]"
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade "pip>=26.1"
+          .venv/bin/pip install -e ".[dev,all]"
       - name: Verify release tag matches package version
         run: |
-          python - <<'PY'
+          .venv/bin/python - <<'PY'
           import os
           import sys
 
@@ -72,22 +73,22 @@ jobs:
               sys.exit(1)
           PY
       - name: Verify changelog is ready for release
-        run: python .github/scripts/check_changelog_ready.py --version "$GITHUB_REF_NAME"
+        run: .venv/bin/python .github/scripts/check_changelog_ready.py --version "$GITHUB_REF_NAME"
       - name: Doctor
-        run: librarian doctor --strict
+        run: .venv/bin/librarian doctor --strict
       - name: Check
         run: |
-          ruff check .
-          pyright
-          pytest
+          .venv/bin/ruff check .
+          .venv/bin/pyright
+          .venv/bin/pytest
       - name: Dependency audit
-        run: pip-audit --progress-spinner off --skip-editable
+        run: .venv/bin/pip-audit --progress-spinner off --skip-editable
       - name: Build distributions
         run: |
           rm -rf dist
-          python -m build
+          .venv/bin/python -m build
       - name: Export dependency constraints
-        run: python .github/scripts/export_constraints.py --output constraints.txt
+        run: .venv/bin/python .github/scripts/export_constraints.py --output constraints.txt
       - name: Smoke install wheel
         run: |
           python -m venv "$RUNNER_TEMP/librarian-wheel-smoke"
@@ -99,7 +100,7 @@ jobs:
         with:
           subject-path: "dist/*"
       - name: Generate SBOM
-        run: cyclonedx-py environment --output-format JSON --output-file sbom.json
+        run: .venv/bin/cyclonedx-py environment --output-format JSON --output-file sbom.json
       - name: Generate checksums
         run: sha256sum dist/* sbom.json constraints.txt > SHA256SUMS.txt
       - name: Verify checksums
@@ -166,7 +167,7 @@ jobs:
           subject-digest: "${{ steps.image-digest.outputs.digest }}"
           push-to-registry: true
       - name: Extract release notes
-        run: python .github/scripts/release_notes.py --version "${{ github.ref_name }}" --output release-notes.md
+        run: .venv/bin/python .github/scripts/release_notes.py --version "${{ github.ref_name }}" --output release-notes.md
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
