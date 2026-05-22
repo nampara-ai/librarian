@@ -1062,7 +1062,7 @@ requires-dist = [
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.9.0" },
     { name = "pydantic", specifier = ">=2.9.0" },
     { name = "pydantic-settings", specifier = ">=2.5.0" },
-    { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1.384" },
+    { name = "pyright", marker = "extra == 'dev'", specifier = "==1.1.409" },
     { name = "pytesseract", marker = "extra == 'all'", specifier = ">=0.3.13" },
     { name = "pytesseract", marker = "extra == 'ocr'", specifier = ">=0.3.13" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.0" },
