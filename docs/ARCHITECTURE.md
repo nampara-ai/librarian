@@ -17,6 +17,7 @@ Librarian uses hexagonal architecture so the core can run through a CLI, an API 
 Adapters
   CLI: Typer
   API: FastAPI
+  Mac app: SwiftUI client of the API (apps/macos), embeds the backend in release builds
   Storage: SQLite repository and SQLite-backed content store
   LLM: OpenAI-compatible, mock
   Extraction: txt, md, csv, json, docx, pdf, OCR images

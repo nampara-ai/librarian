@@ -2,6 +2,8 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 
 def _load_release_notes_module() -> ModuleType:
     loader = SourceFileLoader(
@@ -106,9 +108,31 @@ Stable release text.
 
 def test_changelog_release_guard_accepts_single_stable_section() -> None:
     module = _load_check_changelog_ready_module()
-    changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+    changelog = """# Changelog
+
+## 1.0.0 - 2026-05-22
+
+Stable release text.
+"""
 
     module.validate_changelog_ready(changelog, "v1.0.0")
+
+
+def test_changelog_release_guard_rejects_pending_unreleased_entries() -> None:
+    module = _load_check_changelog_ready_module()
+    changelog = """# Changelog
+
+## Unreleased
+
+- Pending entry.
+
+## 1.0.0 - 2026-05-22
+
+Stable release text.
+"""
+
+    with pytest.raises(ValueError, match="Unreleased"):
+        module.validate_changelog_ready(changelog, "v1.0.0")
 
 
 def test_export_constraints_exports_registry_pins_only() -> None:

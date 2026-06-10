@@ -119,6 +119,13 @@ class Settings(BaseSettings):
         return ",".join(networks) if networks else None
 
     @model_validator(mode="after")
+    def derive_database_path(self) -> Self:
+        """Keep the SQLite database inside data_dir unless database_path is set explicitly."""
+        if "database_path" not in self.model_fields_set:
+            self.database_path = self.data_dir / "librarian.sqlite"
+        return self
+
+    @model_validator(mode="after")
     def validate_cross_field_settings(self) -> Self:
         """Validate settings that depend on each other."""
         if self.chunk_overlap_chars >= self.chunk_target_chars:

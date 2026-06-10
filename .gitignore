@@ -17,6 +17,8 @@ __pycache__/
 .venv/
 venv/
 node_modules/
+.build/
+.swiftpm/
 
 # Librarian runtime data
 .librarian/

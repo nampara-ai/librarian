@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -60,3 +61,41 @@ def test_settings_default_to_v2_prompt_stack() -> None:
 
     assert settings.cleaning_prompt_version == "cmos_v2"
     assert settings.classification_prompt_version == "dewey_v2"
+
+
+def test_database_path_defaults_inside_data_dir() -> None:
+    settings = Settings(data_dir=Path("/var/lib/librarian"))
+
+    assert settings.database_path == Path("/var/lib/librarian/librarian.sqlite")
+
+
+def test_database_path_default_matches_default_data_dir() -> None:
+    settings = Settings()
+
+    assert settings.database_path == settings.data_dir / "librarian.sqlite"
+
+
+def test_explicit_database_path_is_preserved() -> None:
+    settings = Settings(
+        data_dir=Path("/var/lib/librarian"),
+        database_path=Path("/elsewhere/custom.sqlite"),
+    )
+
+    assert settings.database_path == Path("/elsewhere/custom.sqlite")
+
+
+def test_database_path_env_override_is_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LIBRARIAN_DATA_DIR", "/var/lib/librarian")
+    monkeypatch.setenv("LIBRARIAN_DATABASE_PATH", "/elsewhere/custom.sqlite")
+
+    settings = Settings()
+
+    assert settings.database_path == Path("/elsewhere/custom.sqlite")
+
+
+def test_data_dir_env_moves_database_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LIBRARIAN_DATA_DIR", "/var/lib/librarian")
+
+    settings = Settings()
+
+    assert settings.database_path == Path("/var/lib/librarian/librarian.sqlite")

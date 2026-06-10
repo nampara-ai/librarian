@@ -2,6 +2,8 @@ import hashlib
 import json
 import re
 import sqlite3
+import subprocess
+import sys
 import warnings
 import zipfile
 from pathlib import Path
@@ -16,6 +18,7 @@ from librarian.config import Settings
 from librarian.domain.ids import DocumentId
 from librarian.domain.models import RunStage, RunStatus
 from librarian.storage.sqlite import SQLiteRunQueue
+from librarian.version import __version__
 
 
 def test_cli_read_only_commands_do_not_require_llm_credentials(tmp_path: Path) -> None:
@@ -1092,7 +1095,42 @@ def test_cli_import_accepts_single_file(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert "ingested 1" in _strip_ansi(result.output)
-    assert (tmp_path / "librarian-converted" / "large.md").exists()
+    assert (tmp_path / ".librarian" / "converted" / "large.md").exists()
+    assert not (tmp_path / "librarian-converted").exists()
+
+
+def test_cli_import_directory_defaults_to_workspace_output(tmp_path: Path) -> None:
+    runner = CliRunner()
+    source_dir = tmp_path / "corpus"
+    source_dir.mkdir()
+    (source_dir / "notes.txt").write_text("Horse import transcript", encoding="utf-8")
+    env = {
+        "LIBRARIAN_DATA_DIR": str(tmp_path / ".librarian"),
+        "LIBRARIAN_DATABASE_PATH": str(tmp_path / ".librarian" / "librarian.sqlite"),
+    }
+
+    result = runner.invoke(app, ["import", str(source_dir), "--format", "md"], env=env)
+
+    assert result.exit_code == 0
+    assert "ingested 1" in _strip_ansi(result.output)
+    assert (tmp_path / ".librarian" / "converted" / "corpus" / "notes.md").exists()
+    assert sorted(path.name for path in source_dir.iterdir()) == ["notes.txt"]
+
+
+def test_cli_import_rejects_output_dir_with_workspace_mode(tmp_path: Path) -> None:
+    runner = CliRunner()
+    source_dir = tmp_path / "corpus"
+    source_dir.mkdir()
+    (source_dir / "notes.txt").write_text("Alpha", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        ["import", str(source_dir), "--output-dir", str(tmp_path / "out")],
+    )
+
+    assert result.exit_code != 0
+    assert "output_dir is only supported with new-directory" in _strip_ansi(result.output)
+    assert "Traceback" not in result.output
 
 
 def test_cli_convert_dir_rejects_symlink_output_dir(tmp_path: Path) -> None:
@@ -1567,6 +1605,7 @@ def test_cli_generate_corpus_can_include_embedded_pdf_fixtures(tmp_path: Path) -
 
 
 def test_cli_generate_corpus_can_include_scanned_pdf_fixtures(tmp_path: Path) -> None:
+    pytest.importorskip("PIL", reason="pillow is required to render scanned PDF fixtures")
     runner = CliRunner()
     output_dir = tmp_path / "synthetic"
 
@@ -1605,6 +1644,7 @@ def test_cli_generate_corpus_can_include_scanned_pdf_fixtures(tmp_path: Path) ->
 
 
 def test_cli_generate_corpus_can_include_noisy_ocr_pdf_fixture(tmp_path: Path) -> None:
+    pytest.importorskip("PIL", reason="pillow is required to render scanned PDF fixtures")
     runner = CliRunner()
     output_dir = tmp_path / "synthetic"
 
@@ -2114,6 +2154,17 @@ def test_cli_retry_queue_failure_marks_retry_failed(
     assert "submission failed: queue down api_key=[REDACTED] [REDACTED]" in errors
     assert all(error is None or "abc123" not in error for error in errors)
     assert all(error is None or "sk-testSECRET123" not in error for error in errors)
+
+
+def test_python_module_entry_point_runs_cli() -> None:
+    completed = subprocess.run(  # noqa: S603
+        [sys.executable, "-m", "librarian", "version"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert __version__ in completed.stdout
 
 
 def _strip_ansi(value: str) -> str:

@@ -33,6 +33,7 @@ from librarian.application.convert_document import (
     DocumentConverter,
     conversion_output_exclusions,
     iter_supported_files,
+    resolve_workspace_output,
 )
 from librarian.application.export_document import (
     ExportedDocument,
@@ -153,7 +154,7 @@ class RunRequest(BaseModel):
 class ImportRequest(BaseModel):
     source_dir: str
     format: str = "md"
-    output_mode: str = "subdirectory"
+    output_mode: str = "workspace"
     output_dir: str | None = None
     subdirectory_name: str = "librarian-converted"
     recursive: bool = False
@@ -1216,6 +1217,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if request.output_dir
             else None
         )
+        try:
+            output_mode, output_dir = resolve_workspace_output(
+                output_mode,
+                data_dir=settings.data_dir,
+                source_path=source_path,
+                output_dir=output_dir,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=sanitize_error_message(exc)) from exc
         manifest_path = (
             _resolve_api_writable_path(
                 Path(request.manifest_path),

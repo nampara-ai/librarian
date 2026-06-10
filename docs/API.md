@@ -51,7 +51,7 @@ Example:
 {
   "source_dir": "/data/input",
   "format": "md",
-  "output_mode": "subdirectory",
+  "output_mode": "workspace",
   "recursive": true,
   "overwrite": false,
   "processing_mode": "queue"
@@ -59,6 +59,11 @@ Example:
 ```
 
 `processing_mode` may be `none`, `process`, or `queue`.
+
+`output_mode` may be `workspace` (default), `new-directory`, `original`, or `subdirectory`. The
+default `workspace` mode writes converted files under `<data_dir>/converted` so imports never
+create artifacts next to the source documents; directory imports get a per-source subdirectory
+there. `new-directory` requires `output_dir`, and `output_dir` is rejected for other modes.
 
 The `source_dir` field accepts either a file path or a directory path under
 `LIBRARIAN_API_IMPORT_ROOT`. The name is kept for API compatibility.

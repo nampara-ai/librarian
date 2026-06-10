@@ -3,17 +3,17 @@ from pathlib import Path
 
 import pytest
 
-from librarian.application import benchmark as benchmark_module
-from librarian.application.benchmark import (
+from librarian.application.clean_chunks import CleanChunks
+from librarian.domain.ids import ChunkId, DocumentId
+from librarian.domain.models import Chunk
+from librarian.llm.mock import MockLLMProvider
+from librarian.maintainer import benchmark as benchmark_module
+from librarian.maintainer.benchmark import (
     benchmark_result_json,
     load_benchmark_text,
     run_benchmark_suite,
     synthetic_text,
 )
-from librarian.application.clean_chunks import CleanChunks
-from librarian.domain.ids import ChunkId, DocumentId
-from librarian.domain.models import Chunk
-from librarian.llm.mock import MockLLMProvider
 from librarian.pipeline.chunking import ChunkingPolicy
 from librarian.prompts import PromptCatalog
 

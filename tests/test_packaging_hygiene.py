@@ -4,6 +4,8 @@ from pathlib import Path
 from shutil import which
 from subprocess import run
 
+import pytest
+
 
 def test_wheel_includes_runtime_package_data() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
@@ -12,6 +14,13 @@ def test_wheel_includes_runtime_package_data() -> None:
     assert wheel["packages"] == ["src/librarian"]
     assert "src/librarian/prompts/**/*.md" in wheel["artifacts"]
     assert "src/librarian/storage/migrations/*.sql" in wheel["artifacts"]
+
+
+def test_wheel_excludes_maintainer_harness() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    wheel = pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]
+
+    assert "src/librarian/maintainer" in wheel["exclude"]
 
 
 def test_package_version_metadata_is_consistent() -> None:
@@ -60,9 +69,14 @@ def test_dockerignore_excludes_private_runtime_artifacts() -> None:
 
 def test_sensitive_local_artifacts_are_not_tracked() -> None:
     git = which("git")
-    assert git is not None
-    completed = run([git, "ls-files"], check=True, capture_output=True, text=True)  # noqa: S603
+    if git is None:
+        pytest.skip("git is not installed")
+    completed = run([git, "ls-files"], capture_output=True, text=True)  # noqa: S603
+    if completed.returncode != 0:
+        pytest.skip("not running inside a git checkout")
     tracked = set(completed.stdout.splitlines())
+    if not tracked:
+        pytest.skip("no tracked files visible (not a git checkout)")
     forbidden_exact = {".env", ".librarian/librarian.sqlite"}
     forbidden_prefixes = (
         ".librarian/",

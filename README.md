@@ -1,8 +1,20 @@
 # Librarian
 
-Librarian is a local-first document ingestion, cleaning, classification, and search system. It converts transcripts, Markdown, text files, DOCX, PDFs, and OCR images into clean Markdown or plain text; processes them with an OpenAI-compatible model while preserving source fidelity; classifies the result with Dewey-style labels; and exposes the same engine through a CLI and FastAPI service.
+Librarian is a local-first document ingestion, cleaning, classification, and search system. It converts transcripts, Markdown, text files, DOCX, PDFs, and OCR images into clean Markdown or plain text; processes them with an OpenAI-compatible model while preserving source fidelity; classifies the result with Dewey-style labels; and exposes the same engine through a Mac app, a CLI, and a FastAPI service.
 
 Version `1.0.0` is the stable production release. The default deployment is local or single-node: source documents and generated outputs stay in SQLite-backed local storage unless you configure an external model provider for cleaning, classification, or OCR correction.
+
+## Mac App
+
+The easiest way to use Librarian is the native Mac app — a self-contained download with the entire engine inside:
+
+1. Download [Librarian-AppleSilicon.dmg](https://github.com/nampara-ai/librarian/releases/latest/download/Librarian-AppleSilicon.dmg) (M-series Macs) or [Librarian-Intel.dmg](https://github.com/nampara-ai/librarian/releases/latest/download/Librarian-Intel.dmg) (Intel Macs).
+2. Open the DMG and drag **Librarian** to **Applications**.
+3. Launch it and drop files anywhere in the window.
+
+Drag-and-drop ingest, live processing progress, full-text search, and Markdown export — no terminal required. See [apps/macos](apps/macos/README.md) for first-launch notes, data locations, LLM provider configuration, and how the app is built and released.
+
+Everything below covers the engine itself — the CLI and API the app is built on.
 
 ## Install
 
@@ -76,7 +88,9 @@ librarian export doc_... --format json --citation-quote "quoted source phrase"
 librarian api
 ```
 
-Operator commands live under `librarian admin`, including database maintenance, backups, run controls, queue inspection, API audit logs, and PDF page-manifest inspection. Release and quality harnesses live under `librarian maintainer`.
+`librarian import` converts sources into the workspace by default: converted Markdown/text lands under `<data_dir>/converted` instead of next to your original files. Use `--output-mode` to opt into `new-directory`, `original`, or `subdirectory` placement.
+
+Operator commands live under `librarian admin`, including database maintenance, backups, run controls, queue inspection, API audit logs, and PDF page-manifest inspection. Release and quality harnesses live under `librarian maintainer`; they ship with source checkouts only and are excluded from release wheels.
 
 ## API
 

@@ -4,12 +4,12 @@ from typing import cast
 
 import pytest
 
-from librarian.application.eval import EvalCase, EvalSuite, load_eval_suite, run_eval_suite
 from librarian.application.factory import build_container
 from librarian.config import LlmProviderSetting, Settings
 from librarian.ingest import extractors
 from librarian.ingest.extractors import OcrTextResult, PdfExtractor
 from librarian.llm import LazyLLMProvider
+from librarian.maintainer.eval import EvalCase, EvalSuite, load_eval_suite, run_eval_suite
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("LIBRARIAN_RUN_PROVIDER_TESTS") != "1",
