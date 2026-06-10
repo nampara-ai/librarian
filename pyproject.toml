@@ -82,6 +82,9 @@ artifacts = [
   "src/librarian/prompts/**/*.md",
   "src/librarian/storage/migrations/*.sql",
 ]
+# Maintainer-only eval/benchmark/synthetic-corpus harnesses stay in source
+# checkouts and out of release wheels.
+exclude = ["src/librarian/maintainer"]
 
 [tool.ruff]
 line-length = 100

@@ -4,16 +4,16 @@ from pathlib import Path
 
 import pytest
 
-from librarian.application import eval as eval_module
-from librarian.application.eval import (
+from librarian.application.factory import build_container
+from librarian.config import Settings
+from librarian.maintainer import eval as eval_module
+from librarian.maintainer.eval import (
     EvalCase,
     EvalSuite,
     eval_result_json,
     load_eval_suite,
     run_eval_suite,
 )
-from librarian.application.factory import build_container
-from librarian.config import Settings
 
 EXAMPLES_DIR = Path(__file__).resolve().parents[1] / "examples"
 

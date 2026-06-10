@@ -33,6 +33,38 @@ class DirectoryOutputMode(StrEnum):
     NEW_DIRECTORY = "new-directory"
     ORIGINAL = "original"
     SUBDIRECTORY = "subdirectory"
+    WORKSPACE = "workspace"
+
+
+def workspace_output_dir(data_dir: Path, source_path: Path) -> Path:
+    """Default converted-output directory inside the runtime workspace.
+
+    Directory imports get a per-source subdirectory so unrelated imports do not
+    collide; single-file imports share the flat converted root.
+    """
+    root = data_dir / "converted"
+    if source_path.is_dir():
+        return root / source_path.name
+    return root
+
+
+def resolve_workspace_output(
+    output_mode: DirectoryOutputMode,
+    *,
+    data_dir: Path,
+    source_path: Path,
+    output_dir: Path | None,
+) -> tuple[DirectoryOutputMode, Path | None]:
+    """Translate workspace mode into a concrete new-directory target.
+
+    Workspace mode owns its output location, so combining it with an explicit
+    output_dir is rejected before any conversion starts.
+    """
+    if output_mode != DirectoryOutputMode.WORKSPACE:
+        return output_mode, output_dir
+    if output_dir is not None:
+        raise ValueError("output_dir is only supported with new-directory output mode")
+    return DirectoryOutputMode.NEW_DIRECTORY, workspace_output_dir(data_dir, source_path)
 
 
 class ConversionFailureType(StrEnum):

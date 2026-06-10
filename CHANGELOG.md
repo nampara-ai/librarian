@@ -6,6 +6,15 @@
   `LIBRARIAN_DATA_DIR` no longer leaves the SQLite database at a working-directory-relative
   `.librarian/librarian.sqlite` while uploads follow the configured data directory. Explicit
   `LIBRARIAN_DATABASE_PATH` values are unchanged.
+- Added a `workspace` conversion output mode and made it the default for `librarian import` and
+  `POST /imports`: converted files now land under `<data_dir>/converted` instead of a
+  `librarian-converted/` directory created next to the source documents. `convert-dir` keeps its
+  explicit `subdirectory` default but also accepts `workspace`.
+- Moved the maintainer eval, corpus-eval, benchmark, and synthetic-corpus harnesses to
+  `librarian.maintainer`, which ships with source checkouts and is excluded from release wheels.
+  `librarian maintainer` commands print an actionable message when the harness is absent.
+- Made optional-dependency tests skip cleanly on minimal installs, and made packaging/changelog
+  hygiene tests skip outside a git checkout instead of failing.
 - Corrected `CONTRIBUTING.md` release status and `librarian maintainer` command examples.
 
 ## 1.0.0 - 2026-05-22

@@ -265,6 +265,7 @@ async def test_docx_extractor_preserves_list_markers(tmp_path: Path) -> None:
 @pytest.mark.skipif(shutil.which("tesseract") is None, reason="tesseract not installed")
 @pytest.mark.asyncio
 async def test_image_ocr_extractor_reads_fixture(tmp_path: Path) -> None:
+    pytest.importorskip("PIL", reason="pillow not installed")
     from PIL import Image, ImageDraw, ImageFont
 
     path = tmp_path / "fixture.png"

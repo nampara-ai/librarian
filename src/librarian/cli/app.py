@@ -19,23 +19,13 @@ import uvicorn
 from rich.console import Console
 from rich.table import Table
 
-from librarian.application.benchmark import (
-    benchmark_result_json,
-    load_benchmark_text,
-    run_benchmark_suite,
-)
 from librarian.application.convert_document import (
     ConversionFormat,
     DirectoryOutputMode,
     DocumentConverter,
+    resolve_workspace_output,
     validate_directory_output,
 )
-from librarian.application.corpus_eval import (
-    corpus_eval_result_json,
-    load_corpus_eval_suite,
-    run_corpus_eval_suite,
-)
-from librarian.application.eval import eval_result_json, load_eval_suite, run_eval_suite
 from librarian.application.export_document import (
     ExportedDocument,
     ExportFormat,
@@ -49,7 +39,6 @@ from librarian.application.import_library import (
 )
 from librarian.application.jobs import QueueWorker
 from librarian.application.ports import SearchScope
-from librarian.application.synthetic_corpus import generate_synthetic_corpus
 from librarian.application.transcripts import (
     TranscriptFormat,
     find_quote_in_transcript_file,
@@ -534,7 +523,7 @@ def convert_dir(
     format: Annotated[str, typer.Option(help="Output format: md or txt.")] = "md",
     output_mode: Annotated[
         str,
-        typer.Option(help="Output mode: new-directory, original, subdirectory."),
+        typer.Option(help="Output mode: workspace, new-directory, original, subdirectory."),
     ] = "subdirectory",
     output_dir: Annotated[
         Path | None,
@@ -554,10 +543,19 @@ def convert_dir(
     """Batch convert supported files in a directory."""
     conversion_format = _conversion_format(format)
     mode = _directory_output_mode(output_mode)
+    try:
+        mode, resolved_output_dir = resolve_workspace_output(
+            mode,
+            data_dir=Settings().data_dir,
+            source_path=path.resolve(),
+            output_dir=output_dir.expanduser() if output_dir else None,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(sanitize_error_message(exc)) from exc
     _validate_cli_directory_output(
         path.resolve(),
         mode,
-        output_dir.expanduser() if output_dir else None,
+        resolved_output_dir,
     )
 
     async def run() -> None:
@@ -567,7 +565,7 @@ def convert_dir(
             path.resolve(),
             format=conversion_format,
             output_mode=mode,
-            output_dir=output_dir.expanduser() if output_dir else None,
+            output_dir=resolved_output_dir,
             subdirectory_name=subdirectory_name,
             recursive=recursive,
             overwrite=overwrite,
@@ -667,8 +665,14 @@ def import_directory(
     format: Annotated[str, typer.Option(help="Converted output format: md or txt.")] = "md",
     output_mode: Annotated[
         str,
-        typer.Option(help="Output mode: new-directory, original, subdirectory."),
-    ] = "subdirectory",
+        typer.Option(
+            help=(
+                "Output mode: workspace, new-directory, original, subdirectory. "
+                "Workspace keeps converted files under <data_dir>/converted instead "
+                "of writing next to the source."
+            )
+        ),
+    ] = "workspace",
     output_dir: Annotated[
         Path | None,
         typer.Option(help="Target directory for new-directory mode."),
@@ -702,10 +706,19 @@ def import_directory(
     mode = _directory_output_mode(output_mode)
     resolved_path = path.resolve()
     source_dir = resolved_path if resolved_path.is_dir() else resolved_path.parent
+    try:
+        mode, resolved_output_dir = resolve_workspace_output(
+            mode,
+            data_dir=Settings().data_dir,
+            source_path=resolved_path,
+            output_dir=output_dir.expanduser() if output_dir else None,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(sanitize_error_message(exc)) from exc
     _validate_cli_directory_output(
         source_dir,
         mode,
-        output_dir.expanduser() if output_dir else None,
+        resolved_output_dir,
     )
     processing_mode = ImportProcessingMode.NONE
     if process:
@@ -732,7 +745,7 @@ def import_directory(
                 format=conversion_format,
                 output_mode=mode,
                 processing_mode=processing_mode,
-                output_dir=output_dir.expanduser() if output_dir else None,
+                output_dir=resolved_output_dir,
                 subdirectory_name=subdirectory_name,
                 recursive=recursive,
                 overwrite=overwrite,
@@ -1232,6 +1245,12 @@ def export(
     asyncio.run(run())
 
 
+_MAINTAINER_HARNESS_MISSING = (
+    "This command needs the librarian.maintainer harness, which is excluded from "
+    "release wheels. Run it from a source checkout (pip install -e '.[dev]')."
+)
+
+
 @maintainer_app.command()
 def benchmark(
     paragraphs: Annotated[int, typer.Option(help="Synthetic paragraph count.", min=1)] = 100,
@@ -1244,6 +1263,14 @@ def benchmark(
     output: Annotated[Path | None, typer.Option(help="Optional JSON output path.")] = None,
 ) -> None:
     """Benchmark chunking and configured cleaning provider throughput."""
+    try:
+        from librarian.maintainer.benchmark import (
+            benchmark_result_json,
+            load_benchmark_text,
+            run_benchmark_suite,
+        )
+    except ModuleNotFoundError as exc:
+        raise typer.BadParameter(_MAINTAINER_HARNESS_MISSING) from exc
 
     async def run() -> None:
         container = await build_container()
@@ -1274,6 +1301,10 @@ def eval_suite(
     output: Annotated[Path | None, typer.Option(help="Optional JSON output path.")] = None,
 ) -> None:
     """Run a prompt/model evaluation suite."""
+    try:
+        from librarian.maintainer.eval import eval_result_json, load_eval_suite, run_eval_suite
+    except ModuleNotFoundError as exc:
+        raise typer.BadParameter(_MAINTAINER_HARNESS_MISSING) from exc
 
     async def run() -> None:
         container = await build_container()
@@ -1304,6 +1335,14 @@ def corpus_eval(
     ] = False,
 ) -> None:
     """Run corpus-level conversion, processing, and search evaluation."""
+    try:
+        from librarian.maintainer.corpus_eval import (
+            corpus_eval_result_json,
+            load_corpus_eval_suite,
+            run_corpus_eval_suite,
+        )
+    except ModuleNotFoundError as exc:
+        raise typer.BadParameter(_MAINTAINER_HARNESS_MISSING) from exc
 
     async def run() -> None:
         container = await build_container()
@@ -1363,6 +1402,10 @@ def generate_corpus(
     overwrite: Annotated[bool, typer.Option(help="Overwrite existing generated files.")] = False,
 ) -> None:
     """Generate a deterministic sanitized corpus-eval fixture."""
+    try:
+        from librarian.maintainer.synthetic_corpus import generate_synthetic_corpus
+    except ModuleNotFoundError as exc:
+        raise typer.BadParameter(_MAINTAINER_HARNESS_MISSING) from exc
     try:
         result = generate_synthetic_corpus(
             corpus_dir=output_dir / "corpus",
@@ -1593,7 +1636,7 @@ def _directory_output_mode(value: str) -> DirectoryOutputMode:
         return DirectoryOutputMode(value)
     except ValueError as exc:
         raise typer.BadParameter(
-            "output-mode must be one of: new-directory, original, subdirectory"
+            "output-mode must be one of: workspace, new-directory, original, subdirectory"
         ) from exc
 
 

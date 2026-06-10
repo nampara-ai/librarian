@@ -2005,7 +2005,54 @@ def test_api_import_accepts_single_file(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.json()["ingested"] == 1
     assert response.json()["items"][0]["source_path"] == str(file_source)
-    assert (import_root / "librarian-converted" / "notes.md").exists()
+    assert (tmp_path / ".librarian" / "converted" / "notes.md").exists()
+    assert not (import_root / "librarian-converted").exists()
+
+
+def test_api_import_directory_defaults_to_workspace_output(tmp_path: Path) -> None:
+    import_root = tmp_path / "imports"
+    source_dir = import_root / "corpus"
+    source_dir.mkdir(parents=True)
+    (source_dir / "notes.txt").write_text("Horse import transcript", encoding="utf-8")
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_import_root=import_root,
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/imports",
+            json={"source_dir": str(source_dir), "processing_mode": "none"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["ingested"] == 1
+    assert (tmp_path / ".librarian" / "converted" / "corpus" / "notes.md").exists()
+    assert sorted(path.name for path in source_dir.iterdir()) == ["notes.txt"]
+
+
+def test_api_import_rejects_output_dir_with_workspace_mode(tmp_path: Path) -> None:
+    import_root = tmp_path / "imports"
+    source_dir = import_root / "corpus"
+    source_dir.mkdir(parents=True)
+    (source_dir / "notes.txt").write_text("Alpha", encoding="utf-8")
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_import_root=import_root,
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/imports",
+            json={
+                "source_dir": str(source_dir),
+                "processing_mode": "none",
+                "output_dir": str(import_root / "out"),
+            },
+        )
+
+    assert response.status_code == 400
+    assert "output_dir is only supported with new-directory" in response.json()["detail"]
 
 
 def test_api_import_status_reads_manifest_and_resume_skips_completed_items(tmp_path: Path) -> None:

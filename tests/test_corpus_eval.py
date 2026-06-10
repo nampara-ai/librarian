@@ -5,8 +5,10 @@ from typing import cast
 
 import pytest
 
-from librarian.application import corpus_eval
-from librarian.application.corpus_eval import (
+from librarian.application.factory import build_container
+from librarian.config import Settings
+from librarian.maintainer import corpus_eval
+from librarian.maintainer.corpus_eval import (
     CorpusEvalCase,
     CorpusEvalSuite,
     MarkdownTableExpectation,
@@ -16,8 +18,6 @@ from librarian.application.corpus_eval import (
     load_corpus_eval_suite,
     run_corpus_eval_suite,
 )
-from librarian.application.factory import build_container
-from librarian.config import Settings
 
 EXAMPLES_DIR = Path(__file__).resolve().parents[1] / "examples"
 
