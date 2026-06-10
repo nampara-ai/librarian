@@ -66,7 +66,7 @@ dev = [
   "pytest>=8.3.0",
   "pytest-asyncio>=0.24.0",
   "ruff>=0.6.9",
-  "pyright==1.1.409",
+  "pyright==1.1.410",
   "build>=1.2.2",
   "cyclonedx-bom>=6.1.0",
   "httpx2>=2.3.0",
