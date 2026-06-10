@@ -45,6 +45,19 @@ def test_dependencies_include_security_audit_tool_and_vulnerability_floors() -> 
     assert "urllib3>=2.7.0" in dev_dependencies
 
 
+def test_dev_dependencies_keep_typed_starlette_test_client() -> None:
+    """starlette>=1.2 TestClient imports httpx2 when installed; without it the
+    deprecated httpx 1.x shim is used, which is untyped and fails pyright on
+    fresh installs. Runtime code stays on httpx 1.x for the openai SDK."""
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    runtime_dependencies = pyproject["project"]["dependencies"]
+    dev_dependencies = pyproject["project"]["optional-dependencies"]["dev"]
+
+    assert "httpx2>=2.3.0" in dev_dependencies
+    assert "httpx>=0.27.0" in runtime_dependencies
+    assert not any(dependency.startswith("httpx2") for dependency in runtime_dependencies)
+
+
 def test_gitignore_excludes_private_runtime_artifacts() -> None:
     gitignore = Path(".gitignore").read_text(encoding="utf-8").splitlines()
 

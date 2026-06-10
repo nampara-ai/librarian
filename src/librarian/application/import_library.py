@@ -238,7 +238,7 @@ class ImportLibrary:
                     output_path=destination,
                     status="converted",
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - failure recorded per file
                 self.converter.record_conversion_failure(source_path, exc)
                 conversion = BatchConversionItem(
                     source_path=source_path,
@@ -322,7 +322,7 @@ class ImportLibrary:
                         output_path=destination,
                         status="converted",
                     )
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - failure recorded per file
                     self.converter.record_conversion_failure(source_path, exc)
                     conversion = BatchConversionItem(
                         source_path=source_path,
@@ -383,7 +383,7 @@ class ImportLibrary:
                 raise RuntimeError("Queue processing requires a queue adapter")
             try:
                 await self.queue_factory().enqueue(run.id)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - failure recorded per file
                 error = f"queue enqueue failed: {sanitize_error_message(exc)}"
                 await self.process.runs.update_status(
                     run.id,
@@ -406,7 +406,7 @@ class ImportLibrary:
                 run_id=run.id,
                 status="queued",
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - failure recorded on import item
             return ImportItem(
                 source_path=conversion.source_path,
                 converted_path=conversion.output_path,

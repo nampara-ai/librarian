@@ -885,7 +885,7 @@ def _ocr_image_result(
                 language=language,
                 timeout_seconds=timeout_seconds,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - confidence is optional diagnostics
             confidence = None
     return OcrTextResult(text=text, confidence=confidence)
 
@@ -1582,7 +1582,7 @@ def _markitdown_worker(
         resolved_path = Path(path)
         _validate_markitdown_input_size(resolved_path, max_input_bytes)
         result_queue.put(("ok", _extract_markitdown_sync(resolved_path)))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - failure recorded on the page
         result_queue.put(("error", sanitize_error_message(exc)))
 
 

@@ -47,7 +47,8 @@ def test_dependency_review_workflow_blocks_high_severity_dependency_changes() ->
     assert "pull_request:" in workflow
     assert "timeout-minutes: 10" in workflow
     assert "permissions:\n  contents: read\n  pull-requests: read" in workflow
-    assert "actions/dependency-review-action@v4" in workflow
+    # Version-agnostic so Dependabot major bumps of the action do not break CI.
+    assert "uses: actions/dependency-review-action@v" in workflow
     assert "fail-on-severity: high" in workflow
     assert "persist-credentials: false" in workflow
 

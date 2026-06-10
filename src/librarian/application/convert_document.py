@@ -260,7 +260,7 @@ class DocumentConverter:
                     overwrite=overwrite,
                     write_sidecar=True,
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - failure recorded per file
                 self.record_conversion_failure(source_path, exc)
                 items.append(
                     BatchConversionItem(

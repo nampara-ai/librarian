@@ -69,6 +69,9 @@ dev = [
   "pyright==1.1.410",
   "build>=1.2.2",
   "cyclonedx-bom>=6.1.0",
+  # starlette>=1.2 TestClient imports httpx2 when installed; its httpx 1.x
+  # fallback shim is deprecated and untyped, which breaks pyright. Runtime
+  # code stays on httpx 1.x because the openai SDK requires it.
   "httpx2>=2.3.0",
   "pip-audit>=2.9.0",
   "urllib3>=2.7.0",
@@ -92,10 +95,15 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "ASYNC", "S"]
+# BLE: every `except Exception` must either re-raise or carry an inline
+# noqa stating where the error is recorded, so silent swallows fail lint.
+select = ["E", "F", "I", "B", "UP", "ASYNC", "S", "BLE"]
 ignore = [
   "S101",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["BLE001"]
 
 [tool.pyright]
 pythonVersion = "3.12"

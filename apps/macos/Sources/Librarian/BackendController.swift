@@ -15,7 +15,16 @@ final class BackendController: ObservableObject {
 
     @Published private(set) var mode: Mode = .external
 
+    /// Random credential generated for each embedded launch and required by
+    /// the spawned API, so other local processes cannot use it.
+    private(set) var embeddedAPIKey: String?
+
     private var process: Process?
+
+    private static func generateAPIKey() -> String {
+        let raw = UUID().uuidString + UUID().uuidString
+        return raw.replacingOccurrences(of: "-", with: "").lowercased()
+    }
 
     static let candidatePorts = [8765, 8766, 8767, 8768]
 
@@ -60,15 +69,18 @@ final class BackendController: ObservableObject {
             break
         }
         mode = .starting
+        // Fresh credential for every launch: the embedded API requires this
+        // key, so other local processes cannot read or modify the corpus.
+        let apiKey = Self.generateAPIKey()
+        embeddedAPIKey = apiKey
         for port in Self.candidatePorts {
-            // Adopt a healthy Librarian instance that is already listening
-            // (for example after a fast app relaunch).
+            // A previous (orphaned) instance holds its own per-launch key and
+            // cannot be adopted; treat a responding port as occupied.
             if await Self.isLibrarianHealthy(port: port) {
-                mode = .embedded(port: port)
-                return
+                continue
             }
             do {
-                try launch(port: port)
+                try launch(port: port, apiKey: apiKey)
             } catch {
                 continue
             }
@@ -103,7 +115,7 @@ final class BackendController: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([directory])
     }
 
-    private func launch(port: Int) throws {
+    private func launch(port: Int, apiKey: String) throws {
         guard let python = Self.bundledPythonURL else {
             throw APIClientError(message: "No bundled backend in this build")
         }
@@ -119,6 +131,9 @@ final class BackendController: ObservableObject {
         ]
         var environment = ProcessInfo.processInfo.environment
         environment["LIBRARIAN_DATA_DIR"] = dataDir.path
+        // Environment variables take precedence over a user .env in the data
+        // directory, so the per-launch key always applies.
+        environment["LIBRARIAN_API_KEY"] = apiKey
         environment["PYTHONUNBUFFERED"] = "1"
         launched.environment = environment
         // Run from the data directory so an optional `.env` there configures

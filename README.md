@@ -113,20 +113,7 @@ If `LIBRARIAN_API_KEY` or `LIBRARIAN_API_KEYS` is set, protected requests must i
 
 ## Docker
 
-```bash
-export LIBRARIAN_API_KEY=change-me
-docker compose up --build
-curl http://127.0.0.1:8080/health
-```
-
-For direct image runs, configure an import root because the image binds publicly by default:
-
-```bash
-docker run --rm -p 8080:8080 \
-  -e LIBRARIAN_API_KEY=change-me \
-  -e LIBRARIAN_API_IMPORT_ROOT=/data/imports \
-  ghcr.io/nampara-ai/librarian:v1.0.0
-```
+Containerized deployment is optional and aimed at server installs; the Mac app and CLI need none of it. Images are published as `ghcr.io/nampara-ai/librarian`, and compose/run examples live in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Architecture And Operations
 

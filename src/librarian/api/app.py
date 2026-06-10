@@ -945,7 +945,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     )
                 )
                 continue
-            except Exception:
+            except Exception:  # noqa: BLE001 - batch item failure is reported in the response
                 failed_count += 1
                 detail = _PRIVATE_INGEST_ERROR_DETAIL
                 items.append(

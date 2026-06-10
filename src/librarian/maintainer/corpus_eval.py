@@ -254,7 +254,7 @@ async def _run_corpus_case(
             write_sidecar=True,
         )
         converted_text = converted.text
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - failure recorded in eval result
         _, peak_memory = tracemalloc.get_traced_memory()
         tracemalloc.stop()
         failure_type = classify_conversion_error(exc)

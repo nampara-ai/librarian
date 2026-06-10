@@ -184,7 +184,7 @@ class QueueWorker:
             await self.queue.cancel(item.run_id, error=sanitize_error_message(exc))
             self.metrics.record_run_finished(status=QueueStatus.CANCELED.value)
             return True
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - failure recorded on the run
             await self.queue.fail(
                 item.run_id,
                 error=sanitize_error_message(exc),
