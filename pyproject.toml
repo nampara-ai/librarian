@@ -95,10 +95,15 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "ASYNC", "S"]
+# BLE: every `except Exception` must either re-raise or carry an inline
+# noqa stating where the error is recorded, so silent swallows fail lint.
+select = ["E", "F", "I", "B", "UP", "ASYNC", "S", "BLE"]
 ignore = [
   "S101",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["BLE001"]
 
 [tool.pyright]
 pythonVersion = "3.12"

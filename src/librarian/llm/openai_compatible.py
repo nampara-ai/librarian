@@ -108,7 +108,7 @@ class OpenAICompatibleProvider:
                         {"role": "user", "content": user_prompt},
                     ],
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - provider errors feed retry policy
                 if not is_retriable_openai_error(exc):
                     raise RuntimeError(
                         f"LLM provider request failed: {sanitize_error_message(exc)}"

@@ -35,7 +35,7 @@ final class AppModel: ObservableObject {
 
     var client: APIClient {
         if useEmbeddedBackend, let embeddedURL = backend.embeddedBaseURL {
-            return APIClient(baseURL: embeddedURL, apiKey: "")
+            return APIClient(baseURL: embeddedURL, apiKey: backend.embeddedAPIKey ?? "")
         }
         let raw = UserDefaults.standard.string(forKey: Self.baseURLKey) ?? Self.defaultBaseURL
         let url = URL(string: raw) ?? URL(string: Self.defaultBaseURL)!

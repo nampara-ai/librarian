@@ -31,6 +31,11 @@ backend in `Librarian.app/Contents/Resources/backend`. On launch it starts
 `/health`, and talks to it over the same public HTTP API any other client
 would use. Quitting the app stops the backend.
 
+Each launch generates a random API key and passes it to the backend through
+`LIBRARIAN_API_KEY`, so other local processes cannot read or modify your
+corpus over localhost — only the app holds the credential for its own
+backend instance.
+
 Your data lives in `~/Library/Application Support/Librarian`:
 
 | Path | Contents |
