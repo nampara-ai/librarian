@@ -1,7 +1,7 @@
 # Contributing
 
-Librarian is in alpha. Keep changes small, tested, and aligned with the hexagonal boundaries in
-`docs/ARCHITECTURE.md`.
+Librarian is a stable production release. Keep changes small, tested, and aligned with the
+hexagonal boundaries in `docs/ARCHITECTURE.md`.
 
 ## Setup
 
@@ -37,7 +37,7 @@ python -m build
 ```bash
 librarian migrate
 librarian ingest examples/benchmark_text.txt
-librarian eval examples/eval_cases.json
-librarian benchmark --input-path examples/benchmark_text.txt --repeats 3
+librarian maintainer eval examples/eval_cases.json
+librarian maintainer benchmark --input-path examples/benchmark_text.txt --repeats 3
 docker compose up --build
 ```

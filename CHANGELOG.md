@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Fixed `database_path` so it defaults to `librarian.sqlite` inside `data_dir`. Setting only
+  `LIBRARIAN_DATA_DIR` no longer leaves the SQLite database at a working-directory-relative
+  `.librarian/librarian.sqlite` while uploads follow the configured data directory. Explicit
+  `LIBRARIAN_DATABASE_PATH` values are unchanged.
+- Corrected `CONTRIBUTING.md` release status and `librarian maintainer` command examples.
+
 ## 1.0.0 - 2026-05-22
 
 Librarian 1.0.0 is the stable release of the local-first document ingestion, cleaning, classification, and search engine. It ships a focused user CLI and FastAPI service for converting documents, importing corpora, running provenance-rich LLM cleaning, classifying outputs with Dewey-style labels, searching SQLite FTS indexes, and exporting cleaned content with optional transcript citation evidence. The release supports Markdown, text-like files, DOCX, PDFs, OCR images, and SRT/VTT transcript normalization, including page-aware PDF extraction with durable OCR page manifests for long-running jobs. Operational commands are grouped under `librarian admin`, while evaluation and benchmark tools are grouped under `librarian maintainer` so the production surface stays clear. The release workflow keeps secret scanning, dependency audit, SBOM generation, checksums, artifact attestations, wheel smoke installation, Docker build, and image scanning, while removing alpha-era mock evidence artifacts from published releases.
