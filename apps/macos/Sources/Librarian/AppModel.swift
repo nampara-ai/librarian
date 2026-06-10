@@ -1,11 +1,15 @@
 import AppKit
+import Combine
 import Foundation
 
 @MainActor
 final class AppModel: ObservableObject {
     static let baseURLKey = "librarian.baseURL"
     static let apiKeyKey = "librarian.apiKey"
+    static let useEmbeddedKey = "librarian.useEmbeddedBackend"
     static let defaultBaseURL = "http://127.0.0.1:8080"
+
+    let backend = BackendController()
 
     @Published var documents: [Document] = []
     @Published var runs: [Run] = []
@@ -17,8 +21,22 @@ final class AppModel: ObservableObject {
     @Published var isSearching = false
 
     private var pollTask: Task<Void, Never>?
+    private var backendObservation: AnyCancellable?
+
+    init() {
+        backendObservation = backend.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+    }
+
+    var useEmbeddedBackend: Bool {
+        UserDefaults.standard.object(forKey: Self.useEmbeddedKey) as? Bool ?? true
+    }
 
     var client: APIClient {
+        if useEmbeddedBackend, let embeddedURL = backend.embeddedBaseURL {
+            return APIClient(baseURL: embeddedURL, apiKey: "")
+        }
         let raw = UserDefaults.standard.string(forKey: Self.baseURLKey) ?? Self.defaultBaseURL
         let url = URL(string: raw) ?? URL(string: Self.defaultBaseURL)!
         let key = UserDefaults.standard.string(forKey: Self.apiKeyKey) ?? ""
@@ -32,6 +50,9 @@ final class AppModel: ObservableObject {
     func startPolling() {
         guard pollTask == nil else { return }
         pollTask = Task { [weak self] in
+            if let self, self.useEmbeddedBackend {
+                await self.backend.startEmbeddedIfNeeded()
+            }
             while !Task.isCancelled {
                 guard let self else { return }
                 await self.refresh()
@@ -39,6 +60,21 @@ final class AppModel: ObservableObject {
                 try? await Task.sleep(for: interval)
             }
         }
+    }
+
+    func applyBackendPreference() async {
+        if useEmbeddedBackend {
+            await backend.startEmbeddedIfNeeded()
+        } else {
+            backend.stop()
+        }
+        await refresh()
+    }
+
+    func shutDown() {
+        pollTask?.cancel()
+        pollTask = nil
+        backend.stop()
     }
 
     func refresh() async {

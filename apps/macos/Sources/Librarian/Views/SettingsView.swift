@@ -4,17 +4,47 @@ struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @AppStorage(AppModel.baseURLKey) private var baseURL = AppModel.defaultBaseURL
     @AppStorage(AppModel.apiKeyKey) private var apiKey = ""
+    @AppStorage(AppModel.useEmbeddedKey) private var useEmbedded = true
     @State private var testResult: String?
     @State private var testOK = false
 
+    private var embeddedAvailable: Bool {
+        BackendController.isEmbeddedAvailable
+    }
+
     var body: some View {
         Form {
-            Section("Server") {
+            if embeddedAvailable {
+                Section {
+                    Toggle("Run the built-in backend automatically", isOn: $useEmbedded)
+                        .onChange(of: useEmbedded) {
+                            Task { await model.applyBackendPreference() }
+                        }
+                    LabeledContent("Data folder") {
+                        Button("Reveal in Finder") {
+                            model.backend.revealDataFolder()
+                        }
+                    }
+                } header: {
+                    Text("Built-in backend")
+                } footer: {
+                    Text(
+                        "Documents, the database, and converted outputs live in "
+                            + "~/Library/Application Support/Librarian. Add a .env file "
+                            + "there to configure an LLM provider."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            Section("External server") {
                 TextField("Server URL", text: $baseURL, prompt: Text(AppModel.defaultBaseURL))
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
+                    .disabled(embeddedAvailable && useEmbedded)
                 SecureField("API key (optional)", text: $apiKey)
                     .textFieldStyle(.roundedBorder)
+                    .disabled(embeddedAvailable && useEmbedded)
             }
             Section {
                 HStack {
@@ -32,15 +62,18 @@ struct SettingsView: View {
                 }
             } footer: {
                 Text(
-                    "The app talks to a running Librarian backend. Start one locally with "
-                        + "“librarian api”."
+                    embeddedAvailable
+                        ? "Turn off the built-in backend to point the app at a remote "
+                            + "Librarian server instead."
+                        : "This build has no bundled backend. Start one with "
+                            + "“librarian api” or point the URL at a remote server."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
-        .frame(width: 440)
+        .frame(width: 460)
         .fixedSize(horizontal: false, vertical: true)
     }
 

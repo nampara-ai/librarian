@@ -38,10 +38,26 @@ struct ServerPanelView: View {
         UserDefaults.standard.string(forKey: AppModel.baseURLKey) ?? AppModel.defaultBaseURL
     }
 
+    private var modeDescription: String {
+        switch model.backend.mode {
+        case .embedded(let port):
+            return "Built-in backend · port \(port)"
+        case .starting:
+            return "Starting built-in backend…"
+        case .failed(let message):
+            return message
+        case .external:
+            return baseURL
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Backend")
                 .font(.headline)
+            Text(modeDescription)
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             if model.serverOnline {
                 ChecklistRowView(
@@ -64,6 +80,16 @@ struct ServerPanelView: View {
                     title: "Migrations",
                     detail: readiness.map { "\($0.appliedMigrations) applied" } ?? "checking…"
                 )
+            } else if BackendController.isEmbeddedAvailable && model.useEmbeddedBackend {
+                Label("Backend is not running", systemImage: "bolt.slash")
+                    .font(.callout)
+                Button("Restart built-in backend") {
+                    Task {
+                        model.backend.stop()
+                        await model.backend.startEmbeddedIfNeeded()
+                        await model.refresh()
+                    }
+                }
             } else {
                 Label("Not reachable at \(baseURL)", systemImage: "bolt.slash")
                     .font(.callout)
@@ -89,9 +115,18 @@ struct ServerPanelView: View {
             }
 
             Divider()
-            Text("Change the server URL and API key in Settings (⌘,).")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack {
+                if BackendController.isEmbeddedAvailable {
+                    Button("Data Folder") {
+                        model.backend.revealDataFolder()
+                    }
+                    .font(.caption)
+                }
+                Spacer()
+                Text("Settings (⌘,)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(16)
         .frame(width: 300)

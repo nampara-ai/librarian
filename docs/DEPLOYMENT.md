@@ -1,6 +1,16 @@
 # Deployment
 
-Librarian can run as a local CLI, a single API process, or a split API/worker service.
+Librarian can run as a self-contained Mac app, a local CLI, a single API process, or a split
+API/worker service.
+
+## Mac App
+
+Release builds of the native macOS app bundle the entire backend (a relocatable Python runtime plus
+the `nampara-librarian` wheel) inside `Librarian.app`. The app launches `python -m librarian api`
+on a loopback port and supervises it; data lives in `~/Library/Application Support/Librarian`, and
+an optional `.env` file there accepts every `LIBRARIAN_*` setting documented below. Distribution
+DMGs are produced by `.github/workflows/macapp.yml`; build, signing, and notarization details are
+in [apps/macos/README.md](../apps/macos/README.md).
 
 ## Docker Compose
 

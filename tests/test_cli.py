@@ -2,6 +2,8 @@ import hashlib
 import json
 import re
 import sqlite3
+import subprocess
+import sys
 import warnings
 import zipfile
 from pathlib import Path
@@ -16,6 +18,7 @@ from librarian.config import Settings
 from librarian.domain.ids import DocumentId
 from librarian.domain.models import RunStage, RunStatus
 from librarian.storage.sqlite import SQLiteRunQueue
+from librarian.version import __version__
 
 
 def test_cli_read_only_commands_do_not_require_llm_credentials(tmp_path: Path) -> None:
@@ -2151,6 +2154,17 @@ def test_cli_retry_queue_failure_marks_retry_failed(
     assert "submission failed: queue down api_key=[REDACTED] [REDACTED]" in errors
     assert all(error is None or "abc123" not in error for error in errors)
     assert all(error is None or "sk-testSECRET123" not in error for error in errors)
+
+
+def test_python_module_entry_point_runs_cli() -> None:
+    completed = subprocess.run(  # noqa: S603
+        [sys.executable, "-m", "librarian", "version"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert __version__ in completed.stdout
 
 
 def _strip_ansi(value: str) -> str:

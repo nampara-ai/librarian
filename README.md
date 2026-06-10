@@ -1,8 +1,20 @@
 # Librarian
 
-Librarian is a local-first document ingestion, cleaning, classification, and search system. It converts transcripts, Markdown, text files, DOCX, PDFs, and OCR images into clean Markdown or plain text; processes them with an OpenAI-compatible model while preserving source fidelity; classifies the result with Dewey-style labels; and exposes the same engine through a CLI and FastAPI service.
+Librarian is a local-first document ingestion, cleaning, classification, and search system. It converts transcripts, Markdown, text files, DOCX, PDFs, and OCR images into clean Markdown or plain text; processes them with an OpenAI-compatible model while preserving source fidelity; classifies the result with Dewey-style labels; and exposes the same engine through a Mac app, a CLI, and a FastAPI service.
 
 Version `1.0.0` is the stable production release. The default deployment is local or single-node: source documents and generated outputs stay in SQLite-backed local storage unless you configure an external model provider for cleaning, classification, or OCR correction.
+
+## Mac App
+
+The easiest way to use Librarian is the native Mac app — a self-contained download with the entire engine inside:
+
+1. Download [Librarian-AppleSilicon.dmg](https://github.com/nampara-ai/librarian/releases/latest/download/Librarian-AppleSilicon.dmg) (M-series Macs) or [Librarian-Intel.dmg](https://github.com/nampara-ai/librarian/releases/latest/download/Librarian-Intel.dmg) (Intel Macs).
+2. Open the DMG and drag **Librarian** to **Applications**.
+3. Launch it and drop files anywhere in the window.
+
+Drag-and-drop ingest, live processing progress, full-text search, and Markdown export — no terminal required. See [apps/macos](apps/macos/README.md) for first-launch notes, data locations, LLM provider configuration, and how the app is built and released.
+
+Everything below covers the engine itself — the CLI and API the app is built on.
 
 ## Install
 
@@ -115,10 +127,6 @@ docker run --rm -p 8080:8080 \
   -e LIBRARIAN_API_IMPORT_ROOT=/data/imports \
   ghcr.io/nampara-ai/librarian:v1.0.0
 ```
-
-## Mac App
-
-A native SwiftUI companion app lives in [apps/macos](apps/macos/README.md). Drag files in, watch conversion/cleaning/classification progress live, and read, search, or export the results. It is a pure client of the API above — start `librarian api`, then `cd apps/macos && make run` (or `make app` for a `Librarian.app` bundle).
 
 ## Architecture And Operations
 

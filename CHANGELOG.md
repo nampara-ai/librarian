@@ -16,9 +16,15 @@
 - Made optional-dependency tests skip cleanly on minimal installs, and made packaging/changelog
   hygiene tests skip outside a git checkout instead of failing.
 - Corrected `CONTRIBUTING.md` release status and `librarian maintainer` command examples.
-- Added a native SwiftUI macOS companion app under `apps/macos` with drag-and-drop ingest,
-  live run progress, output viewing/search/export, and a backend readiness checklist. The app
-  consumes only the public HTTP API.
+- Added a native SwiftUI macOS app under `apps/macos` with drag-and-drop ingest, live run
+  progress, output viewing/search/export, and a backend readiness checklist. The app consumes
+  only the public HTTP API.
+- Made the Mac app self-contained for end users: release builds bundle a relocatable Python
+  runtime plus the Librarian wheel, launch the backend automatically on a loopback port, and
+  store data in `~/Library/Application Support/Librarian`. Added `python -m librarian` module
+  entry point, DMG build scripts, a `macapp.yml` release workflow that produces
+  `Librarian-AppleSilicon.dmg` and `Librarian-Intel.dmg` (with optional Developer ID signing
+  and notarization via repository secrets), and a download landing page under `site/`.
 
 ## 1.0.0 - 2026-05-22
 
