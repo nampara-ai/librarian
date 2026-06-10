@@ -116,6 +116,10 @@ docker run --rm -p 8080:8080 \
   ghcr.io/nampara-ai/librarian:v1.0.0
 ```
 
+## Mac App
+
+A native SwiftUI companion app lives in [apps/macos](apps/macos/README.md). Drag files in, watch conversion/cleaning/classification progress live, and read, search, or export the results. It is a pure client of the API above — start `librarian api`, then `cd apps/macos && make run` (or `make app` for a `Librarian.app` bundle).
+
 ## Architecture And Operations
 
 Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). API details are in [docs/API.md](docs/API.md), deployment guidance is in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), and production runbooks are in [docs/OPERATIONS.md](docs/OPERATIONS.md).

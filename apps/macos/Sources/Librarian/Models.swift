@@ -76,6 +76,13 @@ struct SearchResultsPage: Codable {
     let total: Int
 }
 
+struct Readiness: Codable {
+    let status: String
+    let database: String
+    let storage: String
+    let appliedMigrations: Int
+}
+
 struct UploadItem: Identifiable, Hashable {
     enum State: Hashable {
         case uploading

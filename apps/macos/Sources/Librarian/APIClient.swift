@@ -30,6 +30,17 @@ struct APIClient {
         return try Self.decoder.decode(Health.self, from: data).status == "healthy"
     }
 
+    func ready() async throws -> Readiness {
+        let (data, _) = try await send("GET", "/ready")
+        return try Self.decoder.decode(Readiness.self, from: data)
+    }
+
+    func version() async throws -> String {
+        let (data, _) = try await send("GET", "/version")
+        struct Version: Codable { let version: String }
+        return try Self.decoder.decode(Version.self, from: data).version
+    }
+
     func listDocuments(limit: Int = 500) async throws -> DocumentsPage {
         let (data, _) = try await send(
             "GET", "/documents", query: [URLQueryItem(name: "limit", value: String(limit))]

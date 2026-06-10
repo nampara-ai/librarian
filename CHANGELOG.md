@@ -16,6 +16,9 @@
 - Made optional-dependency tests skip cleanly on minimal installs, and made packaging/changelog
   hygiene tests skip outside a git checkout instead of failing.
 - Corrected `CONTRIBUTING.md` release status and `librarian maintainer` command examples.
+- Added a native SwiftUI macOS companion app under `apps/macos` with drag-and-drop ingest,
+  live run progress, output viewing/search/export, and a backend readiness checklist. The app
+  consumes only the public HTTP API.
 
 ## 1.0.0 - 2026-05-22
 
