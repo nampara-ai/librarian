@@ -69,6 +69,9 @@ dev = [
   "pyright==1.1.409",
   "build>=1.2.2",
   "cyclonedx-bom>=6.1.0",
+  # starlette>=1.2 TestClient imports httpx2 when installed; its httpx 1.x
+  # fallback shim is deprecated and untyped, which breaks pyright. Runtime
+  # code stays on httpx 1.x because the openai SDK requires it.
   "httpx2>=2.3.0",
   "pip-audit>=2.9.0",
   "urllib3>=2.7.0",
