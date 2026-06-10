@@ -16,6 +16,9 @@
 - Made optional-dependency tests skip cleanly on minimal installs, and made packaging/changelog
   hygiene tests skip outside a git checkout instead of failing.
 - Corrected `CONTRIBUTING.md` release status and `librarian maintainer` command examples.
+- Added `httpx2` to the dev dependencies: starlette 1.2 deprecates its httpx 1.x test-client shim
+  and leaves it untyped, which broke pyright on fresh installs. The lockfile now pins
+  starlette 1.2.1/fastapi 0.136.3 so local runs match fresh CI resolution.
 - Added a native SwiftUI macOS app under `apps/macos` with drag-and-drop ingest, live run
   progress, output viewing/search/export, and a backend readiness checklist. The app consumes
   only the public HTTP API.

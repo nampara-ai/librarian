@@ -69,6 +69,7 @@ dev = [
   "pyright==1.1.409",
   "build>=1.2.2",
   "cyclonedx-bom>=6.1.0",
+  "httpx2>=2.3.0",
   "pip-audit>=2.9.0",
   "urllib3>=2.7.0",
 ]
