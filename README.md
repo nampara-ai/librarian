@@ -8,7 +8,7 @@ Version `1.1.0` is the stable production release. The default deployment is loca
 
 The easiest way to use Librarian is the native Mac app — a self-contained download with the entire engine inside:
 
-1. Download [Librarian-AppleSilicon.dmg](https://github.com/nampara-ai/librarian/releases/latest/download/Librarian-AppleSilicon.dmg) (M-series Macs) or [Librarian-Intel.dmg](https://github.com/nampara-ai/librarian/releases/latest/download/Librarian-Intel.dmg) (Intel Macs).
+1. Download [Librarian-AppleSilicon.dmg](https://github.com/nampara-ai/librarian/releases/latest/download/Librarian-AppleSilicon.dmg) (M-series Macs) or [Librarian-Intel.dmg](https://github.com/nampara-ai/librarian/releases/latest/download/Librarian-Intel.dmg) (Intel Macs). If a direct link does not resolve, download the DMG from the assets of the [latest release](https://github.com/nampara-ai/librarian/releases/latest).
 2. Open the DMG and drag **Librarian** to **Applications**.
 3. Launch it and drop files anywhere in the window.
 
