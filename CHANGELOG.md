@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.1 - 2026-06-11
+
+Patch release on top of the unpublished 1.1.0. The Docker image build now upgrades base-layer
+packages, picking up Debian's fix for CVE-2026-45447 (OpenSSL), which was published mid-release
+and blocked the image scan gate. The v1.1.0 GitHub release was never published: its tag hit a
+release-assembly race (fixed in this version's workflows) and is retained as an inert tag.
+v1.1.1 is the first release with attached Mac app DMGs; all 1.1.0 changes below are included.
+
 ## 1.1.0 - 2026-06-11
 
 Librarian 1.1.0 introduces the native macOS app: a self-contained download with the entire engine inside. Release builds bundle a relocatable Python runtime plus the Librarian wheel in `Librarian.app`, launch the backend automatically on a loopback port secured by a random per-launch API key, and store data in `~/Library/Application Support/Librarian`. The app offers drag-and-drop ingest, live per-run progress with expandable run events, cleaned-output viewing with classification, full-text search, Markdown export, and a backend readiness checklist — all over the same public HTTP API the CLI uses. DMG installers for Apple Silicon and Intel are built by the new `macapp.yml` workflow and attached to releases, with optional Developer ID signing and notarization via repository secrets, plus a download landing page under `site/`.
