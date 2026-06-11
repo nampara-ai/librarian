@@ -23,6 +23,7 @@ enum BackendCLI {
         }
         let dataDir = BackendController.dataDirectory
         try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
+        let credentialOverlay = ProviderCredentials.environmentOverlay()
         return try await Task.detached(priority: .userInitiated) {
             let process = Process()
             process.executableURL = python
@@ -33,6 +34,9 @@ enum BackendCLI {
             environment["NO_COLOR"] = "1"
             environment["TERM"] = "dumb"
             environment["COLUMNS"] = "200"
+            for (name, value) in credentialOverlay {
+                environment[name] = value
+            }
             process.environment = environment
             process.currentDirectoryURL = dataDir
 

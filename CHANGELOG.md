@@ -1,30 +1,32 @@
 # Changelog
 
-## 1.1.4 - 2026-06-11
+## 1.1.5 - 2026-06-11
 
-The Mac app grows from a viewer into the full product, with every user-facing CLI capability
-available in the GUI:
+The Mac app is redesigned around its real job — a pipeline, not a database browser. One
+window, one column, one verb: drop files, pick a destination, let it cook.
 
-- Settings gains an AI Provider tab: pick Anthropic, OpenAI, or any OpenAI-compatible provider,
-  paste an API key, and apply — the app writes the backend `.env` and restarts the embedded
-  backend so real LLM cleaning and classification take effect immediately. A General tab sets
-  the destination folder for exported outputs and whether imports process automatically
-  (`librarian import --process` vs plain `ingest`).
-- New Tools window covering the file utilities: Convert File, Convert Folder (placement and
-  recursion options), Normalize Transcript (md/txt/srt/vtt/csv), and Find in Transcript —
-  all running the bundled CLI locally.
-- New Diagnostics window: `doctor` capability checks (via the new `librarian doctor --json`),
-  backend version/readiness/migrations, Run Migrations, Restart Backend, and quick access to
-  the data folder and backend log.
-- Library upgrades: an Import button (files or folders), Cleaned/Original content tabs with
-  document metadata, search scope toggle (cleaned vs raw source), run Cancel/Retry from the
-  activity panel, and an Export menu with Markdown/text/JSON formats, transcript-citation
-  exports, one-click export to the configured output folder, and Export All.
-- Memory and lifecycle hardening: the backend log file handle is closed on stop/restart,
-  crashed backends are detected and surfaced instead of silently lingering, the uploads feed
-  is bounded, and very large outputs are truncated for display (exports always contain the
-  full text).
-- Engine: `librarian doctor --json` for machine-readable diagnostics.
+- The main window is a queue. Each dropped file moves through Waiting → Sending → Converting
+  → Cleaning → Classifying → Saved, and the cleaned file is exported automatically to the
+  destination folder the moment processing finishes — zero clicks between drop and
+  files-in-folder. Done rows get Show in Finder; failures get a plain-words reason and Retry.
+- A destination strip (Save to + Format) sits above the queue, so "where will these land" is
+  answered before the first drop. Name collisions append " (2)" — never overwrite, never ask.
+- The settings drawer is one pane: provider (Anthropic / OpenAI / OpenAI-compatible / Ollama /
+  None), model, and API key, with inline key validation against the provider. API keys now
+  live in the macOS Keychain (legacy keys in `.env` are migrated automatically) and are handed
+  to the engine through its environment, never written to disk.
+- File and transcript tools moved to a menu-bar Tools menu; Diagnostics moved to the Help
+  menu (backed by the new `librarian doctor --json`). Engine health appears in the footer
+  only when something is wrong.
+- Items that stop making progress fail with "Took too long" instead of spinning forever; the
+  queue is session-scoped, so relaunches start clean while the engine's own storage persists.
+- Lifecycle hardening: backend log handle closed on stop/restart, crashed engines detected
+  via terminationHandler, view layer reduced by ~40%.
+- Fixed Swift actor-isolation errors that broke the first compile of the app's CLI-tool and
+  configuration helpers (`BackendController`'s static path helpers are now `nonisolated`). The
+  Mac App workflow now builds the app on every pull request that touches `apps/macos`, so a
+  compile failure can never first surface on an immutable release tag again. The v1.1.4 tag was
+  burned by exactly that failure and joins v1.1.0–v1.1.2 as inert history.
 
 ## 1.1.3 - 2026-06-11
 

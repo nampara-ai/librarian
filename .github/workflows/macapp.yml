@@ -7,6 +7,12 @@ on:
   workflow_dispatch:
   push:
     tags: ["v*"]
+  # Build the app on every PR that touches it, so Swift never meets the
+  # compiler for the first time on an immutable release tag.
+  pull_request:
+    paths:
+      - "apps/macos/**"
+      - ".github/workflows/macapp.yml"
 
 permissions:
   contents: write
