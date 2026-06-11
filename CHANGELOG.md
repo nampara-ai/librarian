@@ -19,6 +19,10 @@ Python runtime does not. The app now bridges both into the engine's environment 
   the app now waits up to 15 seconds for the engine to come back before sending, and
   engine-restart hiccups are labeled "The engine was restarting — press Retry" instead of being
   misattributed to the AI provider.
+- Fixed the routing bug behind those failures: in embedded mode, the app could silently fall
+  back to the external server address while the engine was starting or restarting, pointing
+  uploads at a dead port where retries could never succeed. Embedded mode now always targets
+  the embedded engine.
 
 ## 1.1.6 - 2026-06-11
 

@@ -74,8 +74,19 @@ final class AppModel: ObservableObject {
     }
 
     var client: APIClient {
-        if useEmbeddedBackend, let embeddedURL = backend.embeddedBaseURL {
-            return APIClient(baseURL: embeddedURL, apiKey: backend.embeddedAPIKey ?? "")
+        if useEmbeddedBackend && BackendController.isEmbeddedAvailable {
+            // Embedded mode must never silently fall through to the external
+            // URL while the engine is starting or restarting — that points
+            // uploads at a dead address. Target the embedded engine's port,
+            // or its default port while it boots; callers wait for health.
+            if let embeddedURL = backend.embeddedBaseURL {
+                return APIClient(baseURL: embeddedURL, apiKey: backend.embeddedAPIKey ?? "")
+            }
+            let port = BackendController.candidatePorts[0]
+            return APIClient(
+                baseURL: URL(string: "http://127.0.0.1:\(port)")!,
+                apiKey: backend.embeddedAPIKey ?? ""
+            )
         }
         let raw = UserDefaults.standard.string(forKey: Self.baseURLKey) ?? Self.defaultBaseURL
         let url = URL(string: raw) ?? URL(string: Self.defaultBaseURL)!
