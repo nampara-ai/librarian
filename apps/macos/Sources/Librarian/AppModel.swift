@@ -74,8 +74,19 @@ final class AppModel: ObservableObject {
     }
 
     var client: APIClient {
-        if useEmbeddedBackend, let embeddedURL = backend.embeddedBaseURL {
-            return APIClient(baseURL: embeddedURL, apiKey: backend.embeddedAPIKey ?? "")
+        if useEmbeddedBackend && BackendController.isEmbeddedAvailable {
+            // Embedded mode must never silently fall through to the external
+            // URL while the engine is starting or restarting — that points
+            // uploads at a dead address. Target the embedded engine's port,
+            // or its default port while it boots; callers wait for health.
+            if let embeddedURL = backend.embeddedBaseURL {
+                return APIClient(baseURL: embeddedURL, apiKey: backend.embeddedAPIKey ?? "")
+            }
+            let port = BackendController.candidatePorts[0]
+            return APIClient(
+                baseURL: URL(string: "http://127.0.0.1:\(port)")!,
+                apiKey: backend.embeddedAPIKey ?? ""
+            )
         }
         let raw = UserDefaults.standard.string(forKey: Self.baseURLKey) ?? Self.defaultBaseURL
         let url = URL(string: raw) ?? URL(string: Self.defaultBaseURL)!
@@ -217,6 +228,9 @@ final class AppModel: ObservableObject {
         guard let index = queue.firstIndex(where: { $0.id == itemID }) else { return }
         let sourceURL = queue[index].sourceURL
         setStage(itemID, .uploading(progress: nil))
+        // The engine restarts briefly when settings change; wait for it
+        // instead of failing files dropped during the gap.
+        await waitForEngine(seconds: 15)
         let client = self.client
         do {
             let contents = try await Task.detached(priority: .userInitiated) {
@@ -243,6 +257,21 @@ final class AppModel: ObservableObject {
                     retryable: true
                 )
             )
+        }
+    }
+
+    /// Wait briefly for the engine to come (back) up, e.g. across the
+    /// restart that follows a settings change.
+    private func waitForEngine(seconds: Double) async {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if case .starting = backend.mode {
+                // Still booting; keep waiting.
+            } else if let healthy = try? await client.health(), healthy {
+                serverOnline = true
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(400))
         }
     }
 
@@ -374,6 +403,7 @@ final class AppModel: ObservableObject {
             guard let self, let item = self.queue.first(where: { $0.id == itemID }) else {
                 return
             }
+            await self.waitForEngine(seconds: 15)
             if let documentID = item.documentID {
                 do {
                     let run = try await self.client.createRun(documentId: documentID)

@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.1.7 - 2026-06-11
+
+Fixes "Couldn't reach the AI provider" failures on Macs where the app could connect but the
+embedded engine could not. The app's own networking follows macOS system settings; the bundled
+Python runtime does not. The app now bridges both into the engine's environment at launch:
+
+- macOS system proxy settings (from `scutil --proxy`) are passed as proxy environment
+  variables, so VPN and proxy setups work for cleaning calls, with loopback excluded.
+- The macOS system trust store (system roots plus admin-added certificates) is exported to a
+  PEM bundle and passed via `SSL_CERT_FILE`, so corporate or security-tool TLS interception
+  roots that the Mac trusts are also trusted by the engine.
+- TLS-specific failures now say so ("Secure connection to the AI provider failed — a VPN,
+  proxy, or security tool may be interfering") instead of the generic connection message.
+- The app build workflow now verifies, on every pull request, that the bundled runtime can
+  complete a TLS connection to a provider endpoint from the packaged app.
+- Files dropped (or retried) while the engine restarts after a settings change no longer fail:
+  the app now waits up to 15 seconds for the engine to come back before sending, and
+  engine-restart hiccups are labeled "The engine was restarting — press Retry" instead of being
+  misattributed to the AI provider.
+- Fixed the routing bug behind those failures: in embedded mode, the app could silently fall
+  back to the external server address while the engine was starting or restarting, pointing
+  uploads at a dead port where retries could never succeed. Embedded mode now always targets
+  the embedded engine.
+
 ## 1.1.6 - 2026-06-11
 
 Settings becomes connect-first and idiot-proof:

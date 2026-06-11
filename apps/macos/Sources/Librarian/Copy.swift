@@ -67,6 +67,11 @@ enum Copy {
         guard let raw = backendError?.lowercased(), !raw.isEmpty else {
             return "Couldn't process this file"
         }
+        // App-to-engine errors come first: "cannot reach server" is our own
+        // client wording and must never be blamed on the AI provider.
+        if raw.contains("cannot reach server") {
+            return "The engine was restarting — press Retry"
+        }
         if raw.contains("tesseract") || raw.contains("ocr") {
             return "Scanned image — OCR isn't available in this build"
         }
@@ -85,6 +90,10 @@ enum Copy {
         if raw.contains("api key") || raw.contains("authentication")
             || raw.contains("unauthorized") {
             return "The AI provider rejected the key — check it in settings"
+        }
+        if raw.contains("certificate") || raw.contains("ssl") || raw.contains("tls") {
+            return "Secure connection to the AI provider failed — a VPN, proxy, "
+                + "or security tool may be interfering"
         }
         if raw.contains("connection") || raw.contains("connect") {
             return "Couldn't reach the AI provider — check your connection"
