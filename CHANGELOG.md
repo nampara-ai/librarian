@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1.6 - 2026-06-11
+
+Settings becomes connect-first and idiot-proof:
+
+- Pick a provider (Anthropic, OpenAI, DeepSeek, Ollama, LM Studio, or Custom), paste an API
+  key — or a server address for local models — and press Connect. The app calls the provider's
+  live model listing and answers within seconds: a green Connected line plus a model dropdown
+  populated with that provider's actual models (an Anthropic key lists Haiku/Sonnet/Opus;
+  Ollama lists the models you have pulled). Picking a model applies immediately and pins that
+  model to every cleaning call: "Cleaning with {model}". A bad key gets a clear red failure.
+- Demo mode is no longer a choice. Until a provider is connected, Settings shows "Add an API
+  key or a local model to start AI cleaning," and the main window's empty state offers a
+  "Set up AI cleaning…" link that opens Settings directly.
+- Fixed the broken scrolling in Settings: the pane is now a flat fixed-width layout with a
+  single non-nested Advanced section, so there is no internal scroll region to glitch.
+- Keys stay in the macOS Keychain; DeepSeek keys are now bridged to the engine alongside
+  Anthropic and OpenAI ones.
+
 ## 1.1.5 - 2026-06-11
 
 The Mac app is redesigned around its real job — a pipeline, not a database browser. One

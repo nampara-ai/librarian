@@ -39,6 +39,20 @@ enum Copy {
 
     static let providerNoneNote = "Files are converted and organized without AI cleaning."
     static let keychainNote = "Stored in this Mac's keychain."
+    static let setupBanner = "Add an API key or a local model to start AI cleaning."
+    static let setupLink = "Set up AI cleaning…"
+    static let connect = "Connect"
+    static let connecting = "Connecting…"
+    static let connected = "Connected — choose a model"
+    static let applying = "Applying…"
+    static let serverAddressLabel = "Server address"
+    static let modelLabel = "Model"
+    static func cleaningWith(_ model: String) -> String {
+        "Cleaning with \(model)"
+    }
+    static func localNote(_ name: String) -> String {
+        "Talks to the \(name) running on this Mac — no key needed."
+    }
     static func providerConnected(_ model: String) -> String {
         "Connected — using \(model)"
     }

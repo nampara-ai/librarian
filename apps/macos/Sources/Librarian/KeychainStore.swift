@@ -51,7 +51,7 @@ enum KeychainStore {
 /// Bridges Keychain-held provider keys to the backend, which reads them from
 /// environment variables. The key never touches the .env file on disk.
 enum ProviderCredentials {
-    static let knownKeyAccounts = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
+    static let knownKeyAccounts = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY"]
 
     /// Environment entries to add when spawning the backend or CLI.
     /// Also migrates any key found in a legacy .env into the Keychain.

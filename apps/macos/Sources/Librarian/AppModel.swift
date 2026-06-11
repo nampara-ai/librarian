@@ -67,6 +67,12 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.bool(forKey: Self.keepOriginalsKey)
     }
 
+    /// Whether an AI provider has been connected; without one the engine
+    /// converts and organizes documents without AI cleaning.
+    var aiConfigured: Bool {
+        EnvFile.read()["LIBRARIAN_LLM_PROVIDER"] == "openai-compatible"
+    }
+
     var client: APIClient {
         if useEmbeddedBackend, let embeddedURL = backend.embeddedBaseURL {
             return APIClient(baseURL: embeddedURL, apiKey: backend.embeddedAPIKey ?? "")
