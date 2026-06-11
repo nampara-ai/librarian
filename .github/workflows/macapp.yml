@@ -124,8 +124,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release upload "$TAG" \
-            "apps/macos/dist/${{ matrix.artifact }}.dmg" --clobber \
-          || gh release create "$TAG" \
-            "apps/macos/dist/${{ matrix.artifact }}.dmg" \
-            --title "$TAG" --notes "Librarian $TAG"
+          # The Release workflow creates the GitHub release (with notes and
+          # engine artifacts) and fails if one already exists, so wait for it
+          # rather than racing it with a create of our own.
+          for attempt in $(seq 1 60); do
+            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release upload "$TAG" \
+                "apps/macos/dist/${{ matrix.artifact }}.dmg" \
+                --repo "$GITHUB_REPOSITORY" --clobber
+              echo "Attached ${{ matrix.artifact }}.dmg to $TAG"
+              exit 0
+            fi
+            echo "Release $TAG not created yet (attempt $attempt); waiting..."
+            sleep 30
+          done
+          echo "Release $TAG was never created; check the Release workflow" >&2
+          exit 1
