@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.1.4 - 2026-06-11
+
+The Mac app grows from a viewer into the full product, with every user-facing CLI capability
+available in the GUI:
+
+- Settings gains an AI Provider tab: pick Anthropic, OpenAI, or any OpenAI-compatible provider,
+  paste an API key, and apply — the app writes the backend `.env` and restarts the embedded
+  backend so real LLM cleaning and classification take effect immediately. A General tab sets
+  the destination folder for exported outputs and whether imports process automatically
+  (`librarian import --process` vs plain `ingest`).
+- New Tools window covering the file utilities: Convert File, Convert Folder (placement and
+  recursion options), Normalize Transcript (md/txt/srt/vtt/csv), and Find in Transcript —
+  all running the bundled CLI locally.
+- New Diagnostics window: `doctor` capability checks (via the new `librarian doctor --json`),
+  backend version/readiness/migrations, Run Migrations, Restart Backend, and quick access to
+  the data folder and backend log.
+- Library upgrades: an Import button (files or folders), Cleaned/Original content tabs with
+  document metadata, search scope toggle (cleaned vs raw source), run Cancel/Retry from the
+  activity panel, and an Export menu with Markdown/text/JSON formats, transcript-citation
+  exports, one-click export to the configured output folder, and Export All.
+- Memory and lifecycle hardening: the backend log file handle is closed on stop/restart,
+  crashed backends are detected and surfaced instead of silently lingering, the uploads feed
+  is bounded, and very large outputs are truncated for display (exports always contain the
+  full text).
+- Engine: `librarian doctor --json` for machine-readable diagnostics.
+
 ## 1.1.3 - 2026-06-11
 
 First fully published release of the 1.1 line, containing all 1.1.0 and 1.1.1 changes below.

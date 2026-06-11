@@ -5,6 +5,9 @@ struct ContentView: View {
     @State private var selectedDocumentID: String?
     @State private var showActivity = true
     @State private var isDropTargeted = false
+    @State private var showTools = false
+    @State private var showDiagnostics = false
+    @State private var exportAllNotice: String?
 
     var body: some View {
         NavigationSplitView {
@@ -25,13 +28,67 @@ struct ContentView: View {
             ToolbarItem(placement: .navigation) {
                 ServerStatusView()
             }
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    model.presentImportPanel()
+                } label: {
+                    Label("Import", systemImage: "plus")
+                }
+                .help("Import files or folders into the library")
+
+                Menu {
+                    Button("File & Transcript Tools…") {
+                        showTools = true
+                    }
+                    Menu("Export All Ready Documents") {
+                        ForEach(ExportFormat.allCases) { format in
+                            Button(format.label) {
+                                Task {
+                                    let count = await model.exportAll(format: format)
+                                    exportAllNotice =
+                                        "Exported \(count) document(s) to "
+                                        + model.outputFolderURL.lastPathComponent
+                                }
+                            }
+                        }
+                    }
+                    Divider()
+                    Button("Diagnostics…") {
+                        showDiagnostics = true
+                    }
+                } label: {
+                    Label("Tools", systemImage: "wrench.and.screwdriver")
+                }
+                .help("Conversion tools, exports, and diagnostics")
+
                 Button {
                     showActivity.toggle()
                 } label: {
                     Label("Activity", systemImage: "waveform.path.ecg")
                 }
                 .help("Show processing activity")
+            }
+        }
+        .sheet(isPresented: $showTools) {
+            ToolsView()
+                .environmentObject(model)
+        }
+        .sheet(isPresented: $showDiagnostics) {
+            DiagnosticsView()
+                .environmentObject(model)
+        }
+        .overlay(alignment: .top) {
+            if let exportAllNotice {
+                Label(exportAllNotice, systemImage: "checkmark.circle.fill")
+                    .font(.callout)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(.top, 8)
+                    .task {
+                        try? await Task.sleep(for: .seconds(3))
+                        self.exportAllNotice = nil
+                    }
             }
         }
         .dropDestination(for: URL.self) { urls, _ in

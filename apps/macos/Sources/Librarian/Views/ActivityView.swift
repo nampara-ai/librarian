@@ -107,9 +107,27 @@ struct RunRowView: View {
                     ProgressView(value: min(max(run.fractionComplete, 0), 1))
                         .progressViewStyle(.linear)
                 }
-                Text(run.isActive ? run.stage : run.status)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack {
+                    Text(run.isActive ? run.stage : run.status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if run.isActive {
+                        Button("Cancel") {
+                            Task { await model.cancelRun(id: run.id) }
+                        }
+                        .font(.caption)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.red)
+                    } else if run.status == "failed" {
+                        Button("Retry") {
+                            Task { await model.retryRun(id: run.id) }
+                        }
+                        .font(.caption)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.tint)
+                    }
+                }
                 if let error = run.error {
                     Text(error)
                         .font(.caption)

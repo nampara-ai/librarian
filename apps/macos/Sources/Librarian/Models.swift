@@ -83,6 +83,46 @@ struct Readiness: Codable {
     let appliedMigrations: Int
 }
 
+struct ContentPage: Codable {
+    let documentId: String
+    let text: String
+    let totalChars: Int
+    let offset: Int
+    let limit: Int
+    let truncated: Bool
+}
+
+struct DoctorCheck: Codable, Identifiable, Hashable {
+    let name: String
+    let capability: String
+    let status: String
+    let detail: String
+
+    var id: String { name + capability }
+}
+
+struct DoctorReport: Codable {
+    let checks: [DoctorCheck]
+}
+
+enum ExportFormat: String, CaseIterable, Identifiable {
+    case markdown = "md"
+    case text = "txt"
+    case json = "json"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .markdown: return "Markdown"
+        case .text: return "Plain Text"
+        case .json: return "JSON"
+        }
+    }
+
+    var fileExtension: String { rawValue }
+}
+
 struct UploadItem: Identifiable, Hashable {
     enum State: Hashable {
         case uploading

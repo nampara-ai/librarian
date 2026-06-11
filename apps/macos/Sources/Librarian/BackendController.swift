@@ -20,6 +20,7 @@ final class BackendController: ObservableObject {
     private(set) var embeddedAPIKey: String?
 
     private var process: Process?
+    private var logHandle: FileHandle?
 
     private static func generateAPIKey() -> String {
         let raw = UUID().uuidString + UUID().uuidString
@@ -100,13 +101,25 @@ final class BackendController: ObservableObject {
     }
 
     func stop() {
+        process?.terminationHandler = nil
         process?.terminate()
         process = nil
+        try? logHandle?.close()
+        logHandle = nil
         if case .embedded = mode {
             mode = .external
         } else if case .starting = mode {
             mode = .external
         }
+    }
+
+    /// Stop the embedded backend and start a fresh instance, picking up any
+    /// configuration changes from the data directory's .env file.
+    func restart() async {
+        stop()
+        // Give uvicorn a moment to release its port before relaunching.
+        try? await Task.sleep(for: .milliseconds(750))
+        await startEmbeddedIfNeeded()
     }
 
     func revealDataFolder() {
@@ -144,10 +157,26 @@ final class BackendController: ObservableObject {
         if !FileManager.default.fileExists(atPath: logURL.path) {
             FileManager.default.createFile(atPath: logURL.path, contents: nil)
         }
+        try? logHandle?.close()
+        logHandle = nil
         if let handle = try? FileHandle(forWritingTo: logURL) {
             handle.seekToEndOfFile()
             launched.standardOutput = handle
             launched.standardError = handle
+            logHandle = handle
+        }
+        launched.terminationHandler = { [weak self] finished in
+            Task { @MainActor [weak self] in
+                guard let self, self.process === finished else { return }
+                self.process = nil
+                try? self.logHandle?.close()
+                self.logHandle = nil
+                if case .embedded = self.mode {
+                    self.mode = .failed(
+                        "The backend stopped unexpectedly. See backend.log in the data folder."
+                    )
+                }
+            }
         }
 
         try launched.run()

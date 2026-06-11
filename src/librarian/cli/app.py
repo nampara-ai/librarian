@@ -83,6 +83,10 @@ def doctor(
         bool,
         typer.Option(help="Exit non-zero when optional conversion dependencies are missing."),
     ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable check results."),
+    ] = False,
 ) -> None:
     """Check local runtime dependencies and conversion tools."""
     settings = Settings()
@@ -93,10 +97,27 @@ def doctor(
         *_doctor_module_checks(),
         *_doctor_tool_checks(),
     ]
-    table = Table("Check", "Capability", "Status", "Detail")
-    for name, capability, status, detail in checks:
-        table.add_row(name, capability, status, detail)
-    console.print(table)
+    if json_output:
+        console.print_json(
+            json.dumps(
+                {
+                    "checks": [
+                        {
+                            "name": name,
+                            "capability": capability,
+                            "status": status,
+                            "detail": detail,
+                        }
+                        for name, capability, status, detail in checks
+                    ]
+                }
+            )
+        )
+    else:
+        table = Table("Check", "Capability", "Status", "Detail")
+        for name, capability, status, detail in checks:
+            table.add_row(name, capability, status, detail)
+        console.print(table)
     if strict and any(status == "missing" for _, _, status, _ in checks):
         raise typer.Exit(1)
 

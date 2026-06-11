@@ -97,12 +97,50 @@ struct APIClient {
         return try Self.decoder.decode(ExportedDocument.self, from: data)
     }
 
-    func search(query: String, limit: Int = 25) async throws -> [SearchResult] {
+    /// Raw export body in the requested format (Markdown/text bodies, or the
+    /// JSON document for `.json`), optionally with transcript citation evidence.
+    func exportRaw(
+        documentId: String,
+        format: ExportFormat,
+        citationQuote: String? = nil
+    ) async throws -> Data {
+        var query = [URLQueryItem(name: "format", value: format.rawValue)]
+        if let citationQuote, !citationQuote.isEmpty {
+            query.append(URLQueryItem(name: "citation_quote", value: citationQuote))
+        }
+        let (data, _) = try await send("GET", "/documents/\(documentId)/export", query: query)
+        return data
+    }
+
+    func content(documentId: String, offset: Int = 0) async throws -> ContentPage {
+        let (data, _) = try await send(
+            "GET", "/documents/\(documentId)/content",
+            query: [URLQueryItem(name: "offset", value: String(offset))]
+        )
+        return try Self.decoder.decode(ContentPage.self, from: data)
+    }
+
+    func cancelRun(id: String) async throws -> Run {
+        let (data, _) = try await send("POST", "/runs/\(id)/cancel")
+        return try Self.decoder.decode(Run.self, from: data)
+    }
+
+    func retryRun(id: String) async throws -> Run {
+        let (data, _) = try await send("POST", "/runs/\(id)/retry")
+        return try Self.decoder.decode(Run.self, from: data)
+    }
+
+    func search(
+        query: String,
+        scope: String = "cleaned",
+        limit: Int = 25
+    ) async throws -> [SearchResult] {
         struct SearchBody: Codable {
             let query: String
             let limit: Int
+            let scope: String
         }
-        let body = try JSONEncoder().encode(SearchBody(query: query, limit: limit))
+        let body = try JSONEncoder().encode(SearchBody(query: query, limit: limit, scope: scope))
         let (data, _) = try await send(
             "POST", "/search/results", body: body, contentType: "application/json"
         )
