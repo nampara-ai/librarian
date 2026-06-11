@@ -67,6 +67,11 @@ enum Copy {
         guard let raw = backendError?.lowercased(), !raw.isEmpty else {
             return "Couldn't process this file"
         }
+        // App-to-engine errors come first: "cannot reach server" is our own
+        // client wording and must never be blamed on the AI provider.
+        if raw.contains("cannot reach server") {
+            return "The engine was restarting — press Retry"
+        }
         if raw.contains("tesseract") || raw.contains("ocr") {
             return "Scanned image — OCR isn't available in this build"
         }

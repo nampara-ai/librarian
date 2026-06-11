@@ -15,6 +15,10 @@ Python runtime does not. The app now bridges both into the engine's environment 
   proxy, or security tool may be interfering") instead of the generic connection message.
 - The app build workflow now verifies, on every pull request, that the bundled runtime can
   complete a TLS connection to a provider endpoint from the packaged app.
+- Files dropped (or retried) while the engine restarts after a settings change no longer fail:
+  the app now waits up to 15 seconds for the engine to come back before sending, and
+  engine-restart hiccups are labeled "The engine was restarting — press Retry" instead of being
+  misattributed to the AI provider.
 
 ## 1.1.6 - 2026-06-11
 
