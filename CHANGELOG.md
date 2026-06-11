@@ -1,14 +1,15 @@
 # Changelog
 
-## 1.1.2 - 2026-06-11
+## 1.1.3 - 2026-06-11
 
 First fully published release of the 1.1 line, containing all 1.1.0 and 1.1.1 changes below.
 This repository publishes immutable releases, so assets cannot be attached after publication;
 the release workflow now waits for the Mac app DMG builds, collects them as workflow artifacts,
 and includes them — checksummed alongside the engine artifacts — in a single atomic release
 creation. The v1.1.1 release published with engine artifacts only (its DMG attach step was
-rejected by release immutability) and is superseded by this version; the v1.1.0 and v1.1.1
-tags remain as inert history.
+rejected by release immutability) and is superseded by this version. The v1.1.0–v1.1.2 tags
+remain as inert history: v1.1.2 was accidentally created on the 1.1.1 commit before this
+release's pipeline fix merged, and protected tags cannot be moved.
 
 ## 1.1.1 - 2026-06-11
 
