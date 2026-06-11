@@ -6,16 +6,9 @@ Librarian 1.1.0 introduces the native macOS app: a self-contained download with 
 
 Engine and tooling changes:
 
-- The Mac app's embedded backend now requires a random per-launch API key, passed through
+- The Mac app's embedded backend requires a random per-launch API key, passed through
   `LIBRARIAN_API_KEY` to the spawned process and attached by the app's API client, so other
   local processes cannot read or modify the corpus over localhost.
-- Enabled ruff's blind-except rule (`BLE001`) for `src/`: every `except Exception` must either
-  re-raise or carry an inline justification stating where the error is recorded. The 11
-  deliberate boundary handlers are annotated; new silent swallows fail lint.
-- Audited the settings surface: all 71 settings fields are read by runtime code (none dead).
-  Trimmed the README Docker section to a pointer into docs/DEPLOYMENT.md; containers are an
-  optional server deployment, not part of the default experience.
-
 - Fixed `database_path` so it defaults to `librarian.sqlite` inside `data_dir`. Setting only
   `LIBRARIAN_DATA_DIR` no longer leaves the SQLite database at a working-directory-relative
   `.librarian/librarian.sqlite` while uploads follow the configured data directory. Explicit
@@ -34,7 +27,9 @@ Engine and tooling changes:
   and leaves it untyped, which broke pyright on fresh installs. The lockfile now pins
   starlette 1.2.1/fastapi 0.136.3 so local runs match fresh CI resolution.
 - Enabled ruff's blind-except rule (`BLE001`) for `src/`: every `except Exception` must either
-  re-raise or carry an inline justification stating where the error is recorded.
+  re-raise or carry an inline justification stating where the error is recorded. The 11
+  deliberate boundary handlers are annotated; new silent swallows fail lint. A settings audit
+  confirmed all 71 configuration fields are read by runtime code.
 - Made the dependency-review workflow guard test version-agnostic so Dependabot action bumps do
   not break CI.
 - Corrected `CONTRIBUTING.md` release status and `librarian maintainer` command examples, and
