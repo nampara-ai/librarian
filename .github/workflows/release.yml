@@ -177,9 +177,20 @@ jobs:
           case "$REF_NAME" in
             *a*|*b*|*rc*) PRERELEASE_FLAG="--prerelease" ;;
           esac
-          gh release create "${{ github.ref_name }}" dist/* sbom.json constraints.txt SHA256SUMS.txt \
-            --repo "${{ github.repository }}" \
-            --title "${{ github.ref_name }}" \
-            --notes-file release-notes.md \
-            --verify-tag \
-            $PRERELEASE_FLAG
+          if gh release view "$REF_NAME" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            # Upsert: complete an existing release instead of failing on it.
+            gh release upload "$REF_NAME" dist/* sbom.json constraints.txt SHA256SUMS.txt \
+              --repo "${{ github.repository }}" --clobber
+            gh release edit "$REF_NAME" \
+              --repo "${{ github.repository }}" \
+              --title "$REF_NAME" \
+              --notes-file release-notes.md \
+              $PRERELEASE_FLAG
+          else
+            gh release create "${{ github.ref_name }}" dist/* sbom.json constraints.txt SHA256SUMS.txt \
+              --repo "${{ github.repository }}" \
+              --title "${{ github.ref_name }}" \
+              --notes-file release-notes.md \
+              --verify-tag \
+              $PRERELEASE_FLAG
+          fi
