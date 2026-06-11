@@ -70,14 +70,16 @@ Your data lives in `~/Library/Application Support/Librarian`:
 
 ### Connecting an LLM provider
 
-Out of the box the app converts and organizes documents without AI cleaning.
-For real LLM cleaning and classification, open **Settings (⌘,)**, pick
-**Anthropic**, **OpenAI**, **OpenAI-compatible**, or **Ollama**, paste your
-API key, and press **Apply** — the key is validated against the provider and
-the engine restarts with the new configuration. The Anthropic preset uses
-Anthropic's OpenAI-compatible endpoint (`https://api.anthropic.com/v1`) with
-`claude-sonnet-4-6` by default; the Ollama preset talks to a local Ollama at
-`http://127.0.0.1:11434/v1` and needs no key.
+Open **Settings (⌘,)** — or click **Set up AI cleaning…** in the empty main
+window — pick a provider (**Anthropic**, **OpenAI**, **DeepSeek**,
+**Ollama**, **LM Studio**, or **Custom**), paste your API key (local servers
+take an address instead, pre-filled with the standard port), and press
+**Connect**. The app queries the provider's live model list and shows a
+model dropdown with what your account or server actually offers — picking a
+model applies it immediately and pins it to every cleaning call ("Cleaning
+with claude-sonnet-4-6"). A bad key fails with a clear message within a few
+seconds. Until a provider is connected, files are still converted and
+organized, just without AI cleaning.
 
 API keys are stored in the macOS Keychain and passed to the engine through
 its process environment — they are never written to disk. Non-secret

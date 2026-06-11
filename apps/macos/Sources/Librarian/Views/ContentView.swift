@@ -260,6 +260,13 @@ struct EmptyQueueView: View {
             Button(Copy.emptyButton) {
                 model.presentChooseFilesPanel()
             }
+            if !model.aiConfigured {
+                SettingsLink {
+                    Label(Copy.setupLink, systemImage: "sparkles")
+                }
+                .buttonStyle(.link)
+                .padding(.top, 6)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
