@@ -41,6 +41,7 @@ jobs:
       id-token: write
       attestations: write
       security-events: write
+      actions: read
     steps:
       - uses: actions/checkout@v6
         with:
@@ -101,8 +102,38 @@ jobs:
           subject-path: "dist/*"
       - name: Generate SBOM
         run: .venv/bin/cyclonedx-py environment --output-format JSON --output-file sbom.json
+      - name: Collect Mac app DMGs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Releases are immutable once published, so every asset must be in
+          # the single create call below. Wait for the Mac App workflow run
+          # on this commit and pull its DMG artifacts.
+          mkdir -p dmgs
+          for attempt in $(seq 1 60); do
+            RUN_ID="$(gh run list --repo "${{ github.repository }}" \
+              --workflow macapp.yml --commit "$GITHUB_SHA" \
+              --json databaseId,status \
+              --jq '.[] | select(.status == "completed") | .databaseId' | head -n 1)"
+            if [ -n "$RUN_ID" ]; then
+              CONCLUSION="$(gh run view "$RUN_ID" --repo "${{ github.repository }}" \
+                --json conclusion --jq .conclusion)"
+              if [ "$CONCLUSION" != "success" ]; then
+                echo "Mac App run $RUN_ID concluded: $CONCLUSION" >&2
+                exit 1
+              fi
+              gh run download "$RUN_ID" --repo "${{ github.repository }}" --dir dmgs
+              break
+            fi
+            echo "Waiting for the Mac App workflow run (attempt $attempt)..."
+            sleep 30
+          done
+          test -f dmgs/Librarian-AppleSilicon/Librarian-AppleSilicon.dmg
+          test -f dmgs/Librarian-Intel/Librarian-Intel.dmg
       - name: Generate checksums
-        run: sha256sum dist/* sbom.json constraints.txt > SHA256SUMS.txt
+        run: |
+          sha256sum dist/* sbom.json constraints.txt > SHA256SUMS.txt
+          sha256sum dmgs/*/*.dmg >> SHA256SUMS.txt
       - name: Verify checksums
         run: sha256sum --check SHA256SUMS.txt
       - name: Attest release metadata
@@ -177,20 +208,20 @@ jobs:
           case "$REF_NAME" in
             *a*|*b*|*rc*) PRERELEASE_FLAG="--prerelease" ;;
           esac
+          # Releases are immutable once published: every asset must land in
+          # this single create call, and an existing release cannot be
+          # completed after the fact.
           if gh release view "$REF_NAME" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            # Upsert: complete an existing release instead of failing on it.
-            gh release upload "$REF_NAME" dist/* sbom.json constraints.txt SHA256SUMS.txt \
-              --repo "${{ github.repository }}" --clobber
-            gh release edit "$REF_NAME" \
-              --repo "${{ github.repository }}" \
-              --title "$REF_NAME" \
-              --notes-file release-notes.md \
-              $PRERELEASE_FLAG
-          else
-            gh release create "${{ github.ref_name }}" dist/* sbom.json constraints.txt SHA256SUMS.txt \
-              --repo "${{ github.repository }}" \
-              --title "${{ github.ref_name }}" \
-              --notes-file release-notes.md \
-              --verify-tag \
-              $PRERELEASE_FLAG
+            echo "A release for $REF_NAME already exists and immutable releases" >&2
+            echo "cannot be modified. Delete it (if permitted) or cut a new version." >&2
+            exit 1
           fi
+          gh release create "${{ github.ref_name }}" \
+            dist/* sbom.json constraints.txt SHA256SUMS.txt \
+            dmgs/Librarian-AppleSilicon/Librarian-AppleSilicon.dmg \
+            dmgs/Librarian-Intel/Librarian-Intel.dmg \
+            --repo "${{ github.repository }}" \
+            --title "${{ github.ref_name }}" \
+            --notes-file release-notes.md \
+            --verify-tag \
+            $PRERELEASE_FLAG

@@ -112,31 +112,12 @@ jobs:
             --wait
           xcrun stapler staple "dist/${{ matrix.artifact }}.dmg"
 
+      # Releases are immutable once published, so DMGs cannot be attached
+      # after the fact. Tag builds publish the DMG as a workflow artifact;
+      # the Release workflow collects both artifacts and includes them in
+      # its single atomic `gh release create`.
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: apps/macos/dist/${{ matrix.artifact }}.dmg
           if-no-files-found: error
-
-      - name: Attach DMG to release
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          # The Release workflow creates the GitHub release (with notes and
-          # engine artifacts) and fails if one already exists, so wait for it
-          # rather than racing it with a create of our own.
-          for attempt in $(seq 1 60); do
-            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-              gh release upload "$TAG" \
-                "apps/macos/dist/${{ matrix.artifact }}.dmg" \
-                --repo "$GITHUB_REPOSITORY" --clobber
-              echo "Attached ${{ matrix.artifact }}.dmg to $TAG"
-              exit 0
-            fi
-            echo "Release $TAG not created yet (attempt $attempt); waiting..."
-            sleep 30
-          done
-          echo "Release $TAG was never created; check the Release workflow" >&2
-          exit 1
