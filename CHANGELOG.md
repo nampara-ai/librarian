@@ -13,6 +13,10 @@ no engine, sent every file to an empty address, and showed nothing wrong.
 - No more silence: whenever the engine target is unreachable for any reason, the footer shows a
   red "Engine not connected" pill with a direct Settings link. Healthy stays silent; dead never
   is again.
+- The cleaning progress bar now tracks real progress. The engine previously recorded chunk
+  completion only after the entire cleaning stage finished, so the bar sat near zero for the
+  whole run; it now persists progress as each chunk is cleaned (cache hits credited
+  immediately), and the bar fills smoothly across all coherence modes.
 
 ## 1.1.7 - 2026-06-11
 

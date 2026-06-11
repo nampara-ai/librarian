@@ -1028,3 +1028,92 @@ async def test_malformed_search_query_is_controlled_error(tmp_path: Path) -> Non
 
     with pytest.raises(ValueError, match="Invalid search query"):
         await container.repository.search('"')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("coherence_mode", ["fast", "balanced", "max-coherence"])
+async def test_clean_chunks_reports_per_chunk_progress(coherence_mode: str) -> None:
+    class EchoProvider:
+        name = "echo"
+
+        async def complete(
+            self,
+            *,
+            system_prompt: str,
+            user_prompt: str,
+            model: str,
+            max_tokens: int,
+            temperature: float,
+        ) -> str:
+            del system_prompt, model, max_tokens, temperature
+            return user_prompt
+
+    chunks = [
+        Chunk(
+            id=ChunkId(f"chk_progress_{index}"),
+            document_id=DocumentId("doc_progress"),
+            ordinal=index,
+            text=f"Chunk {index} text.",
+            start_char=index * 10,
+            end_char=index * 10 + 9,
+            sha256=f"sha-progress-{index}",
+        )
+        for index in range(5)
+    ]
+    cleaner = CleanChunks(
+        provider=EchoProvider(),
+        prompt_catalog=PromptCatalog(),
+        prompt_version="cmos_v2",
+        model="echo-model",
+        coherence_mode=cast(Any, coherence_mode),
+        max_parallel_chunks=2,
+        balanced_group_size=2,
+    )
+    completions = 0
+
+    async def note() -> None:
+        nonlocal completions
+        completions += 1
+
+    cleaned = await cleaner.execute(chunks, on_chunk_cleaned=note)
+
+    assert len(cleaned) == len(chunks)
+    assert completions == len(chunks)
+
+
+@pytest.mark.asyncio
+async def test_processing_persists_incremental_chunk_progress(tmp_path: Path) -> None:
+    source = tmp_path / "progress-notes.txt"
+    source.write_text(
+        " ".join(f"Sentence number {index} about training horses." for index in range(60)),
+        encoding="utf-8",
+    )
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=120,
+        chunk_overlap_chars=10,
+    )
+    container = await build_container(settings)
+    ingested = await container.ingest_document.execute(source)
+
+    observed: list[int] = []
+    repository = container.repository
+    original_update = repository.update_run_progress
+
+    async def recording_update(run_id: RunId, **kwargs: Any) -> None:
+        observed.append(int(kwargs["completed_chunks"]))
+        await original_update(run_id, **kwargs)
+
+    object.__setattr__(repository, "update_run_progress", recording_update)
+
+    run = await container.process_document.execute(ingested.document.id)
+
+    assert run.status == RunStatus.SUCCEEDED
+    assert run.total_chunks > 1
+    # Intermediate values must be persisted while cleaning, not just the
+    # final total: strictly increasing counts ending at the chunk total.
+    increasing = [value for value in observed if value <= run.total_chunks]
+    assert len(observed) >= run.total_chunks
+    assert sorted(set(increasing)) == list(range(min(increasing), run.total_chunks + 1))
+    assert observed[-1] == run.total_chunks

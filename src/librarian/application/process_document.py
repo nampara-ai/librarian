@@ -151,7 +151,28 @@ class ProcessDocument:
                 )
                 cached_ids = {chunk.chunk.id for chunk in cached_chunks}
                 missing_chunks = [chunk for chunk in chunked if chunk.id not in cached_ids]
-                cleaned_missing = await self.cleaner.execute(missing_chunks)
+                # Persist live per-chunk progress so clients can render a
+                # real bar during long cleans; cache hits count immediately.
+                progress = {"completed": len(cached_chunks)}
+                await self.runs.update_run_progress(
+                    run_id,
+                    completed_chunks=progress["completed"],
+                    failed_chunks=0,
+                    stage=RunStage.CLEAN,
+                )
+
+                async def _note_chunk_cleaned() -> None:
+                    progress["completed"] += 1
+                    await self.runs.update_run_progress(
+                        run_id,
+                        completed_chunks=progress["completed"],
+                        failed_chunks=0,
+                        stage=RunStage.CLEAN,
+                    )
+
+                cleaned_missing = await self.cleaner.execute(
+                    missing_chunks, on_chunk_cleaned=_note_chunk_cleaned
+                )
                 await self._raise_if_canceled(run_id)
                 await self.outputs.save_cleaned_chunk_cache(
                     cleaned_missing,
