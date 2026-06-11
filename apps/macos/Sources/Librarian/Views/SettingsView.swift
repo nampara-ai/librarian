@@ -187,6 +187,13 @@ struct SettingsView: View {
                     Toggle("Also keep original files in the destination", isOn: $keepOriginals)
                     Toggle("Use the built-in engine", isOn: $useEmbedded)
                         .onChange(of: useEmbedded) {
+                            // External mode needs an address; never allow the
+                            // unreachable "off + empty URL" state.
+                            if !useEmbedded && externalURL.trimmingCharacters(
+                                in: .whitespacesAndNewlines
+                            ).isEmpty {
+                                externalURL = AppModel.defaultBaseURL
+                            }
                             Task { await model.applyBackendPreference() }
                         }
                     TextField(
