@@ -7,12 +7,13 @@ download, drag to Applications, double-click, done.
 
 ## Install (for users)
 
-1. Download the DMG for your Mac from the
+1. Download the DMG for your Mac from the assets of the
    [latest release](https://github.com/nampara-ai/librarian/releases/latest):
    - **Librarian-AppleSilicon.dmg** for M1/M2/M3/M4 Macs
    - **Librarian-Intel.dmg** for Intel Macs
 
-   (Apple menu → About This Mac shows which chip you have.)
+   (Apple menu → About This Mac shows which chip you have. DMGs are attached
+   to releases from v1.1.0 onward.)
 2. Open the DMG and drag **Librarian** into **Applications**.
 3. Launch Librarian and drop a file anywhere in the window.
 
