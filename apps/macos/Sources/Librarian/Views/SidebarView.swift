@@ -3,9 +3,22 @@ import SwiftUI
 struct SidebarView: View {
     @EnvironmentObject private var model: AppModel
     @Binding var selection: String?
+    @AppStorage(AppModel.searchScopeKey) private var scope = "cleaned"
 
     var body: some View {
         List(selection: $selection) {
+            if !model.searchText.isEmpty {
+                Picker("Search in", selection: $scope) {
+                    Text("Cleaned output").tag("cleaned")
+                    Text("Original text").tag("raw")
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .listRowSeparator(.hidden)
+                .onChange(of: scope) {
+                    Task { await model.runSearch() }
+                }
+            }
             if model.searchText.isEmpty {
                 Section("Library") {
                     if model.documents.isEmpty {

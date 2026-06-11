@@ -77,6 +77,22 @@ def test_cli_doctor_reports_optional_dependency_status(
     assert "missing" in output
 
 
+def test_cli_doctor_json_emits_machine_readable_checks(tmp_path: Path) -> None:
+    runner = CliRunner()
+    env = {
+        "LIBRARIAN_DATA_DIR": str(tmp_path / ".librarian"),
+        "LIBRARIAN_DATABASE_PATH": str(tmp_path / ".librarian" / "librarian.sqlite"),
+    }
+
+    result = runner.invoke(app, ["doctor", "--json"], env=env)
+
+    assert result.exit_code == 0
+    payload = json.loads(_strip_ansi(result.output))
+    names = {check["name"] for check in payload["checks"]}
+    assert {"Python", "Data directory", "SQLite database"} <= names
+    assert all({"name", "capability", "status", "detail"} <= set(c) for c in payload["checks"])
+
+
 def test_cli_doctor_strict_fails_when_optional_dependencies_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

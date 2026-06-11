@@ -5,6 +5,26 @@ converted, cleaned, and classified with live progress, then read, search, and
 export the results. Release builds ship the entire backend inside the app —
 download, drag to Applications, double-click, done.
 
+## Feature coverage
+
+Every user-facing CLI command has a GUI equivalent:
+
+| CLI | In the app |
+| --- | --- |
+| `librarian import` / `ingest` | Drag and drop anywhere, or toolbar **Import** (files or folders). Settings → General toggles automatic processing (ingest-only when off). |
+| `librarian process` | **Process** button on a document; runs start automatically after import by default. |
+| `librarian list` / `show` | Library sidebar; detail view with metadata, classification, and Cleaned/Original tabs. |
+| `librarian search --details` | Sidebar search with snippets, plus a cleaned/raw scope toggle. |
+| `librarian export` | **Export** menu: Markdown/text/JSON, one click to the configured output folder, Save As…, transcript-citation exports, and Export All. |
+| `librarian delete` | **Delete** button (with confirmation). |
+| `librarian status` | Activity panel: per-run stage, chunk progress, expandable events, **Cancel**/**Retry**. |
+| `librarian convert` / `convert-dir` | Tools → **Convert File** / **Convert Folder**. |
+| `librarian transcript-normalize` / `transcript-find` | Tools → **Normalize Transcript** / **Find in Transcript**. |
+| `librarian doctor` / `version` | Tools → **Diagnostics**: capability checks, backend version and readiness. |
+| `librarian init` / `migrate` | Automatic on first launch; Diagnostics → **Run Migrations** for upgrades. |
+| `librarian worker` | The app processes runs in the background automatically; the Activity panel is the worker view. |
+| `librarian api` | The embedded backend the app starts and supervises. |
+
 ## Install (for users)
 
 1. Download the DMG for your Mac from the assets of the
@@ -50,8 +70,15 @@ Your data lives in `~/Library/Application Support/Librarian`:
 ### Connecting an LLM provider
 
 Out of the box the app uses the built-in mock cleaner, which works offline.
-For real LLM cleaning and classification, create
-`~/Library/Application Support/Librarian/.env`:
+For real LLM cleaning and classification, open **Settings (⌘,) → AI
+Provider**, pick **Anthropic**, **OpenAI**, or **Custom (OpenAI-compatible)**,
+paste your API key, and press **Apply & Restart Backend**. The Anthropic
+preset uses Anthropic's OpenAI-compatible endpoint
+(`https://api.anthropic.com/v1`) with `claude-sonnet-4-6` by default; the
+model field accepts any model your provider offers.
+
+The settings are stored in `~/Library/Application Support/Librarian/.env`
+(file mode 0600), which you can also edit by hand:
 
 ```bash
 LIBRARIAN_LLM_PROVIDER=openai-compatible
