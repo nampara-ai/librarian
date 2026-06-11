@@ -338,7 +338,21 @@ struct FooterView: View {
             .padding(.vertical, 3)
             .background(.red.opacity(0.15), in: Capsule())
         case .embedded, .external:
-            EmptyView()
+            // Healthy is silent; a dead target is not. A stale external
+            // address or stopped engine must never be a silent black hole.
+            if !model.serverOnline && model.hasRefreshedOnce {
+                HStack(spacing: 6) {
+                    Text(Copy.engineNotConnected)
+                    SettingsLink {
+                        Text(Copy.engineOpenSettings)
+                    }
+                    .buttonStyle(.link)
+                }
+                .font(.caption)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(.red.opacity(0.15), in: Capsule())
+            }
         }
     }
 }

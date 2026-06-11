@@ -19,6 +19,9 @@ final class AppModel: ObservableObject {
 
     @Published var queue: [QueueItem] = []
     @Published var serverOnline = false
+    /// True once the first health probe has completed, so disconnect
+    /// indicators don't flash during launch.
+    @Published var hasRefreshedOnce = false
 
     private var documents: [Document] = []
     private var runs: [Run] = []
@@ -35,7 +38,19 @@ final class AppModel: ObservableObject {
     // MARK: - Settings
 
     var useEmbeddedBackend: Bool {
-        UserDefaults.standard.object(forKey: Self.useEmbeddedKey) as? Bool ?? true
+        let stored = UserDefaults.standard.object(forKey: Self.useEmbeddedKey) as? Bool ?? true
+        if !stored && BackendController.isEmbeddedAvailable {
+            // Self-heal: external mode without a usable server address is
+            // unreachable by construction (a stale preference can survive
+            // reinstalls); fall back to the built-in engine.
+            let raw = UserDefaults.standard.string(forKey: Self.baseURLKey) ?? ""
+            let usable = URL(string: raw)?.scheme?.hasPrefix("http") == true
+            if !usable {
+                UserDefaults.standard.set(true, forKey: Self.useEmbeddedKey)
+                return true
+            }
+        }
+        return stored
     }
 
     /// Where cleaned files land. Default: ~/Documents/Librarian, created
@@ -139,6 +154,7 @@ final class AppModel: ObservableObject {
 
     func refresh() async {
         let client = self.client
+        defer { hasRefreshedOnce = true }
         do {
             serverOnline = try await client.health()
         } catch {

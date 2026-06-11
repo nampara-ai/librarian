@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.1.8 - 2026-06-11
+
+Closes the last silent black hole. A stale preference combination — built-in engine disabled
+plus an empty external server address — could survive reinstalls indefinitely; the app started
+no engine, sent every file to an empty address, and showed nothing wrong.
+
+- Self-healing: external mode with no usable server address is unreachable by construction, so
+  the app now falls back to the built-in engine automatically when that state is detected.
+- The Settings toggle can no longer create the state: turning the built-in engine off with an
+  empty server address pre-fills the default address.
+- No more silence: whenever the engine target is unreachable for any reason, the footer shows a
+  red "Engine not connected" pill with a direct Settings link. Healthy stays silent; dead never
+  is again.
+
 ## 1.1.7 - 2026-06-11
 
 Fixes "Couldn't reach the AI provider" failures on Macs where the app could connect but the

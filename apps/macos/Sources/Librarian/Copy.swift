@@ -36,6 +36,8 @@ enum Copy {
     static let engineStarting = "Starting engine…"
     static let engineFailed = "Engine didn't start"
     static let engineFailedDetails = "Details"
+    static let engineNotConnected = "Engine not connected"
+    static let engineOpenSettings = "Settings"
 
     static let providerNoneNote = "Files are converted and organized without AI cleaning."
     static let keychainNote = "Stored in this Mac's keychain."
