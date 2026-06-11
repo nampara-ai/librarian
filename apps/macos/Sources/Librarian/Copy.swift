@@ -86,6 +86,10 @@ enum Copy {
             || raw.contains("unauthorized") {
             return "The AI provider rejected the key — check it in settings"
         }
+        if raw.contains("certificate") || raw.contains("ssl") || raw.contains("tls") {
+            return "Secure connection to the AI provider failed — a VPN, proxy, "
+                + "or security tool may be interfering"
+        }
         if raw.contains("connection") || raw.contains("connect") {
             return "Couldn't reach the AI provider — check your connection"
         }

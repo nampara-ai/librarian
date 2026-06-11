@@ -59,6 +59,24 @@ jobs:
             --wheel "$(ls ../../dist/nampara_librarian-*.whl)" \
             --arch ${{ matrix.arch }}
 
+      - name: Verify bundled runtime can reach AI providers
+        working-directory: apps/macos
+        run: |
+          # The x86_64 interpreter runs under Rosetta here, same as during
+          # bundling. A 401 proves DNS, TCP, and TLS all work from the
+          # bundled runtime; certificate failures or timeouts fail the build.
+          PY="dist/Librarian.app/Contents/Resources/backend/python/bin/python3"
+          "$PY" <<'CHECK'
+          import urllib.error
+          import urllib.request
+
+          try:
+              urllib.request.urlopen("https://api.anthropic.com/v1/models", timeout=15)
+          except urllib.error.HTTPError as error:
+              assert error.code in (401, 403), f"unexpected status {error.code}"
+              print("bundled runtime TLS + connectivity OK: HTTP", error.code)
+          CHECK
+
       - name: Check for signing identity
         id: signing
         env:

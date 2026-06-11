@@ -153,6 +153,11 @@ final class BackendController: ObservableObject {
         for (name, value) in ProviderCredentials.environmentOverlay() {
             environment[name] = value
         }
+        // Bridge macOS proxy settings and the system trust store so the
+        // engine can reach providers wherever the app can.
+        for (name, value) in SystemNetworkEnvironment.overlay(dataDirectory: dataDir) {
+            environment[name] = value
+        }
         launched.environment = environment
         // Run from the data directory so an optional `.env` there configures
         // the backend (LLM provider, model, API keys, ...).
