@@ -158,3 +158,22 @@ struct DiagnosticsView: View {
         }
     }
 }
+
+struct ChecklistRowView: View {
+    let ok: Bool
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                .foregroundStyle(ok ? .green : .orange)
+            Text(title)
+            Spacer()
+            Text(detail)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .font(.callout)
+    }
+}

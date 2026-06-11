@@ -148,6 +148,11 @@ final class BackendController: ObservableObject {
         // directory, so the per-launch key always applies.
         environment["LIBRARIAN_API_KEY"] = apiKey
         environment["PYTHONUNBUFFERED"] = "1"
+        // Provider API keys live in the Keychain, not on disk; hand them to
+        // the backend through its environment.
+        for (name, value) in ProviderCredentials.environmentOverlay() {
+            environment[name] = value
+        }
         launched.environment = environment
         // Run from the data directory so an optional `.env` there configures
         // the backend (LLM provider, model, API keys, ...).

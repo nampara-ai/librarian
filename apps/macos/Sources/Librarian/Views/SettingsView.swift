@@ -1,196 +1,154 @@
 import SwiftUI
 
-struct SettingsView: View {
-    var body: some View {
-        TabView {
-            GeneralSettingsView()
-                .tabItem { Label("General", systemImage: "gearshape") }
-            ProviderSettingsView()
-                .tabItem { Label("AI Provider", systemImage: "sparkles") }
-            ServerSettingsView()
-                .tabItem { Label("Server", systemImage: "network") }
-        }
-        .frame(width: 540)
-    }
-}
-
-// MARK: - General
-
-struct GeneralSettingsView: View {
-    @EnvironmentObject private var model: AppModel
-    @AppStorage(AppModel.autoProcessKey) private var autoProcess = true
-    @AppStorage(AppModel.outputFolderKey) private var outputFolderPath = ""
-
-    var body: some View {
-        Form {
-            Section("Outputs") {
-                LabeledContent("Destination folder") {
-                    HStack(spacing: 8) {
-                        Text(
-                            outputFolderPath.isEmpty
-                                ? model.outputFolderURL.path
-                                : outputFolderPath
-                        )
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        Button("Choose…") {
-                            model.chooseOutputFolder()
-                        }
-                    }
-                }
-            }
-            Section {
-                Toggle("Process documents automatically after import", isOn: $autoProcess)
-            } footer: {
-                Text(
-                    "When off, imported documents are only ingested (like "
-                        + "“librarian ingest”) and wait until you press Process."
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-        }
-        .formStyle(.grouped)
-        .padding(.bottom, 8)
-    }
-}
-
-// MARK: - AI Provider
-
 enum ProviderPreset: String, CaseIterable, Identifiable {
-    case builtin
-    case openai
     case anthropic
-    case custom
+    case openai
+    case compatible
+    case ollama
+    case none
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .builtin: return "Built-in (no API key)"
-        case .openai: return "OpenAI"
         case .anthropic: return "Anthropic"
-        case .custom: return "Custom (OpenAI-compatible)"
+        case .openai: return "OpenAI"
+        case .compatible: return "OpenAI-compatible"
+        case .ollama: return "Ollama"
+        case .none: return "None"
         }
     }
 
     var defaultModel: String {
         switch self {
-        case .builtin: return ""
-        case .openai: return "gpt-4.1-mini"
         case .anthropic: return "claude-sonnet-4-6"
-        case .custom: return ""
+        case .openai: return "gpt-4.1-mini"
+        case .ollama: return "llama3.2"
+        case .compatible, .none: return ""
         }
     }
 
-    var keyEnvName: String {
-        switch self {
-        case .anthropic: return "ANTHROPIC_API_KEY"
-        default: return "OPENAI_API_KEY"
-        }
+    var keyAccount: String {
+        self == .anthropic ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY"
     }
 
     var fixedBaseURL: String? {
         switch self {
         case .anthropic: return "https://api.anthropic.com/v1"
-        case .openai, .builtin: return nil
-        case .custom: return nil
+        case .ollama: return "http://127.0.0.1:11434/v1"
+        case .openai, .compatible, .none: return nil
+        }
+    }
+
+    var needsKey: Bool {
+        switch self {
+        case .anthropic, .openai, .compatible: return true
+        case .ollama, .none: return false
         }
     }
 }
 
-struct ProviderSettingsView: View {
+/// The settings drawer: one pane. Cleaning on top, Advanced collapsed.
+struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var preset: ProviderPreset = .builtin
+
+    @State private var preset: ProviderPreset = .none
     @State private var apiKey = ""
     @State private var modelName = ""
     @State private var baseURL = ""
-    @State private var statusMessage: String?
-    @State private var statusIsError = false
+    @State private var statusLine: String?
+    @State private var statusOK = false
     @State private var isApplying = false
 
-    private var embeddedConfigurable: Bool {
-        BackendController.isEmbeddedAvailable && model.useEmbeddedBackend
-    }
+    @AppStorage(AppModel.keepOriginalsKey) private var keepOriginals = false
+    @AppStorage(AppModel.useEmbeddedKey) private var useEmbedded = true
+    @AppStorage(AppModel.baseURLKey) private var externalURL = AppModel.defaultBaseURL
+    @AppStorage(AppModel.apiKeyKey) private var externalKey = ""
 
     var body: some View {
         Form {
-            Section {
+            Section("Cleaning") {
                 Picker("Provider", selection: $preset) {
                     ForEach(ProviderPreset.allCases) { candidate in
                         Text(candidate.label).tag(candidate)
                     }
                 }
                 .onChange(of: preset) {
-                    modelName = preset.defaultModel
-                    if preset != .custom {
+                    modelName = ""
+                    statusLine = nil
+                    if preset != .compatible {
                         baseURL = preset.fixedBaseURL ?? ""
                     }
+                    apiKey = KeychainStore.get(preset.keyAccount) ?? ""
                 }
-            } footer: {
-                Text(
-                    preset == .builtin
-                        ? "The built-in cleaner works offline with no account. Connect a "
-                            + "provider for higher-quality cleaning and classification."
-                        : "The key is stored in the backend configuration file inside "
-                            + "your data folder and never leaves this Mac except to call "
-                            + "the provider."
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
 
-            if preset != .builtin {
-                Section {
-                    SecureField("API key", text: $apiKey)
-                        .textFieldStyle(.roundedBorder)
+                if preset == .none {
+                    Text(Copy.providerNoneNote)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
                     TextField("Model", text: $modelName, prompt: Text(preset.defaultModel))
-                        .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
-                    if preset == .custom {
+                    if preset == .compatible {
                         TextField(
                             "Base URL",
                             text: $baseURL,
                             prompt: Text("https://api.example.com/v1")
                         )
-                        .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
+                    }
+                    if preset.needsKey {
+                        VStack(alignment: .leading, spacing: 3) {
+                            SecureField("API key", text: $apiKey)
+                                .onSubmit { Task { await applyAndValidate() } }
+                            Text(Copy.keychainNote)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                HStack(spacing: 10) {
+                    Button(isApplying ? "Applying…" : "Apply") {
+                        Task { await applyAndValidate() }
+                    }
+                    .disabled(isApplying)
+                    if let statusLine {
+                        Label(
+                            statusLine,
+                            systemImage: statusOK
+                                ? "checkmark.circle.fill" : "xmark.circle.fill"
+                        )
+                        .foregroundStyle(statusOK ? .green : .red)
+                        .font(.callout)
                     }
                 }
             }
 
             Section {
-                HStack {
-                    Button(isApplying ? "Applying…" : "Apply & Restart Backend") {
-                        Task { await apply() }
-                    }
-                    .disabled(isApplying || !embeddedConfigurable)
-                    if let statusMessage {
-                        Label(
-                            statusMessage,
-                            systemImage: statusIsError
-                                ? "xmark.circle.fill" : "checkmark.circle.fill"
+                DisclosureGroup("Advanced") {
+                    Toggle("Also keep original files in the destination", isOn: $keepOriginals)
+                    DisclosureGroup("Connect to a Librarian server instead") {
+                        Toggle("Use the built-in engine", isOn: $useEmbedded)
+                            .onChange(of: useEmbedded) {
+                                Task { await model.applyBackendPreference() }
+                            }
+                        TextField(
+                            "Server URL",
+                            text: $externalURL,
+                            prompt: Text(AppModel.defaultBaseURL)
                         )
-                        .foregroundStyle(statusIsError ? .red : .green)
-                        .font(.callout)
+                        .autocorrectionDisabled()
+                        .disabled(useEmbedded)
+                        SecureField("Server API key", text: $externalKey)
+                            .disabled(useEmbedded)
                     }
                 }
-            } footer: {
-                Text(
-                    embeddedConfigurable
-                        ? "Applying restarts the built-in backend so the provider takes "
-                            + "effect immediately."
-                        : "Provider settings configure the built-in backend. For an "
-                            + "external server, set LIBRARIAN_LLM_* on that server instead."
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
-        .padding(.bottom, 8)
+        .frame(width: 460)
+        .fixedSize(horizontal: false, vertical: true)
         .onAppear(perform: loadCurrent)
     }
 
@@ -199,165 +157,115 @@ struct ProviderSettingsView: View {
         let provider = values["LIBRARIAN_LLM_PROVIDER"] ?? "mock"
         let storedBase = values["LIBRARIAN_LLM_BASE_URL"] ?? ""
         if provider != "openai-compatible" {
-            preset = .builtin
+            preset = .none
         } else if storedBase == ProviderPreset.anthropic.fixedBaseURL {
             preset = .anthropic
+        } else if storedBase == ProviderPreset.ollama.fixedBaseURL {
+            preset = .ollama
         } else if storedBase.isEmpty {
             preset = .openai
         } else {
-            preset = .custom
+            preset = .compatible
         }
-        modelName = values["LIBRARIAN_LLM_MODEL"] ?? preset.defaultModel
+        modelName = values["LIBRARIAN_LLM_MODEL"] ?? ""
         baseURL = storedBase
-        apiKey = values[preset.keyEnvName] ?? ""
+        apiKey = KeychainStore.get(preset.keyAccount) ?? ""
     }
 
-    private func apply() async {
+    private func applyAndValidate() async {
         isApplying = true
         defer { isApplying = false }
-        statusMessage = nil
-        do {
-            // Note: assigning `nil` via subscript would drop the entry, so use
-            // updateValue to record explicit deletions for EnvFile.
-            var updates: [String: String?] = [:]
-            switch preset {
-            case .builtin:
-                updates["LIBRARIAN_LLM_PROVIDER"] = "mock"
-                updates.updateValue(nil, forKey: "LIBRARIAN_LLM_MODEL")
+        statusLine = nil
+
+        let resolvedModel = modelName.isEmpty ? preset.defaultModel : modelName
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedBase = preset == .compatible
+            ? baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            : (preset.fixedBaseURL ?? "")
+
+        if preset.needsKey && trimmedKey.isEmpty {
+            statusOK = false
+            statusLine = Copy.providerKeyFailed
+            return
+        }
+        if preset == .compatible && resolvedBase.isEmpty {
+            statusOK = false
+            statusLine = "Enter the provider's base URL"
+            return
+        }
+
+        // The key lives in the Keychain only; .env keeps the non-secrets.
+        var updates: [String: String?] = [:]
+        for account in ProviderCredentials.knownKeyAccounts {
+            updates.updateValue(nil, forKey: account)
+        }
+        if preset == .none {
+            updates["LIBRARIAN_LLM_PROVIDER"] = "mock"
+            updates.updateValue(nil, forKey: "LIBRARIAN_LLM_MODEL")
+            updates.updateValue(nil, forKey: "LIBRARIAN_LLM_BASE_URL")
+            updates.updateValue(nil, forKey: "LIBRARIAN_LLM_API_KEY_ENV")
+        } else {
+            KeychainStore.set(
+                trimmedKey.isEmpty ? "local" : trimmedKey,
+                account: preset.keyAccount
+            )
+            updates["LIBRARIAN_LLM_PROVIDER"] = "openai-compatible"
+            updates["LIBRARIAN_LLM_MODEL"] = resolvedModel
+            if resolvedBase.isEmpty {
                 updates.updateValue(nil, forKey: "LIBRARIAN_LLM_BASE_URL")
+            } else {
+                updates["LIBRARIAN_LLM_BASE_URL"] = resolvedBase
+            }
+            if preset.keyAccount == "OPENAI_API_KEY" {
                 updates.updateValue(nil, forKey: "LIBRARIAN_LLM_API_KEY_ENV")
-            case .openai, .anthropic, .custom:
-                let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmedKey.isEmpty else {
-                    statusIsError = true
-                    statusMessage = "Enter an API key"
-                    return
-                }
-                let resolvedModel = modelName.isEmpty ? preset.defaultModel : modelName
-                guard !resolvedModel.isEmpty else {
-                    statusIsError = true
-                    statusMessage = "Enter a model name"
-                    return
-                }
-                updates["LIBRARIAN_LLM_PROVIDER"] = "openai-compatible"
-                updates["LIBRARIAN_LLM_MODEL"] = resolvedModel
-                updates[preset.keyEnvName] = trimmedKey
-                if preset == .anthropic {
-                    updates["LIBRARIAN_LLM_BASE_URL"] = preset.fixedBaseURL
-                    updates["LIBRARIAN_LLM_API_KEY_ENV"] = preset.keyEnvName
-                } else if preset == .custom {
-                    let trimmedBase = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !trimmedBase.isEmpty else {
-                        statusIsError = true
-                        statusMessage = "Enter the provider's base URL"
-                        return
-                    }
-                    updates["LIBRARIAN_LLM_BASE_URL"] = trimmedBase
-                    updates.updateValue(nil, forKey: "LIBRARIAN_LLM_API_KEY_ENV")
-                } else {
-                    updates.updateValue(nil, forKey: "LIBRARIAN_LLM_BASE_URL")
-                    updates.updateValue(nil, forKey: "LIBRARIAN_LLM_API_KEY_ENV")
-                }
-            }
-            try EnvFile.update(updates)
-            await model.restartBackend()
-            statusIsError = false
-            statusMessage = model.serverOnline
-                ? "Applied — backend restarted"
-                : "Saved — backend restarting…"
-        } catch {
-            statusIsError = true
-            statusMessage = error.localizedDescription
-        }
-    }
-}
-
-// MARK: - Server
-
-struct ServerSettingsView: View {
-    @EnvironmentObject private var model: AppModel
-    @AppStorage(AppModel.baseURLKey) private var baseURL = AppModel.defaultBaseURL
-    @AppStorage(AppModel.apiKeyKey) private var apiKey = ""
-    @AppStorage(AppModel.useEmbeddedKey) private var useEmbedded = true
-    @State private var testResult: String?
-    @State private var testOK = false
-
-    private var embeddedAvailable: Bool {
-        BackendController.isEmbeddedAvailable
-    }
-
-    var body: some View {
-        Form {
-            if embeddedAvailable {
-                Section {
-                    Toggle("Run the built-in backend automatically", isOn: $useEmbedded)
-                        .onChange(of: useEmbedded) {
-                            Task { await model.applyBackendPreference() }
-                        }
-                    LabeledContent("Data folder") {
-                        Button("Reveal in Finder") {
-                            model.backend.revealDataFolder()
-                        }
-                    }
-                } header: {
-                    Text("Built-in backend")
-                } footer: {
-                    Text(
-                        "Documents, the database, and converted outputs live in "
-                            + "~/Library/Application Support/Librarian."
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-            }
-            Section("External server") {
-                TextField("Server URL", text: $baseURL, prompt: Text(AppModel.defaultBaseURL))
-                    .textFieldStyle(.roundedBorder)
-                    .autocorrectionDisabled()
-                    .disabled(embeddedAvailable && useEmbedded)
-                SecureField("API key (optional)", text: $apiKey)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(embeddedAvailable && useEmbedded)
-            }
-            Section {
-                HStack {
-                    Button("Test Connection") {
-                        Task { await testConnection() }
-                    }
-                    if let testResult {
-                        Label(
-                            testResult,
-                            systemImage: testOK ? "checkmark.circle.fill" : "xmark.circle.fill"
-                        )
-                        .foregroundStyle(testOK ? .green : .red)
-                        .font(.callout)
-                    }
-                }
-            } footer: {
-                Text(
-                    embeddedAvailable
-                        ? "Turn off the built-in backend to point the app at a remote "
-                            + "Librarian server instead."
-                        : "This build has no bundled backend. Start one with "
-                            + "“librarian api” or point the URL at a remote server."
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            } else {
+                updates["LIBRARIAN_LLM_API_KEY_ENV"] = preset.keyAccount
             }
         }
-        .formStyle(.grouped)
-        .padding(.bottom, 8)
-    }
-
-    private func testConnection() async {
         do {
-            let version = try await model.client.version()
-            testOK = true
-            testResult = "Connected to Librarian v\(version)"
+            try EnvFile.update(updates)
         } catch {
-            testOK = false
-            testResult = error.localizedDescription
+            statusOK = false
+            statusLine = error.localizedDescription
+            return
         }
-        await model.refresh()
+
+        if preset == .none {
+            await model.restartBackend()
+            statusOK = true
+            statusLine = Copy.providerNoneNote
+            return
+        }
+
+        // Validate the key directly against the provider before restarting.
+        let valid = await Self.validateKey(
+            base: resolvedBase.isEmpty ? "https://api.openai.com/v1" : resolvedBase,
+            key: trimmedKey
+        )
+        await model.restartBackend()
+        statusOK = valid
+        statusLine = valid ? Copy.providerConnected(resolvedModel) : Copy.providerKeyFailed
+    }
+
+    /// GET {base}/models with the key; 2xx means the credentials work.
+    private static func validateKey(base: String, key: String) async -> Bool {
+        guard let url = URL(string: base.hasSuffix("/") ? base + "models" : base + "/models")
+        else { return false }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 3
+        if !key.isEmpty {
+            request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            request.setValue(key, forHTTPHeaderField: "x-api-key")
+            // Anthropic's native API requires a version header; everyone
+            // else ignores it.
+            request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        }
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { return false }
+            return (200..<300).contains(http.statusCode)
+        } catch {
+            return false
+        }
     }
 }

@@ -1,29 +1,30 @@
 # Librarian for Mac
 
-A native SwiftUI app for the Librarian engine. Drag files in, watch them get
-converted, cleaned, and classified with live progress, then read, search, and
-export the results. Release builds ship the entire backend inside the app —
-download, drag to Applications, double-click, done.
+Handbrake for documents. Drop files into one window, pick a destination
+folder and format, and cleaned files appear there automatically — converted,
+cleaned, and classified by the engine bundled inside the app. Download, drag
+to Applications, double-click, done.
 
-## Feature coverage
+## How it's organized
 
-Every user-facing CLI command has a GUI equivalent:
-
-| CLI | In the app |
-| --- | --- |
-| `librarian import` / `ingest` | Drag and drop anywhere, or toolbar **Import** (files or folders). Settings → General toggles automatic processing (ingest-only when off). |
-| `librarian process` | **Process** button on a document; runs start automatically after import by default. |
-| `librarian list` / `show` | Library sidebar; detail view with metadata, classification, and Cleaned/Original tabs. |
-| `librarian search --details` | Sidebar search with snippets, plus a cleaned/raw scope toggle. |
-| `librarian export` | **Export** menu: Markdown/text/JSON, one click to the configured output folder, Save As…, transcript-citation exports, and Export All. |
-| `librarian delete` | **Delete** button (with confirmation). |
-| `librarian status` | Activity panel: per-run stage, chunk progress, expandable events, **Cancel**/**Retry**. |
-| `librarian convert` / `convert-dir` | Tools → **Convert File** / **Convert Folder**. |
-| `librarian transcript-normalize` / `transcript-find` | Tools → **Normalize Transcript** / **Find in Transcript**. |
-| `librarian doctor` / `version` | Tools → **Diagnostics**: capability checks, backend version and readiness. |
-| `librarian init` / `migrate` | Automatic on first launch; Diagnostics → **Run Migrations** for upgrades. |
-| `librarian worker` | The app processes runs in the background automatically; the Activity panel is the worker view. |
-| `librarian api` | The embedded backend the app starts and supervises. |
+- **The window is the queue.** Every dropped file shows its stage (Waiting →
+  Sending → Converting → Cleaning → Classifying → Saved) and ends with
+  **Show in Finder** or a plain-words failure with **Retry**. The cleaned
+  file is saved to your destination folder automatically; name collisions
+  get " (2)" appended, never overwritten.
+- **Destination strip** at the top: Save to (any folder; default
+  `~/Documents/Librarian`) and Format (Markdown, Plain Text, JSON).
+- **Settings (⌘, or the gear)**: one pane. Provider (Anthropic / OpenAI /
+  OpenAI-compatible / Ollama / None), model, API key with inline validation.
+  Keys are stored in the macOS Keychain — never on disk — and handed to the
+  engine through its environment. With Provider = None, files are converted
+  and organized without AI cleaning, so the app works with zero setup.
+  Advanced (collapsed): keep originals alongside outputs, or connect to a
+  remote Librarian server.
+- **Tools menu** (menu bar): Convert File, Convert Folder, Normalize
+  Transcript, Find in Transcript — the CLI's file utilities.
+- **Help → Diagnostics…**: engine capability checks (`doctor`), readiness,
+  migrations, and log access.
 
 ## Install (for users)
 
@@ -69,22 +70,21 @@ Your data lives in `~/Library/Application Support/Librarian`:
 
 ### Connecting an LLM provider
 
-Out of the box the app uses the built-in mock cleaner, which works offline.
-For real LLM cleaning and classification, open **Settings (⌘,) → AI
-Provider**, pick **Anthropic**, **OpenAI**, or **Custom (OpenAI-compatible)**,
-paste your API key, and press **Apply & Restart Backend**. The Anthropic
-preset uses Anthropic's OpenAI-compatible endpoint
-(`https://api.anthropic.com/v1`) with `claude-sonnet-4-6` by default; the
-model field accepts any model your provider offers.
+Out of the box the app converts and organizes documents without AI cleaning.
+For real LLM cleaning and classification, open **Settings (⌘,)**, pick
+**Anthropic**, **OpenAI**, **OpenAI-compatible**, or **Ollama**, paste your
+API key, and press **Apply** — the key is validated against the provider and
+the engine restarts with the new configuration. The Anthropic preset uses
+Anthropic's OpenAI-compatible endpoint (`https://api.anthropic.com/v1`) with
+`claude-sonnet-4-6` by default; the Ollama preset talks to a local Ollama at
+`http://127.0.0.1:11434/v1` and needs no key.
 
-The settings are stored in `~/Library/Application Support/Librarian/.env`
-(file mode 0600), which you can also edit by hand:
-
-```bash
-LIBRARIAN_LLM_PROVIDER=openai-compatible
-LIBRARIAN_LLM_MODEL=gpt-4.1-mini
-OPENAI_API_KEY=sk-...
-```
+API keys are stored in the macOS Keychain and passed to the engine through
+its process environment — they are never written to disk. Non-secret
+settings (provider, model, base URL) live in
+`~/Library/Application Support/Librarian/.env`, which you can also edit by
+hand; a key found in a legacy `.env` is migrated into the Keychain
+automatically.
 
 Restart the backend (quit and reopen the app, or use the status pill →
 Restart) to apply changes. Any `LIBRARIAN_*` setting from

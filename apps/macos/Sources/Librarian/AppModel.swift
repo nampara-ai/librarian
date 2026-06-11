@@ -8,24 +8,21 @@ final class AppModel: ObservableObject {
     static let apiKeyKey = "librarian.apiKey"
     static let useEmbeddedKey = "librarian.useEmbeddedBackend"
     static let outputFolderKey = "librarian.outputFolderPath"
-    static let autoProcessKey = "librarian.autoProcessUploads"
-    static let searchScopeKey = "librarian.searchScope"
+    static let exportFormatKey = "librarian.exportFormat"
+    static let keepOriginalsKey = "librarian.keepOriginals"
     static let defaultBaseURL = "http://127.0.0.1:8080"
 
-    /// Keep the uploads feed bounded so long sessions do not accumulate rows.
-    static let maxUploadRows = 50
+    /// Items stuck in a non-terminal stage longer than this are failed.
+    static let stageTimeout: TimeInterval = 15 * 60
 
     let backend = BackendController()
 
-    @Published var documents: [Document] = []
-    @Published var runs: [Run] = []
-    @Published var uploads: [UploadItem] = []
+    @Published var queue: [QueueItem] = []
     @Published var serverOnline = false
-    @Published var lastError: String?
-    @Published var searchText = ""
-    @Published var searchResults: [SearchResult] = []
-    @Published var isSearching = false
 
+    private var documents: [Document] = []
+    private var runs: [Run] = []
+    private var exportsInFlight: Set<UUID> = []
     private var pollTask: Task<Void, Never>?
     private var backendObservation: AnyCancellable?
 
@@ -41,24 +38,33 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.object(forKey: Self.useEmbeddedKey) as? Bool ?? true
     }
 
-    /// Process uploads automatically after ingest (the CLI `--process` flag);
-    /// off matches plain `librarian ingest`.
-    var autoProcessUploads: Bool {
-        UserDefaults.standard.object(forKey: Self.autoProcessKey) as? Bool ?? true
-    }
-
-    /// Destination folder for exported outputs. Defaults to ~/Downloads.
+    /// Where cleaned files land. Default: ~/Documents/Librarian, created
+    /// lazily when the first file is saved.
     var outputFolderURL: URL {
         if let path = UserDefaults.standard.string(forKey: Self.outputFolderKey),
            !path.isEmpty {
             return URL(fileURLWithPath: path, isDirectory: true)
         }
-        return FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser
+        let documentsDir = FileManager.default.urls(
+            for: .documentDirectory, in: .userDomainMask
+        ).first ?? FileManager.default.homeDirectoryForCurrentUser
+        return documentsDir.appendingPathComponent("Librarian", isDirectory: true)
     }
 
-    var searchScope: String {
-        UserDefaults.standard.string(forKey: Self.searchScopeKey) ?? "cleaned"
+    var exportFormat: ExportFormat {
+        get {
+            ExportFormat(
+                rawValue: UserDefaults.standard.string(forKey: Self.exportFormatKey) ?? "md"
+            ) ?? .markdown
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: Self.exportFormatKey)
+            objectWillChange.send()
+        }
+    }
+
+    var keepOriginals: Bool {
+        UserDefaults.standard.bool(forKey: Self.keepOriginalsKey)
     }
 
     var client: APIClient {
@@ -72,7 +78,7 @@ final class AppModel: ObservableObject {
     }
 
     var hasActiveWork: Bool {
-        runs.contains(where: \.isActive) || uploads.contains { $0.state == .uploading }
+        queue.contains { !$0.stage.isTerminal }
     }
 
     // MARK: - Lifecycle
@@ -101,7 +107,7 @@ final class AppModel: ObservableObject {
         await refresh()
     }
 
-    /// Restart the embedded backend so .env configuration changes apply.
+    /// Restart the embedded backend so configuration changes apply.
     func restartBackend() async {
         guard useEmbeddedBackend, BackendController.isEmbeddedAvailable else { return }
         await backend.restart()
@@ -120,40 +126,48 @@ final class AppModel: ObservableObject {
             serverOnline = try await client.health()
         } catch {
             serverOnline = false
+            // Still apply timeouts so nothing spins forever while offline.
+            reconcileQueue()
             return
         }
-        do {
-            async let documentsPage = client.listDocuments()
-            async let runsPage = client.listRuns()
-            let (loadedDocuments, loadedRuns) = try await (documentsPage, runsPage)
-            documents = loadedDocuments.documents
-            runs = loadedRuns.runs
-        } catch {
-            lastError = error.localizedDescription
+        if hasActiveWork {
+            do {
+                async let documentsPage = client.listDocuments()
+                async let runsPage = client.listRuns()
+                let (loadedDocuments, loadedRuns) = try await (documentsPage, runsPage)
+                documents = loadedDocuments.documents
+                runs = loadedRuns.runs
+            } catch {
+                // Transient fetch errors leave the queue as-is; the timeout
+                // below fails items that never make progress.
+            }
+            reconcileQueue()
         }
     }
 
-    // MARK: - Ingest (drag and drop, Import panel)
+    // MARK: - Adding files
 
     func handleDrop(of urls: [URL]) {
         for url in expandDroppedURLs(urls) {
-            let item = UploadItem(id: UUID(), filename: url.lastPathComponent, state: .uploading)
-            uploads.insert(item, at: 0)
-            if uploads.count > Self.maxUploadRows {
-                uploads.removeLast(uploads.count - Self.maxUploadRows)
-            }
-            Task { await self.upload(url: url, itemID: item.id) }
+            let item = QueueItem(
+                id: UUID(),
+                sourceURL: url,
+                stage: .queued,
+                documentID: nil,
+                runID: nil,
+                startedAt: Date()
+            )
+            queue.append(item)
+            Task { await self.upload(itemID: item.id) }
         }
     }
 
-    /// `librarian import` equivalent: pick files or folders and ingest them.
-    func presentImportPanel() {
+    func presentChooseFilesPanel() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
-        panel.message = "Choose files or folders to add to your library"
-        panel.prompt = "Import"
+        panel.prompt = "Add"
         panel.begin { [weak self] response in
             guard response == .OK else { return }
             let urls = panel.urls
@@ -167,9 +181,8 @@ final class AppModel: ObservableObject {
         var files: [URL] = []
         for url in urls {
             var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
-                continue
-            }
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+            else { continue }
             if isDirectory.boolValue {
                 let enumerator = FileManager.default.enumerator(
                     at: url,
@@ -192,162 +205,202 @@ final class AppModel: ObservableObject {
         return files
     }
 
-    private func upload(url: URL, itemID: UUID) async {
+    // MARK: - Pipeline
+
+    private func upload(itemID: UUID) async {
+        guard let index = queue.firstIndex(where: { $0.id == itemID }) else { return }
+        let sourceURL = queue[index].sourceURL
+        setStage(itemID, .uploading(progress: nil))
         let client = self.client
         do {
             let contents = try await Task.detached(priority: .userInitiated) {
-                try Data(contentsOf: url)
+                try Data(contentsOf: sourceURL)
             }.value
             let document = try await client.uploadDocument(
-                filename: url.lastPathComponent,
+                filename: sourceURL.lastPathComponent,
                 contents: contents
             )
-            if autoProcessUploads {
-                _ = try await client.createRun(documentId: document.id)
+            update(itemID) { item in
+                item.documentID = document.id
+                item.startedAt = Date()
             }
-            setUploadState(itemID, to: .done)
-            await refresh()
+            let run = try await client.createRun(documentId: document.id)
+            update(itemID) { item in
+                item.runID = run.id
+                item.stage = .converting(progress: nil)
+            }
         } catch {
-            setUploadState(itemID, to: .failed(error.localizedDescription))
-        }
-    }
-
-    private func setUploadState(_ id: UUID, to state: UploadItem.State) {
-        guard let index = uploads.firstIndex(where: { $0.id == id }) else { return }
-        uploads[index].state = state
-    }
-
-    func clearFinishedUploads() {
-        uploads.removeAll { $0.state != .uploading }
-    }
-
-    // MARK: - Document and run actions
-
-    func process(documentId: String) async {
-        do {
-            _ = try await client.createRun(documentId: documentId)
-            await refresh()
-        } catch {
-            lastError = error.localizedDescription
-        }
-    }
-
-    func delete(documentId: String) async {
-        do {
-            try await client.deleteDocument(id: documentId)
-            await refresh()
-        } catch {
-            lastError = error.localizedDescription
-        }
-    }
-
-    func cancelRun(id: String) async {
-        do {
-            _ = try await client.cancelRun(id: id)
-            await refresh()
-        } catch {
-            lastError = error.localizedDescription
-        }
-    }
-
-    func retryRun(id: String) async {
-        do {
-            _ = try await client.retryRun(id: id)
-            await refresh()
-        } catch {
-            lastError = error.localizedDescription
-        }
-    }
-
-    func runSearch() async {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else {
-            searchResults = []
-            return
-        }
-        isSearching = true
-        defer { isSearching = false }
-        do {
-            searchResults = try await client.search(query: query, scope: searchScope)
-        } catch {
-            searchResults = []
-        }
-    }
-
-    // MARK: - Export
-
-    /// Export to the configured output folder without a save panel; returns
-    /// the written file URL.
-    @discardableResult
-    func exportToOutputFolder(
-        document: Document,
-        format: ExportFormat,
-        citationQuote: String? = nil
-    ) async -> URL? {
-        do {
-            let data = try await client.exportRaw(
-                documentId: document.id,
-                format: format,
-                citationQuote: citationQuote
+            setStage(
+                itemID,
+                .failed(
+                    reason: Copy.userFacingReason(for: error.localizedDescription),
+                    retryable: true
+                )
             )
+        }
+    }
+
+    /// Fold backend documents and runs into queue stages, fire exports for
+    /// finished documents, and time out items that stopped making progress.
+    private func reconcileQueue() {
+        let now = Date()
+        for item in queue where !item.stage.isTerminal {
+            if now.timeIntervalSince(item.startedAt) > Self.stageTimeout {
+                setStage(item.id, .failed(reason: Copy.reasonTimeout, retryable: true))
+                continue
+            }
+            guard let documentID = item.documentID else { continue }
+            let run = runs.first { $0.documentId == documentID }
+            let document = documents.first { $0.id == documentID }
+
+            if let run, run.status == "failed" {
+                setStage(
+                    item.id,
+                    .failed(reason: Copy.userFacingReason(for: run.error), retryable: true)
+                )
+                continue
+            }
+            if document?.status == "failed" {
+                setStage(
+                    item.id,
+                    .failed(reason: Copy.userFacingReason(for: run?.error), retryable: true)
+                )
+                continue
+            }
+            if document?.status == "ready" {
+                startExport(itemID: item.id, documentID: documentID)
+                continue
+            }
+            if let run, run.isActive {
+                setStage(item.id, stage(for: run))
+            }
+        }
+    }
+
+    private func stage(for run: Run) -> QueueItem.Stage {
+        switch run.stage {
+        case "clean", "validate", "assemble":
+            return .cleaning(progress: min(max(run.fractionComplete, 0), 1))
+        case "classify", "index", "complete":
+            return .classifying(progress: nil)
+        default:
+            return .converting(progress: nil)
+        }
+    }
+
+    private func startExport(itemID: UUID, documentID: String) {
+        guard !exportsInFlight.contains(itemID) else { return }
+        exportsInFlight.insert(itemID)
+        let format = exportFormat
+        let client = self.client
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.exportsInFlight.remove(itemID) }
+            do {
+                let data = try await client.exportRaw(documentId: documentID, format: format)
+                await self.finishExport(itemID: itemID, data: data, format: format)
+            } catch {
+                self.setStage(
+                    itemID,
+                    .failed(
+                        reason: Copy.userFacingReason(for: error.localizedDescription),
+                        retryable: true
+                    )
+                )
+            }
+        }
+    }
+
+    private func finishExport(itemID: UUID, data: Data, format: ExportFormat) async {
+        guard let item = queue.first(where: { $0.id == itemID }),
+              !item.stage.isDone else { return }
+        do {
             let folder = outputFolderURL
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let base = (document.filename as NSString).deletingPathExtension
-            let stem = base.isEmpty ? document.id : base
-            var destination = folder.appendingPathComponent("\(stem).\(format.fileExtension)")
-            var counter = 2
-            while FileManager.default.fileExists(atPath: destination.path) {
-                destination = folder.appendingPathComponent(
-                    "\(stem)-\(counter).\(format.fileExtension)"
-                )
-                counter += 1
-            }
+            let stem = item.sourceURL.deletingPathExtension().lastPathComponent
+            let destination = collisionFreeURL(
+                in: folder,
+                stem: stem.isEmpty ? "document" : stem,
+                fileExtension: format.fileExtension
+            )
             try data.write(to: destination)
-            return destination
+            if keepOriginals {
+                let originalCopy = collisionFreeURL(
+                    in: folder,
+                    stem: item.sourceURL.deletingPathExtension().lastPathComponent,
+                    fileExtension: item.sourceURL.pathExtension
+                )
+                try? FileManager.default.copyItem(at: item.sourceURL, to: originalCopy)
+            }
+            setStage(itemID, .done(outputURL: destination))
         } catch {
-            lastError = error.localizedDescription
-            return nil
+            setStage(
+                itemID,
+                .failed(
+                    reason: Copy.userFacingReason(for: error.localizedDescription),
+                    retryable: true
+                )
+            )
         }
     }
 
-    /// Export every ready document to the output folder.
-    func exportAll(format: ExportFormat) async -> Int {
-        var exported = 0
-        for document in documents where document.status == "ready" {
-            if await exportToOutputFolder(document: document, format: format) != nil {
-                exported += 1
+    /// Never overwrite, never ask: append " (2)", " (3)", …
+    private func collisionFreeURL(in folder: URL, stem: String, fileExtension: String) -> URL {
+        let suffix = fileExtension.isEmpty ? "" : ".\(fileExtension)"
+        var candidate = folder.appendingPathComponent(stem + suffix)
+        var counter = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = folder.appendingPathComponent("\(stem) (\(counter))\(suffix)")
+            counter += 1
+        }
+        return candidate
+    }
+
+    // MARK: - Queue actions
+
+    func retry(_ itemID: UUID) {
+        update(itemID) { item in
+            item.stage = .queued
+            item.startedAt = Date()
+            item.runID = nil
+        }
+        Task { [weak self] in
+            guard let self, let item = self.queue.first(where: { $0.id == itemID }) else {
+                return
             }
-        }
-        return exported
-    }
-
-    /// Export via a save panel (user picks the destination).
-    func saveAs(document: Document, format: ExportFormat, citationQuote: String? = nil) {
-        let base = (document.filename as NSString).deletingPathExtension
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue =
-            (base.isEmpty ? "export" : base) + "." + format.fileExtension
-        panel.canCreateDirectories = true
-        panel.directoryURL = outputFolderURL
-        let client = self.client
-        let documentId = document.id
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            Task {
+            if let documentID = item.documentID {
                 do {
-                    let data = try await client.exportRaw(
-                        documentId: documentId,
-                        format: format,
-                        citationQuote: citationQuote
-                    )
-                    try data.write(to: url)
-                } catch {
-                    await MainActor.run {
-                        AppDelegate.model?.lastError = error.localizedDescription
+                    let run = try await self.client.createRun(documentId: documentID)
+                    self.update(itemID) { queued in
+                        queued.runID = run.id
+                        queued.stage = .converting(progress: nil)
                     }
+                } catch {
+                    // Backend may have lost the document; start over from the file.
+                    self.update(itemID) { queued in queued.documentID = nil }
+                    await self.upload(itemID: itemID)
                 }
+            } else {
+                await self.upload(itemID: itemID)
             }
         }
+    }
+
+    func remove(_ itemID: UUID) {
+        queue.removeAll { $0.id == itemID }
+        exportsInFlight.remove(itemID)
+    }
+
+    func clearFinished() {
+        queue.removeAll { $0.stage.isDone }
+    }
+
+    func revealInFinder(_ url: URL) {
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func openFile(_ url: URL) {
+        NSWorkspace.shared.open(url)
     }
 
     func chooseOutputFolder() {
@@ -357,7 +410,6 @@ final class AppModel: ObservableObject {
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
         panel.directoryURL = outputFolderURL
-        panel.message = "Choose where exported outputs are saved"
         panel.prompt = "Choose"
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
@@ -368,12 +420,14 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func revealInFinder(_ url: URL) {
-        NSWorkspace.shared.activateFileViewerSelecting([url])
+    // MARK: - Helpers
+
+    private func update(_ itemID: UUID, _ mutate: (inout QueueItem) -> Void) {
+        guard let index = queue.firstIndex(where: { $0.id == itemID }) else { return }
+        mutate(&queue[index])
     }
 
-    func copyToPasteboard(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+    private func setStage(_ itemID: UUID, _ stage: QueueItem.Stage) {
+        update(itemID) { $0.stage = stage }
     }
 }

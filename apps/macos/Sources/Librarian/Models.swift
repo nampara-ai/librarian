@@ -123,14 +123,42 @@ enum ExportFormat: String, CaseIterable, Identifiable {
     var fileExtension: String { rawValue }
 }
 
-struct UploadItem: Identifiable, Hashable {
-    enum State: Hashable {
-        case uploading
-        case done
-        case failed(String)
+/// One row in the main-window queue (redesign spec §5). The whole window
+/// renders from this; it is a projection over uploads, documents, and runs.
+struct QueueItem: Identifiable {
+    enum Stage {
+        case queued
+        case uploading(progress: Double?)
+        case converting(progress: Double?)
+        case cleaning(progress: Double)
+        case classifying(progress: Double?)
+        case done(outputURL: URL)
+        case failed(reason: String, retryable: Bool)
+
+        var isTerminal: Bool {
+            switch self {
+            case .done, .failed: return true
+            default: return false
+            }
+        }
+
+        var isDone: Bool {
+            if case .done = self { return true }
+            return false
+        }
+
+        var isFailed: Bool {
+            if case .failed = self { return true }
+            return false
+        }
     }
 
     let id: UUID
-    let filename: String
-    var state: State
+    let sourceURL: URL
+    var stage: Stage
+    var documentID: String?
+    var runID: String?
+    var startedAt: Date
+
+    var filename: String { sourceURL.lastPathComponent }
 }
