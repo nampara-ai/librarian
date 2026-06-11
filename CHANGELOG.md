@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.4 - 2026-06-11
+## 1.1.5 - 2026-06-11
 
 The Mac app is redesigned around its real job — a pipeline, not a database browser. One
 window, one column, one verb: drop files, pick a destination, let it cook.
@@ -22,6 +22,11 @@ window, one column, one verb: drop files, pick a destination, let it cook.
   queue is session-scoped, so relaunches start clean while the engine's own storage persists.
 - Lifecycle hardening: backend log handle closed on stop/restart, crashed engines detected
   via terminationHandler, view layer reduced by ~40%.
+- Fixed Swift actor-isolation errors that broke the first compile of the app's CLI-tool and
+  configuration helpers (`BackendController`'s static path helpers are now `nonisolated`). The
+  Mac App workflow now builds the app on every pull request that touches `apps/macos`, so a
+  compile failure can never first surface on an immutable release tag again. The v1.1.4 tag was
+  burned by exactly that failure and joins v1.1.0–v1.1.2 as inert history.
 
 ## 1.1.3 - 2026-06-11
 

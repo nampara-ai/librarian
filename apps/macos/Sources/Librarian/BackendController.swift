@@ -29,18 +29,18 @@ final class BackendController: ObservableObject {
 
     static let candidatePorts = [8765, 8766, 8767, 8768]
 
-    static var bundledPythonURL: URL? {
+    nonisolated static var bundledPythonURL: URL? {
         guard let resources = Bundle.main.resourceURL else { return nil }
         let python = resources.appendingPathComponent("backend/python/bin/python3")
         guard FileManager.default.isExecutableFile(atPath: python.path) else { return nil }
         return python
     }
 
-    static var isEmbeddedAvailable: Bool {
+    nonisolated static var isEmbeddedAvailable: Bool {
         bundledPythonURL != nil
     }
 
-    static var dataDirectory: URL {
+    nonisolated static var dataDirectory: URL {
         let base = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -49,7 +49,7 @@ final class BackendController: ObservableObject {
         return base.appendingPathComponent("Librarian", isDirectory: true)
     }
 
-    static var logFileURL: URL {
+    nonisolated static var logFileURL: URL {
         dataDirectory.appendingPathComponent("backend.log")
     }
 
