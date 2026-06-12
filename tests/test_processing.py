@@ -106,6 +106,8 @@ async def test_ingest_process_and_search_round_trip(tmp_path: Path) -> None:
     assert "horse training transcript" in output.text
     assert classification is not None
     assert classification.code == "636.1"
+    assert classification.title == "Horses & Equines Notes"
+    assert classification.tags == ("horses", "equines")
     assert ingested.document.id in results
     assert detailed_results[0].document_id == ingested.document.id
     assert detailed_results[0].run_id == run.id

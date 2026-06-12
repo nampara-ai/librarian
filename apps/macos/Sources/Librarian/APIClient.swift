@@ -99,17 +99,23 @@ struct APIClient {
 
     /// Raw export body in the requested format (Markdown/text bodies, or the
     /// JSON document for `.json`), optionally with transcript citation evidence.
+    /// The engine suggests an output filename stem ("{dewey code} {title}")
+    /// via a percent-encoded response header.
     func exportRaw(
         documentId: String,
         format: ExportFormat,
         citationQuote: String? = nil
-    ) async throws -> Data {
+    ) async throws -> RawExport {
         var query = [URLQueryItem(name: "format", value: format.rawValue)]
         if let citationQuote, !citationQuote.isEmpty {
             query.append(URLQueryItem(name: "citation_quote", value: citationQuote))
         }
-        let (data, _) = try await send("GET", "/documents/\(documentId)/export", query: query)
-        return data
+        let (data, response) = try await send(
+            "GET", "/documents/\(documentId)/export", query: query
+        )
+        let stem = response.value(forHTTPHeaderField: "X-Librarian-Export-Stem")?
+            .removingPercentEncoding
+        return RawExport(data: data, suggestedStem: stem)
     }
 
     func content(documentId: String, offset: Int = 0) async throws -> ContentPage {

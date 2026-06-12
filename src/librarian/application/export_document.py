@@ -11,6 +11,12 @@ from librarian.domain.models import Classification, CleanedOutput, Document, Tra
 
 ExportFormat = Literal["txt", "md", "json"]
 
+# Characters allowed verbatim in generated filename stems; everything else
+# becomes a space. Path separators and shell-hostile characters are excluded
+# by construction.
+_STEM_SAFE_PUNCTUATION = " .,&'()-"
+_MAX_STEM_CHARS = 100
+
 
 @dataclass(frozen=True, slots=True)
 class ExportedDocument:
@@ -37,12 +43,40 @@ class ExportedDocument:
             return None
         return f"{self.classification.code} - {self.classification.label}"
 
+    def display_title(self) -> str:
+        """Return the classifier's document title, or the source filename stem."""
+        if self.classification and self.classification.title:
+            return self.classification.title
+        return self.document.source.filename.rsplit(".", 1)[0] or "document"
+
+    def export_stem(self) -> str:
+        """Return a filesystem-safe output filename stem.
+
+        Prefers "{dewey code} {title}" when classification produced a title;
+        falls back to the source filename stem otherwise.
+        """
+        if self.classification and self.classification.title:
+            stem = f"{self.classification.code} {self.classification.title}"
+        else:
+            stem = self.document.source.filename.rsplit(".", 1)[0]
+        sanitized = "".join(
+            char if char.isalnum() or char in _STEM_SAFE_PUNCTUATION else " "
+            for char in stem
+        )
+        collapsed = " ".join(sanitized.split()).strip(". ")
+        return collapsed[:_MAX_STEM_CHARS].strip(". ") or "document"
+
     def _render_markdown(self) -> str:
-        title = self.document.source.filename.rsplit(".", 1)[0]
-        lines = [f"# {title}", ""]
+        lines = [f"# {self.display_title()}", ""]
+        if self.classification:
+            summary = self.classification.summary.strip()
+            if summary:
+                lines.extend([f"> {summary.replace(chr(10), ' ')}", ""])
         classification = self.classification_label()
         if classification:
             lines.extend([f"Classification: {classification}", ""])
+        if self.classification and self.classification.tags:
+            lines.extend([f"Tags: {', '.join(self.classification.tags)}", ""])
         if self.transcript_citation:
             citation = self.transcript_citation
             lines.extend(
@@ -57,14 +91,19 @@ class ExportedDocument:
                     "",
                 ]
             )
-        lines.append(self.output.text)
+        lines.extend(["---", "", self.output.text])
         return "\n".join(lines)
 
     def _render_json(self) -> str:
+        classification = self.classification
         payload: dict[str, object] = {
             "document_id": str(self.document.id),
             "filename": self.document.source.filename,
             "classification": self.classification_label(),
+            "title": classification.title if classification else None,
+            "summary": classification.summary if classification else None,
+            "tags": list(classification.tags) if classification else [],
+            "suggested_stem": self.export_stem(),
             "text": self.output.text,
         }
         if self.transcript_citation:

@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.2.0 - 2026-06-12
+
+Cleaned documents now come out of the pipeline shelf-ready: named, summarized, and tagged.
+
+- Output files get a clean library filename: the Dewey code followed by an AI-generated
+  document title, e.g. `636.1 Saddle Fit and Groundwork Notes.md`. The engine suggests the
+  name on every export (sanitized for the filesystem and HTTP headers), the Mac app uses it
+  when auto-saving to the destination folder, and identical or near-identical documents that
+  produce the same name fall into the existing " (2)", " (3)" collision numbering — never
+  overwritten. When classification produced no title, the original filename is used as before.
+- Markdown exports open with an 80-100 word synopsis of the document, followed by the
+  classification and topical tags, then a separator and the untouched cleaned text. JSON
+  exports carry the new `title`, `summary`, `tags`, and `suggested_stem` fields; plain-text
+  exports remain the cleaned text verbatim.
+- All of this comes from the classification stage, not the cleaning stage: the new dewey_v3
+  classification prompt asks for a title and 3-7 tags alongside the existing summary, code,
+  and category. The cleaning prompts are untouched, the classifier's response stays
+  schema-validated with the existing heuristic fallback (worst case: original filename, no
+  synopsis — never a stalled run or altered content), and dewey_v1/v2 remain selectable via
+  `LIBRARIAN_CLASSIFICATION_PROMPT_VERSION`.
+
 ## 1.1.8 - 2026-06-11
 
 Closes the last silent black hole. A stale preference combination — built-in engine disabled

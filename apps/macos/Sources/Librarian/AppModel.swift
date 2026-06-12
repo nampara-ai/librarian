@@ -348,8 +348,8 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             defer { self.exportsInFlight.remove(itemID) }
             do {
-                let data = try await client.exportRaw(documentId: documentID, format: format)
-                await self.finishExport(itemID: itemID, data: data, format: format)
+                let export = try await client.exportRaw(documentId: documentID, format: format)
+                await self.finishExport(itemID: itemID, export: export, format: format)
             } catch {
                 self.setStage(
                     itemID,
@@ -362,19 +362,21 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func finishExport(itemID: UUID, data: Data, format: ExportFormat) async {
+    private func finishExport(itemID: UUID, export: RawExport, format: ExportFormat) async {
         guard let item = queue.first(where: { $0.id == itemID }),
               !item.stage.isDone else { return }
         do {
             let folder = outputFolderURL
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let stem = item.sourceURL.deletingPathExtension().lastPathComponent
+            let sourceStem = item.sourceURL.deletingPathExtension().lastPathComponent
+            let stem = Self.sanitizedExportStem(export.suggestedStem)
+                ?? (sourceStem.isEmpty ? "document" : sourceStem)
             let destination = collisionFreeURL(
                 in: folder,
-                stem: stem.isEmpty ? "document" : stem,
+                stem: stem,
                 fileExtension: format.fileExtension
             )
-            try data.write(to: destination)
+            try export.data.write(to: destination)
             if keepOriginals {
                 let originalCopy = collisionFreeURL(
                     in: folder,
@@ -393,6 +395,24 @@ final class AppModel: ObservableObject {
                 )
             )
         }
+    }
+
+    /// The engine sanitizes its suggested stem, but the filesystem is ours:
+    /// strip anything path-hostile again before trusting it, and reject empty
+    /// results so the caller falls back to the source filename.
+    static func sanitizedExportStem(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        var hostile = CharacterSet(charactersIn: "/\\:")
+        hostile.formUnion(.controlCharacters)
+        hostile.formUnion(.newlines)
+        let collapsed = raw
+            .components(separatedBy: hostile)
+            .joined(separator: " ")
+            .split(separator: " ")
+            .joined(separator: " ")
+        let trimmed = String(collapsed.prefix(100))
+            .trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     /// Never overwrite, never ask: append " (2)", " (3)", …

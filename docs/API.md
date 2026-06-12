@@ -31,9 +31,14 @@ Requests above `LIBRARIAN_API_MAX_REQUEST_BYTES` are rejected before routing, ei
   When `limit` is omitted, the response is capped by `LIBRARIAN_API_MAX_CONTENT_CHARS`; full
   downloads should use `/export`.
 - `GET /documents/{id}/export?format=json|txt|md`: export latest output. JSON exports return
-  `document_id`, `filename`, `classification`, and `text`; `txt` and `md` exports return
-  `text/plain` and `text/markdown` bodies respectively. Export responses include sanitized
-  `Content-Disposition` filenames with UTF-8 `filename*` values for download clients. Add
+  `document_id`, `filename`, `classification`, `title`, `summary`, `tags`, `suggested_stem`, and
+  `text`; `txt` and `md` exports return `text/plain` and `text/markdown` bodies respectively.
+  Markdown exports open with the classifier's synopsis, classification, and tags before the
+  cleaned text; plain-text exports are the cleaned text verbatim. Export responses include
+  sanitized `Content-Disposition` filenames with UTF-8 `filename*` values for download clients —
+  the stem is the Dewey code plus the classifier's document title when available (also exposed
+  percent-encoded in the `X-Librarian-Export-Stem` header), falling back to the source filename
+  stem. Add
   `citation_quote` when the original source is a timestamped transcript to include optional
   quote-grounded `transcript_citation` evidence in JSON and Markdown exports. Unsupported `format`
   values return `code: "bad_request"` before document lookup.

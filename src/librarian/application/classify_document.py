@@ -15,12 +15,45 @@ from librarian.prompts import PromptCatalog
 
 
 class ClassificationPayload(BaseModel):
-    """Structured LLM classification payload."""
+    """Structured LLM classification payload.
+
+    ``title`` and ``tags`` arrived with the dewey_v3 prompt; they default so
+    dewey_v1/v2 responses keep parsing and a provider that omits them never
+    fails validation.
+    """
 
     summary: str
     dewey_code: str
     category_name: str
     confidence: float | None = None
+    title: str | None = None
+    tags: list[str] = []
+
+
+_MAX_TAGS = 8
+_MAX_TAG_CHARS = 60
+_MAX_TITLE_CHARS = 120
+
+
+def _clean_title(value: str | None) -> str | None:
+    if value is None:
+        return None
+    collapsed = " ".join(value.split())
+    return collapsed[:_MAX_TITLE_CHARS].strip() or None
+
+
+def _clean_tags(values: list[str]) -> tuple[str, ...]:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        tag = " ".join(value.split()).strip().lower()[:_MAX_TAG_CHARS]
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        cleaned.append(tag)
+        if len(cleaned) == _MAX_TAGS:
+            break
+    return tuple(cleaned)
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +101,8 @@ class ClassifyDocument:
             summary=payload.summary.strip() or "No summary available.",
             taxonomy=self.taxonomy.name,
             confidence=payload.confidence,
+            title=_clean_title(payload.title),
+            tags=_clean_tags(payload.tags),
         )
 
 

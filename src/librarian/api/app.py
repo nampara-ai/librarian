@@ -263,6 +263,10 @@ class ExportDocumentResponse(BaseModel):
     document_id: str
     filename: str
     classification: str | None
+    title: str | None = None
+    summary: str | None = None
+    tags: list[str] = []
+    suggested_stem: str
     text: str
     transcript_citation: SearchTranscriptCitationResponse | None = None
 
@@ -2772,7 +2776,12 @@ def _normalize_export_format(format: str) -> ExportFormat:
 
 
 def _export_response(payload: ExportedDocument, format: ExportFormat):
-    headers = {"Content-Disposition": _content_disposition(_export_filename(payload, format))}
+    headers = {
+        "Content-Disposition": _content_disposition(_export_filename(payload, format)),
+        # Percent-encoded so classification titles survive HTTP's latin-1
+        # header restriction; clients decode it to name saved files.
+        "X-Librarian-Export-Stem": quote(_export_stem(payload), safe=""),
+    }
     if format == "json":
         return JSONResponse(json.loads(payload.render("json")), headers=headers)
     if format == "txt":
@@ -2782,11 +2791,16 @@ def _export_response(payload: ExportedDocument, format: ExportFormat):
     raise ValueError(f"Unsupported export format: {format}")
 
 
+def _export_stem(payload: ExportedDocument) -> str:
+    safe = _safe_filename(payload.export_stem())
+    return Path(safe).name.strip(". ") or "document"
+
+
 def _export_filename(payload: ExportedDocument, format: str) -> str:
-    safe_source = _safe_filename(payload.document.source.filename)
-    stem = Path(safe_source).stem.strip(". ") or "document"
     extension = "json" if format == "json" else format
-    return _truncate_utf8_filename(f"{stem}.{extension}", max_bytes=_MAX_UPLOAD_FILENAME_BYTES)
+    return _truncate_utf8_filename(
+        f"{_export_stem(payload)}.{extension}", max_bytes=_MAX_UPLOAD_FILENAME_BYTES
+    )
 
 
 def _content_disposition(filename: str) -> str:
