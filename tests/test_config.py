@@ -56,11 +56,11 @@ def test_settings_reject_invalid_runtime_controls(kwargs: dict[str, Any]) -> Non
         Settings(**kwargs)
 
 
-def test_settings_default_to_v2_prompt_stack() -> None:
+def test_settings_default_prompt_stack() -> None:
     settings = Settings()
 
     assert settings.cleaning_prompt_version == "cmos_v2"
-    assert settings.classification_prompt_version == "dewey_v2"
+    assert settings.classification_prompt_version == "dewey_v3"
 
 
 def test_database_path_defaults_inside_data_dir() -> None:

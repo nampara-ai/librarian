@@ -72,6 +72,7 @@ async def test_sqlite_initializes_schema(tmp_path: Path) -> None:
         "0003_document_scoped_chunks.sql",
         "0004_raw_content_fts.sql",
         "0005_api_audit_events.sql",
+        "0006_classification_title_tags.sql",
     ]
     assert busy_timeout == 5000
     assert str(journal_mode).lower() == "wal"

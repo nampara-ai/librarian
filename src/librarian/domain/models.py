@@ -97,6 +97,8 @@ class Classification:
     summary: str
     taxonomy: str = "dewey"
     confidence: float | None = None
+    title: str | None = None
+    tags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from importlib.resources import files
 from pathlib import Path
-from typing import LiteralString
+from typing import LiteralString, cast
 
 from librarian.application.clean_chunks import CleanedChunk
 from librarian.application.jobs import QueuedRun, QueueStatus
@@ -1177,26 +1177,8 @@ class SQLiteRepository:
     def _save_classification_sync(self, classification: Classification) -> None:
         with self.database.connect() as connection:
             connection.execute(
-                """
-                INSERT INTO classifications (
-                  document_id, code, label, summary, taxonomy, confidence
-                )
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(document_id) DO UPDATE SET
-                  code = excluded.code,
-                  label = excluded.label,
-                  summary = excluded.summary,
-                  taxonomy = excluded.taxonomy,
-                  confidence = excluded.confidence
-                """,
-                (
-                    str(classification.document_id),
-                    classification.code,
-                    classification.label,
-                    classification.summary,
-                    classification.taxonomy,
-                    classification.confidence,
-                ),
+                _CLASSIFICATION_UPSERT_SQL,
+                _classification_upsert_params(classification),
             )
 
     def _get_classification_sync(self, document_id: DocumentId) -> Classification | None:
@@ -1256,26 +1238,8 @@ class SQLiteRepository:
                 (str(output.document_id), str(output.run_id), output.text),
             )
             connection.execute(
-                """
-                INSERT INTO classifications (
-                  document_id, code, label, summary, taxonomy, confidence
-                )
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(document_id) DO UPDATE SET
-                  code = excluded.code,
-                  label = excluded.label,
-                  summary = excluded.summary,
-                  taxonomy = excluded.taxonomy,
-                  confidence = excluded.confidence
-                """,
-                (
-                    str(classification.document_id),
-                    classification.code,
-                    classification.label,
-                    classification.summary,
-                    classification.taxonomy,
-                    classification.confidence,
-                ),
+                _CLASSIFICATION_UPSERT_SQL,
+                _classification_upsert_params(classification),
             )
             connection.execute(
                 "UPDATE documents SET status = ?, updated_at = ? WHERE id = ?",
@@ -2446,8 +2410,52 @@ def _cleaned_output_from_row(row: sqlite3.Row) -> CleanedOutput:
     )
 
 
+_CLASSIFICATION_UPSERT_SQL = """
+    INSERT INTO classifications (
+      document_id, code, label, summary, taxonomy, confidence, title, tags
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(document_id) DO UPDATE SET
+      code = excluded.code,
+      label = excluded.label,
+      summary = excluded.summary,
+      taxonomy = excluded.taxonomy,
+      confidence = excluded.confidence,
+      title = excluded.title,
+      tags = excluded.tags
+"""
+
+
+def _classification_upsert_params(
+    classification: Classification,
+) -> tuple[str, str, str, str, str, float | None, str | None, str]:
+    return (
+        str(classification.document_id),
+        classification.code,
+        classification.label,
+        classification.summary,
+        classification.taxonomy,
+        classification.confidence,
+        classification.title,
+        json.dumps(list(classification.tags)),
+    )
+
+
+def _classification_tags_from_column(value: object) -> tuple[str, ...]:
+    if not isinstance(value, str) or not value:
+        return ()
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(decoded, list):
+        return ()
+    return tuple(str(tag) for tag in cast(list[object], decoded))
+
+
 def _classification_from_row(row: sqlite3.Row) -> Classification:
     confidence = row["confidence"]
+    title = row["title"]
     return Classification(
         document_id=DocumentId(str(row["document_id"])),
         code=str(row["code"]),
@@ -2455,6 +2463,8 @@ def _classification_from_row(row: sqlite3.Row) -> Classification:
         summary=str(row["summary"]),
         taxonomy=str(row["taxonomy"]),
         confidence=float(confidence) if confidence is not None else None,
+        title=str(title) if title is not None else None,
+        tags=_classification_tags_from_column(row["tags"]),
     )
 
 

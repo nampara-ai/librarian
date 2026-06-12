@@ -57,6 +57,12 @@ struct ExportedDocument: Codable {
     let text: String
 }
 
+/// A raw export body plus the engine's suggested output filename stem.
+struct RawExport {
+    let data: Data
+    let suggestedStem: String?
+}
+
 struct SearchResult: Codable, Identifiable, Hashable {
     let documentId: String
     let runId: String?

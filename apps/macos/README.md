@@ -10,8 +10,12 @@ to Applications, double-click, done.
 - **The window is the queue.** Every dropped file shows its stage (Waiting →
   Sending → Converting → Cleaning → Classifying → Saved) and ends with
   **Show in Finder** or a plain-words failure with **Retry**. The cleaned
-  file is saved to your destination folder automatically; name collisions
-  get " (2)" appended, never overwritten.
+  file is saved to your destination folder automatically under a library
+  filename — the Dewey code plus an AI-generated title, like
+  `636.1 Saddle Fit and Groundwork Notes.md` (your original filename if no
+  title was produced). Name collisions get " (2)" appended, never
+  overwritten. Markdown output opens with a short synopsis, the
+  classification, and topic tags above the cleaned text.
 - **Destination strip** at the top: Save to (any folder; default
   `~/Documents/Librarian`) and Format (Markdown, Plain Text, JSON).
 - **Settings (⌘, or the gear)**: one pane. Provider (Anthropic / OpenAI /

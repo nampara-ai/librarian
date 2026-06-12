@@ -300,6 +300,7 @@ def test_api_openapi_has_response_models_for_json_endpoints() -> None:
         "document_id",
         "filename",
         "classification",
+        "suggested_stem",
         "text",
     }
     assert set(schemas["RunEventsResponse"]["required"]) == {"events", "limit", "offset"}

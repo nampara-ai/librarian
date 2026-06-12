@@ -44,6 +44,8 @@ class MockLLMProvider:
                     "summary": " ".join(user_prompt.split("Text to analyze:", 1)[-1].split())[:300],
                     "dewey_code": code,
                     "category_name": label,
+                    "title": f"{label} Notes",
+                    "tags": [part.strip().lower() for part in label.split("&")],
                     "confidence": 1.0,
                 }
             )

@@ -2,7 +2,7 @@
 
 Librarian is a local-first document ingestion, cleaning, classification, and search system. It converts transcripts, Markdown, text files, DOCX, PDFs, and OCR images into clean Markdown or plain text; processes them with an OpenAI-compatible model while preserving source fidelity; classifies the result with Dewey-style labels; and exposes the same engine through a Mac app, a CLI, and a FastAPI service.
 
-Version `1.1.8` is the stable production release. The default deployment is local or single-node: source documents and generated outputs stay in SQLite-backed local storage unless you configure an external model provider for cleaning, classification, or OCR correction.
+Version `1.2.0` is the stable production release. The default deployment is local or single-node: source documents and generated outputs stay in SQLite-backed local storage unless you configure an external model provider for cleaning, classification, or OCR correction.
 
 ## Mac App
 
@@ -31,7 +31,7 @@ From a downloaded release wheel:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install "nampara_librarian-1.1.8-py3-none-any.whl[all]"
+pip install "nampara_librarian-1.2.0-py3-none-any.whl[all]"
 ```
 
 From a source checkout:

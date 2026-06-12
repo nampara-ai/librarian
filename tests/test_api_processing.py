@@ -195,16 +195,28 @@ def test_api_upload_run_and_get_content(tmp_path: Path) -> None:
 
         exported = client.get(f"/documents/{document_id}/export")
         assert exported.status_code == 200
-        assert exported.json()["classification"] == "636.1 - Horses & Equines"
+        exported_payload = exported.json()
+        assert exported_payload["classification"] == "636.1 - Horses & Equines"
+        assert exported_payload["title"] == "Horses & Equines Notes"
+        assert exported_payload["tags"] == ["horses", "equines"]
+        assert exported_payload["suggested_stem"] == "636.1 Horses & Equines Notes"
+        assert exported_payload["summary"]
 
         exported_md = client.get(f"/documents/{document_id}/export?format=md")
         assert exported_md.status_code == 200
         assert exported_md.headers["x-content-type-options"] == "nosniff"
         assert exported_md.headers["cache-control"] == "no-store"
         assert exported_md.headers["content-disposition"] == (
-            "attachment; filename=\"notes.md\"; filename*=UTF-8''notes.md"
+            'attachment; filename="636.1 Horses & Equines Notes.md"; '
+            "filename*=UTF-8''636.1%20Horses%20%26%20Equines%20Notes.md"
         )
-        assert "# notes" in exported_md.text
+        assert exported_md.headers["x-librarian-export-stem"] == (
+            "636.1%20Horses%20%26%20Equines%20Notes"
+        )
+        assert "# Horses & Equines Notes" in exported_md.text
+        assert "Classification: 636.1 - Horses & Equines" in exported_md.text
+        assert "Tags: horses, equines" in exported_md.text
+        assert "\n---\n" in exported_md.text
 
 
 def test_api_search_results_include_transcript_citation(tmp_path: Path) -> None:
@@ -320,8 +332,12 @@ def test_api_export_uses_safe_content_disposition_filename(tmp_path: Path) -> No
         exported = client.get(f"/documents/{document_id}/export", params={"format": "txt"})
 
     assert exported.status_code == 200
+    # Classification supplies the stem, so the hostile source filename never
+    # reaches the header; ExportedDocument.export_stem unit tests cover the
+    # fallback sanitization when classification is absent.
     assert exported.headers["content-disposition"] == (
-        "attachment; filename=\"_bad_name_.txt\"; filename*=UTF-8''%22bad%3Bname%22.txt"
+        'attachment; filename="636.1 Horses & Equines Notes.txt"; '
+        "filename*=UTF-8''636.1%20Horses%20%26%20Equines%20Notes.txt"
     )
     assert "\r" not in exported.headers["content-disposition"]
     assert "\n" not in exported.headers["content-disposition"]
@@ -1363,7 +1379,7 @@ def test_api_config_exposes_operational_controls(tmp_path: Path) -> None:
     assert payload["ocr_preserve_page_images"] is True
     assert payload["ocr_rotation_retry"] is True
     assert payload["cleaning_prompt_version"] == "cmos_v2"
-    assert payload["classification_prompt_version"] == "dewey_v2"
+    assert payload["classification_prompt_version"] == "dewey_v3"
     assert payload["universal_timeout_seconds"] == 77
     assert payload["llm_max_retries"] == settings.llm_max_retries
     assert payload["api_auth_keys_configured"] == 0
