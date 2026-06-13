@@ -44,7 +44,8 @@ if [[ "$WANT" == "x86_64" && "$HOST_ARCH" == "arm64" ]]; then
   RUN=(arch -x86_64)
 fi
 
-[[ -n "$BREW_PREFIX" ]] || BREW_PREFIX="$("${RUN[@]}" brew --prefix)"
+# ${RUN[@]+...} keeps an empty RUN array safe under `set -u` (macOS bash).
+[[ -n "$BREW_PREFIX" ]] || BREW_PREFIX="$(${RUN[@]+"${RUN[@]}"} brew --prefix)"
 DYLIBBUNDLER="$BREW_PREFIX/bin/dylibbundler"
 [[ -x "$DYLIBBUNDLER" ]] || {
   echo "dylibbundler not found at $DYLIBBUNDLER (brew install dylibbundler)" >&2
@@ -105,7 +106,7 @@ for opt_lib in "$BREW_PREFIX"/opt/*/lib; do
 done
 # -of overwrite, -b fix the binaries, -cd create the dest dir,
 # -p set the rewritten load-path prefix relative to each executable.
-"${RUN[@]}" "$DYLIBBUNDLER" -of -b -cd \
+${RUN[@]+"${RUN[@]}"} "$DYLIBBUNDLER" -of -b -cd \
   "${DYLIB_ARGS[@]}" \
   "${SEARCH_ARGS[@]}" \
   -d "$LIB_DIR" \
