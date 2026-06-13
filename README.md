@@ -18,6 +18,9 @@ Everything below covers the engine itself — the CLI and API the app is built o
 
 ## Install
 
+Requires **Python 3.12+**. (The Mac app needs none of this — it bundles the engine, the Python
+runtime, and the OCR tools. This section is for the CLI and API.)
+
 From PyPI:
 
 ```bash
@@ -41,6 +44,35 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev,all]"
 ```
+
+### Optional dependency extras
+
+The base install is intentionally lean; opt into capabilities with extras (or `[all]` for
+everything):
+
+| Extra | Enables |
+| --- | --- |
+| `pdf` | PDF text extraction (`pdfplumber`) |
+| `ocr` | Scanned/image-PDF OCR (`pdf2image`, `pillow`, `pytesseract`) |
+| `universal` | Broad document conversion via `markitdown` (PPTX, XLSX, Outlook, …) |
+| `otel` | OpenTelemetry tracing/metrics export |
+| `all` | All of the above |
+
+### OCR system dependencies (CLI/API only)
+
+OCR for scanned or image-based PDFs needs two **system** binaries that cannot be installed via
+pip — they must be on your `PATH`:
+
+```bash
+# macOS
+brew install tesseract poppler
+
+# Debian/Ubuntu
+sudo apt-get install -y tesseract-ocr poppler-utils
+```
+
+Without them, text-layer PDFs still work, but scanned pages cannot be read. (The Mac app bundles
+both, so app users never need this.) Run `librarian doctor` to verify what's available.
 
 ## Quick Start
 
@@ -126,3 +158,13 @@ Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). API details are in [doc
 ## Privacy
 
 Librarian stores data locally by default. Text is sent to a configured model provider only when processing or OCR correction requires LLM work. API keys belong in environment variables or `.env`, never in Git. CI runs secret scanning, dependency audit, type checking, tests, package build, wheel smoke install, and Docker build checks for every pull request.
+
+## Contributing And Security
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and the
+quality gate, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations. To report a
+vulnerability, follow [SECURITY.md](SECURITY.md). Release history is in [CHANGELOG.md](CHANGELOG.md).
+
+## License
+
+Licensed under the Apache License 2.0 — see [LICENSE](LICENSE).
