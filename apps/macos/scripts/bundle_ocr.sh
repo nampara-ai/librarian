@@ -6,31 +6,30 @@ set -euo pipefail
 # are OCR'd with zero external dependencies — no Homebrew, no PATH setup.
 #
 # Usage:
-#   scripts/bundle_ocr.sh --app dist/Librarian.app [--arch arm64|x86_64]
+#   scripts/bundle_ocr.sh --app dist/Librarian.app --arch arm64|x86_64 \
+#     [--brew-prefix /opt/homebrew]
 #
-# Must run on a runner whose native architecture matches --arch: Homebrew
-# installs binaries for the host arch, so the arm64 DMG is built on Apple
-# Silicon and the x86_64 DMG on an Intel runner. Dependent dylibs are copied
-# into the bundle and their load paths rewritten to @executable_path/../lib
-# with dylibbundler, so nothing points back at /opt/homebrew or /usr/local.
+# Both DMGs build on Apple Silicon runners (Intel runners are scarce). The
+# arm64 binaries come from the native Homebrew at /opt/homebrew; the x86_64
+# binaries come from an x86_64 Homebrew installed under Rosetta at /usr/local,
+# so --brew-prefix selects which one. Dependent dylibs are copied into the
+# bundle and their load paths rewritten to @executable_path/../lib with
+# dylibbundler, so nothing points back at Homebrew.
 
 APP=""
 ARCH="$(uname -m)"
+BREW_PREFIX=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --app) APP="$2"; shift 2 ;;
     --arch) ARCH="$2"; shift 2 ;;
+    --brew-prefix) BREW_PREFIX="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
 
 [[ -d "$APP" ]] || { echo "--app must point at an existing .app bundle" >&2; exit 1; }
-command -v brew >/dev/null || { echo "Homebrew is required to source OCR tools" >&2; exit 1; }
-command -v dylibbundler >/dev/null || {
-  echo "dylibbundler is required (brew install dylibbundler)" >&2
-  exit 1
-}
 
 HOST_ARCH="$(uname -m)"
 case "$ARCH" in
@@ -38,13 +37,20 @@ case "$ARCH" in
   x86_64|amd64) WANT="x86_64" ;;
   *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;;
 esac
-if [[ "$HOST_ARCH" != "$WANT" ]]; then
-  echo "Refusing to bundle $WANT OCR tools on a $HOST_ARCH host: Homebrew binaries" >&2
-  echo "are host-native. Build the $WANT DMG on a $WANT runner." >&2
-  exit 1
+
+# x86_64 binaries on an Apple Silicon host run (and are tooled) under Rosetta.
+RUN=()
+if [[ "$WANT" == "x86_64" && "$HOST_ARCH" == "arm64" ]]; then
+  RUN=(arch -x86_64)
 fi
 
-BREW_PREFIX="$(brew --prefix)"
+[[ -n "$BREW_PREFIX" ]] || BREW_PREFIX="$("${RUN[@]}" brew --prefix)"
+DYLIBBUNDLER="$BREW_PREFIX/bin/dylibbundler"
+[[ -x "$DYLIBBUNDLER" ]] || {
+  echo "dylibbundler not found at $DYLIBBUNDLER (brew install dylibbundler)" >&2
+  exit 1
+}
+
 OCR_DIR="$APP/Contents/Resources/ocr"
 BIN_DIR="$OCR_DIR/bin"
 LIB_DIR="$OCR_DIR/lib"
@@ -60,6 +66,15 @@ for exe in "${EXES[@]}"; do
   src="$BREW_PREFIX/bin/$exe"
   [[ -x "$src" ]] || { echo "Expected OCR tool not found: $src" >&2; exit 1; }
   cp "$src" "$BIN_DIR/$exe"
+  # Each binary must be the architecture we are packaging for.
+  archs="$(lipo -archs "$BIN_DIR/$exe" 2>/dev/null || echo "")"
+  case " $archs " in
+    *" $WANT "*) ;;
+    *)
+      echo "Bundled $exe is '$archs', expected $WANT (wrong --brew-prefix?)" >&2
+      exit 1
+      ;;
+  esac
 done
 
 # English language data (plus orientation/script data for rotation handling).
@@ -90,7 +105,7 @@ for opt_lib in "$BREW_PREFIX"/opt/*/lib; do
 done
 # -of overwrite, -b fix the binaries, -cd create the dest dir,
 # -p set the rewritten load-path prefix relative to each executable.
-dylibbundler -of -b -cd \
+"${RUN[@]}" "$DYLIBBUNDLER" -of -b -cd \
   "${DYLIB_ARGS[@]}" \
   "${SEARCH_ARGS[@]}" \
   -d "$LIB_DIR" \
