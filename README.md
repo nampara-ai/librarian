@@ -2,7 +2,7 @@
 
 Librarian is a local-first document ingestion, cleaning, classification, and search system. It converts transcripts, Markdown, text files, DOCX, PDFs, and OCR images into clean Markdown or plain text; processes them with an OpenAI-compatible model while preserving source fidelity; classifies the result with Dewey-style labels; and exposes the same engine through a Mac app, a CLI, and a FastAPI service.
 
-Version `1.3.0` is the stable production release. The default deployment is local or single-node: source documents and generated outputs stay in SQLite-backed local storage unless you configure an external model provider for cleaning, classification, or OCR correction.
+Version `1.4.0` is the stable production release. The default deployment is local or single-node: source documents and generated outputs stay in SQLite-backed local storage unless you configure an external model provider for cleaning, classification, or OCR correction.
 
 ## Mac App
 
@@ -18,6 +18,9 @@ Everything below covers the engine itself — the CLI and API the app is built o
 
 ## Install
 
+Requires **Python 3.12+**. (The Mac app needs none of this — it bundles the engine, the Python
+runtime, and the OCR tools. This section is for the CLI and API.)
+
 From PyPI:
 
 ```bash
@@ -31,7 +34,7 @@ From a downloaded release wheel:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install "nampara_librarian-1.3.0-py3-none-any.whl[all]"
+pip install "nampara_librarian-1.4.0-py3-none-any.whl[all]"
 ```
 
 From a source checkout:
@@ -41,6 +44,35 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev,all]"
 ```
+
+### Optional dependency extras
+
+The base install is intentionally lean; opt into capabilities with extras (or `[all]` for
+everything):
+
+| Extra | Enables |
+| --- | --- |
+| `pdf` | PDF text extraction (`pdfplumber`) |
+| `ocr` | Scanned/image-PDF OCR (`pdf2image`, `pillow`, `pytesseract`) |
+| `universal` | Broad document conversion via `markitdown` (PPTX, XLSX, Outlook, …) |
+| `otel` | OpenTelemetry tracing/metrics export |
+| `all` | All of the above |
+
+### OCR system dependencies (CLI/API only)
+
+OCR for scanned or image-based PDFs needs two **system** binaries that cannot be installed via
+pip — they must be on your `PATH`:
+
+```bash
+# macOS
+brew install tesseract poppler
+
+# Debian/Ubuntu
+sudo apt-get install -y tesseract-ocr poppler-utils
+```
+
+Without them, text-layer PDFs still work, but scanned pages cannot be read. (The Mac app bundles
+both, so app users never need this.) Run `librarian doctor` to verify what's available.
 
 ## Quick Start
 
@@ -90,6 +122,10 @@ librarian api
 
 `librarian import` converts sources into the workspace by default: converted Markdown/text lands under `<data_dir>/converted` instead of next to your original files. Use `--output-mode` to opt into `new-directory`, `original`, or `subdirectory` placement.
 
+### Automation and scripting
+
+The query and control commands emit machine-readable JSON with `--json`, so an agent can drive the whole pipeline without scraping tables: `ingest --json` and `process --json` return the new `document_id`/`run_id`; `status --json` reports `status`, `stage`, `total_chunks`, and `completed_chunks` for polling; and `list`, `show`, and `search [--details] --json` return structured records. For bulk runs, `librarian import --recursive --process --report report.json` writes a full JSON report, `--manifest <path> --resume` makes large imports idempotent across restarts, and the command exits non-zero if any item failed. `doctor --json`, `admin db-stats --json`, `admin api-audit --json`, and `admin page-manifest --json` round out the machine-readable surface.
+
 Operator commands live under `librarian admin`, including database maintenance, backups, run controls, queue inspection, API audit logs, and PDF page-manifest inspection. Release and quality harnesses live under `librarian maintainer`; they ship with source checkouts only and are excluded from release wheels.
 
 ## API
@@ -122,3 +158,13 @@ Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). API details are in [doc
 ## Privacy
 
 Librarian stores data locally by default. Text is sent to a configured model provider only when processing or OCR correction requires LLM work. API keys belong in environment variables or `.env`, never in Git. CI runs secret scanning, dependency audit, type checking, tests, package build, wheel smoke install, and Docker build checks for every pull request.
+
+## Contributing And Security
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and the
+quality gate, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations. To report a
+vulnerability, follow [SECURITY.md](SECURITY.md). Release history is in [CHANGELOG.md](CHANGELOG.md).
+
+## License
+
+Licensed under the Apache License 2.0 — see [LICENSE](LICENSE).
