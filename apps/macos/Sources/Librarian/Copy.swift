@@ -74,8 +74,9 @@ enum Copy {
         if raw.contains("cannot reach server") {
             return "The engine was restarting — press Retry"
         }
-        if raw.contains("tesseract") || raw.contains("ocr") {
-            return "Scanned image — OCR isn't available in this build"
+        if raw.contains("no extractable text") || raw.contains("scanned pdf ocr failed")
+            || raw.contains("tesseract") || raw.contains("ocr") {
+            return "Couldn't read this PDF — it may be a scan with no readable text"
         }
         if raw.contains("unsupported file extension") || raw.contains("unsupported type") {
             return "This file type isn't supported"

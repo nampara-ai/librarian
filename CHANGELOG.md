@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.3.0 - 2026-06-13
+
+Scanned and image-based PDFs now work in the Mac app, out of the box.
+
+- The Mac app bundles the OCR toolchain (Tesseract and Poppler, with English
+  language data) inside `Librarian.app`, fully self-contained and relocated so it
+  depends on nothing outside the bundle. Previously a PDF with image pages failed
+  at upload: macOS GUI apps inherit only a bare system `PATH`, so the engine could
+  not find an OCR binary even when one was installed via Homebrew. The app now puts
+  its bundled OCR tools (then common Homebrew locations) on the engine's `PATH` and
+  sets `TESSDATA_PREFIX`.
+- A single unreadable page no longer sinks a large mixed PDF: failed pages are
+  skipped and recorded in the page manifest, and ingest fails only when no text can
+  be extracted at all. Genuinely unreadable PDFs now get a clear "this may be a scan
+  with no readable text" message instead of a generic failure.
+- Fixed the misleading "The engine was restarting — press Retry" error on large
+  PDFs. OCR ingest can take minutes, but the app's network client gave up after 30
+  seconds and mislabeled the timeout as an engine restart. The upload/ingest timeout
+  is now generous enough to let OCR finish, so the real result (success or a specific
+  error) reaches you.
+- The macOS build now compiles each DMG on a native-architecture runner (Apple
+  Silicon and Intel) and verifies, on every pull request, that the bundled OCR stack
+  reads a generated test PDF end to end — so an OCR packaging mistake fails the build,
+  never an immutable release tag.
+
 ## 1.2.0 - 2026-06-12
 
 Cleaned documents now come out of the pipeline shelf-ready: named, summarized, and tagged.

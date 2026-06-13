@@ -53,6 +53,27 @@ final class BackendController: ObservableObject {
         dataDirectory.appendingPathComponent("backend.log")
     }
 
+    /// Directory of the bundled OCR command-line tools (tesseract, pdftoppm,
+    /// …), if this build shipped them.
+    nonisolated static var bundledOCRBinURL: URL? {
+        guard let resources = Bundle.main.resourceURL else { return nil }
+        let bin = resources.appendingPathComponent("ocr/bin")
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: bin.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else { return nil }
+        return bin
+    }
+
+    /// Bundled Tesseract language data directory, if present.
+    nonisolated static var bundledTessdataURL: URL? {
+        guard let resources = Bundle.main.resourceURL else { return nil }
+        let tessdata = resources.appendingPathComponent("ocr/share/tessdata")
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: tessdata.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else { return nil }
+        return tessdata
+    }
+
     var embeddedBaseURL: URL? {
         guard case .embedded(let port) = mode else { return nil }
         return URL(string: "http://127.0.0.1:\(port)")
@@ -158,6 +179,25 @@ final class BackendController: ObservableObject {
         for (name, value) in SystemNetworkEnvironment.overlay(dataDirectory: dataDir) {
             environment[name] = value
         }
+        // OCR for scanned/image PDFs needs the `tesseract` and `pdftoppm`
+        // binaries. GUI apps launched from Finder inherit only a bare system
+        // PATH, so we put the bundled OCR tools first, then common Homebrew
+        // locations as a fallback for users who installed their own.
+        var pathEntries: [String] = []
+        if let ocrBin = Self.bundledOCRBinURL {
+            pathEntries.append(ocrBin.path)
+        }
+        if let tessdata = Self.bundledTessdataURL {
+            environment["TESSDATA_PREFIX"] = tessdata.path
+        }
+        let existingPath = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+        pathEntries.append(existingPath)
+        pathEntries.append(contentsOf: ["/opt/homebrew/bin", "/usr/local/bin"])
+        environment["PATH"] = pathEntries.joined(separator: ":")
+        // One unreadable page should never sink a large mixed PDF: skip the
+        // page (recorded in the page manifest) and keep going; ingest only
+        // fails when no text can be extracted at all.
+        environment["LIBRARIAN_OCR_FAIL_ON_PAGE_ERROR"] = "false"
         launched.environment = environment
         // Run from the data directory so an optional `.env` there configures
         // the backend (LLM provider, model, API keys, ...).

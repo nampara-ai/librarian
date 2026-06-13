@@ -1092,6 +1092,57 @@ def test_api_single_upload_ingest_errors_do_not_expose_private_exception_text(
     assert "PRIVATE HORSE SOURCE" not in detail
 
 
+@pytest.mark.parametrize(
+    ("raised", "expected"),
+    [
+        (
+            ValueError("No extractable content found in PDF: /secret/path/scan.pdf"),
+            "This PDF has no extractable text. If it is a scanned document, OCR could not "
+            "read it.",
+        ),
+        (
+            RuntimeError("Scanned PDF OCR requires the 'tesseract' executable on PATH"),
+            "Scanned PDF OCR is unavailable or failed for this document",
+        ),
+    ],
+)
+def test_api_upload_surfaces_helpful_ocr_errors_without_leaking_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    raised: Exception,
+    expected: str,
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+
+    class FailingIngest:
+        async def execute(self, path: Path) -> None:
+            del path
+            raise raised
+
+    class FakeContainer:
+        ingest_document = FailingIngest()
+
+    async def fake_build_ingest_container(*args: object, **kwargs: object) -> FakeContainer:
+        del args, kwargs
+        return FakeContainer()
+
+    monkeypatch.setattr(api_app, "build_ingest_container", fake_build_ingest_container)
+
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/documents",
+            files={"file": ("scan.pdf", b"%PDF-1.4", "application/pdf")},
+        )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail == expected
+    assert "/secret/path" not in detail
+
+
 def test_api_document_list_uses_paginated_response_metadata(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",

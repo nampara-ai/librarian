@@ -1809,6 +1809,13 @@ def _public_ingest_error_detail(exc: Exception) -> str:
         return "Uploaded file appears to be binary"
     if "exceeds" in detail and "bytes" in detail:
         return "Uploaded file exceeds configured size limit"
+    if "No extractable content found in PDF" in detail:
+        return (
+            "This PDF has no extractable text. If it is a scanned document, OCR could not "
+            "read it."
+        )
+    if "tesseract" in detail.lower() or "OCR" in detail:
+        return "Scanned PDF OCR is unavailable or failed for this document"
     return _PRIVATE_INGEST_ERROR_DETAIL
 
 

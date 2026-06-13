@@ -13,8 +13,12 @@ struct APIClient {
 
     private static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 30
-        configuration.timeoutIntervalForResource = 600
+        // Ingesting a scanned/image PDF runs OCR synchronously and can take
+        // minutes; a short request timeout would fire before the engine
+        // answers and be misreported as an engine restart. The resource
+        // timeout still bounds truly stuck calls.
+        configuration.timeoutIntervalForRequest = 300
+        configuration.timeoutIntervalForResource = 1800
         return URLSession(configuration: configuration)
     }()
 
