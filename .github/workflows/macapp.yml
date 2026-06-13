@@ -81,12 +81,35 @@ jobs:
           tesseract --version
           pdfinfo -v
           "$PY" <<'CHECK'
-          from PIL import Image, ImageDraw, ImageFont
+          # Build a minimal valid PDF (standard Helvetica, correct xref) without
+          # Pillow's PDF writer, which needs a JPEG encoder the bundled runtime
+          # lacks. Then run the exact production chain: pdf2image (pdftoppm) ->
+          # tesseract, proving the relocated binaries and bundled tessdata work.
+          objects = [
+              b"<< /Type /Catalog /Pages 2 0 R >>",
+              b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+              b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 220] "
+              b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+              b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+          ]
+          stream = b"BT /F1 60 Tf 40 90 Td (LIBRARIAN OCR) Tj ET"
+          objects.append(b"<< /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream))
 
-          font = ImageFont.load_default(size=64)
-          image = Image.new("RGB", (900, 240), "white")
-          ImageDraw.Draw(image).text((30, 80), "LIBRARIAN OCR", fill="black", font=font)
-          image.save("ocrcheck.pdf")
+          pdf = b"%PDF-1.4\n"
+          offsets = []
+          for index, obj in enumerate(objects, start=1):
+              offsets.append(len(pdf))
+              pdf += b"%d 0 obj\n%s\nendobj\n" % (index, obj)
+          xref_pos = len(pdf)
+          pdf += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+          for off in offsets:
+              pdf += b"%010d 00000 n \n" % off
+          pdf += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+              len(objects) + 1,
+              xref_pos,
+          )
+          with open("ocrcheck.pdf", "wb") as handle:
+              handle.write(pdf)
 
           import pdf2image
           import pytesseract
