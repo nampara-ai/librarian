@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.4.0 - 2026-06-13
+
+Makes the CLI fully scriptable, so an agent can drive bulk document processing end to end
+without scraping human-readable tables.
+
+- `--json` now covers the core query and control commands: `ingest` and `process` return the
+  new `document_id`/`run_id` (plus run status and chunk counts), `status` returns
+  `status`/`stage`/`total_chunks`/`completed_chunks`/`failed_chunks` and the event list for
+  polling, and `list`, `show`, and `search` (with or without `--details`) return structured
+  records — `show` and detailed `search` include the Dewey code, title, tags, and summary.
+  Output is clean, unstyled JSON suitable for piping into `jq` or a parser.
+- Combined with the existing `import --recursive --process --report report.json` (full JSON
+  report), `import --manifest <path> --resume` (idempotent bulk imports across restarts),
+  non-zero exit on any failed item, and SHA-based ingest de-duplication, the CLI is now a
+  complete machine-driveable surface. The README documents the automation flow.
+
 ## 1.3.0 - 2026-06-13
 
 Scanned and image-based PDFs now work in the Mac app, out of the box.

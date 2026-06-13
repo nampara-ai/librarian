@@ -93,6 +93,62 @@ def test_cli_doctor_json_emits_machine_readable_checks(tmp_path: Path) -> None:
     assert all({"name", "capability", "status", "detail"} <= set(c) for c in payload["checks"])
 
 
+def test_cli_json_drives_full_processing_loop(tmp_path: Path) -> None:
+    """An agent must be able to drive ingest -> process -> query entirely from JSON."""
+    runner = CliRunner()
+    env = {
+        "LIBRARIAN_DATA_DIR": str(tmp_path / ".librarian"),
+        "LIBRARIAN_DATABASE_PATH": str(tmp_path / ".librarian" / "librarian.sqlite"),
+    }
+    source = tmp_path / "note.txt"
+    source.write_text(
+        "A horse training transcript about a colt and groundwork with saddle fit.",
+        encoding="utf-8",
+    )
+
+    ingested = runner.invoke(app, ["ingest", str(source), "--json"], env=env)
+    assert ingested.exit_code == 0, ingested.output
+    ingest_payload = json.loads(_strip_ansi(ingested.output))
+    document_id = ingest_payload["document_id"]
+    assert ingest_payload["duplicate"] is False
+    assert ingest_payload["extracted_chars"] > 0
+
+    processed = runner.invoke(app, ["process", document_id, "--json"], env=env)
+    assert processed.exit_code == 0, processed.output
+    process_payload = json.loads(_strip_ansi(processed.output))
+    run_id = process_payload["run_id"]
+    assert process_payload["status"] == "succeeded"
+    assert process_payload["total_chunks"] == process_payload["completed_chunks"]
+
+    listed = json.loads(_strip_ansi(runner.invoke(app, ["list", "--json"], env=env).output))
+    assert document_id in {doc["id"] for doc in listed["documents"]}
+
+    shown = json.loads(
+        _strip_ansi(runner.invoke(app, ["show", document_id, "--json"], env=env).output)
+    )
+    assert shown["document_id"] == document_id
+    assert shown["classification"]["code"]
+    assert shown["cleaned_chars"] > 0
+
+    status = json.loads(
+        _strip_ansi(runner.invoke(app, ["status", run_id, "--json"], env=env).output)
+    )
+    assert status["run_id"] == run_id
+    assert status["status"] == "succeeded"
+    assert isinstance(status["events"], list) and status["events"]
+
+    ids = json.loads(_strip_ansi(runner.invoke(app, ["search", "horse", "--json"], env=env).output))
+    assert document_id in ids["document_ids"]
+
+    detailed = json.loads(
+        _strip_ansi(
+            runner.invoke(app, ["search", "horse", "--json", "--details"], env=env).output
+        )
+    )
+    assert detailed["results"][0]["document_id"] == document_id
+    assert detailed["results"][0]["classification_code"]
+
+
 def test_cli_doctor_strict_fails_when_optional_dependencies_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

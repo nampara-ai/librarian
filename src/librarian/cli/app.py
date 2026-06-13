@@ -919,6 +919,10 @@ def inspect_queue(
 @app.command()
 def ingest(
     path: Annotated[Path, typer.Argument(exists=True, readable=True, dir_okay=False)],
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the result as JSON."),
+    ] = False,
 ) -> None:
     """Ingest a source file and persist extracted text."""
     resolved_path = path.resolve()
@@ -926,6 +930,20 @@ def ingest(
     async def run() -> None:
         container = await build_ingest_container()
         result = await container.ingest_document.execute(resolved_path)
+        if json_output:
+            console.out(
+                json.dumps(
+                    {
+                        "document_id": str(result.document.id),
+                        "filename": result.document.source.filename,
+                        "extracted_chars": len(result.raw_text),
+                        "duplicate": result.duplicate,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return
         console.print(f"Ingested {result.document.id}")
         console.print(f"Source: {result.document.source.filename}")
         console.print(f"Extracted: {len(result.raw_text):,} chars")
@@ -936,12 +954,33 @@ def ingest(
 @app.command()
 def process(
     document_id: Annotated[str, typer.Argument(help="Document ID to process.")],
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the run result as JSON."),
+    ] = False,
 ) -> None:
     """Process an ingested document."""
 
     async def run() -> None:
         container = await build_container()
         result = await container.process_document.execute(DocumentId(document_id))
+        if json_output:
+            console.out(
+                json.dumps(
+                    {
+                        "run_id": str(result.id),
+                        "document_id": str(result.document_id),
+                        "status": result.status.value,
+                        "stage": result.stage.value,
+                        "total_chunks": result.total_chunks,
+                        "completed_chunks": result.completed_chunks,
+                        "failed_chunks": result.failed_chunks,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return
         console.print(f"Run {result.id}: {result.status.value}")
 
     asyncio.run(run())
@@ -980,12 +1019,37 @@ def worker(
 def list_documents(
     limit: Annotated[int, typer.Option(help="Maximum documents.", min=1, max=500)] = 100,
     offset: Annotated[int, typer.Option(help="Documents to skip.", min=0)] = 0,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print documents as JSON."),
+    ] = False,
 ) -> None:
     """List ingested documents."""
 
     async def run() -> None:
         container = await build_ingest_container()
         documents = await container.repository.list(limit=limit, offset=offset)
+        if json_output:
+            console.out(
+                json.dumps(
+                    {
+                        "documents": [
+                            {
+                                "id": str(document.id),
+                                "status": document.status.value,
+                                "filename": document.source.filename,
+                                "byte_size": document.source.byte_size,
+                            }
+                            for document in documents
+                        ],
+                        "limit": limit,
+                        "offset": offset,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return
         table = Table("ID", "Status", "Filename", "Bytes")
         for document in documents:
             table.add_row(
@@ -1002,6 +1066,10 @@ def list_documents(
 @app.command()
 def show(
     document_id: Annotated[str, typer.Argument(help="Document ID to inspect.")],
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print metadata as JSON."),
+    ] = False,
 ) -> None:
     """Show document metadata and latest output summary."""
 
@@ -1012,6 +1080,33 @@ def show(
             raise typer.BadParameter(f"Document not found: {document_id}")
         output = await container.repository.get_cleaned_output(DocumentId(document_id))
         classification = await container.repository.get_classification(DocumentId(document_id))
+        if json_output:
+            console.out(
+                json.dumps(
+                    {
+                        "document_id": str(document.id),
+                        "status": document.status.value,
+                        "source": str(document.source.path),
+                        "filename": document.source.filename,
+                        "byte_size": document.source.byte_size,
+                        "classification": (
+                            {
+                                "code": classification.code,
+                                "label": classification.label,
+                                "title": classification.title,
+                                "tags": list(classification.tags),
+                                "summary": classification.summary,
+                            }
+                            if classification
+                            else None
+                        ),
+                        "cleaned_chars": len(output.text) if output else None,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return
         console.print(f"ID: {document.id}")
         console.print(f"Status: {document.status.value}")
         console.print(f"Source: {document.source.path}")
@@ -1062,6 +1157,10 @@ def status(
         int,
         typer.Option(help="Run events to skip.", min=0),
     ] = 0,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print run status and events as JSON."),
+    ] = False,
 ) -> None:
     """Show processing run status and events."""
 
@@ -1070,12 +1169,32 @@ def status(
         run_record = await container.repository.get_run(RunId(run_id))
         if run_record is None:
             raise typer.BadParameter(f"Run not found: {run_id}")
-        console.print(f"Run {run_record.id}: {run_record.status.value} ({run_record.stage.value})")
-        for event in await container.repository.list_events(
+        events = await container.repository.list_events(
             run_record.id,
             limit=event_limit,
             offset=event_offset,
-        ):
+        )
+        if json_output:
+            console.out(
+                json.dumps(
+                    {
+                        "run_id": str(run_record.id),
+                        "document_id": str(run_record.document_id),
+                        "status": run_record.status.value,
+                        "stage": run_record.stage.value,
+                        "total_chunks": run_record.total_chunks,
+                        "completed_chunks": run_record.completed_chunks,
+                        "failed_chunks": run_record.failed_chunks,
+                        "error": run_record.error,
+                        "events": list(events),
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return
+        console.print(f"Run {run_record.id}: {run_record.status.value} ({run_record.stage.value})")
+        for event in events:
             console.print(event)
 
     asyncio.run(run())
@@ -1122,6 +1241,10 @@ def search(
         str,
         typer.Option(help="Search cleaned outputs or raw extracted source text."),
     ] = "cleaned",
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print results as JSON (IDs, or full records with --details)."),
+    ] = False,
 ) -> None:
     """Search cleaned outputs."""
 
@@ -1159,6 +1282,46 @@ def search(
                 )
             except ValueError as exc:
                 raise typer.BadParameter(sanitize_error_message(exc)) from exc
+            if json_output:
+                console.out(
+                    json.dumps(
+                        {
+                            "total": total,
+                            "limit": limit,
+                            "offset": offset,
+                            "results": [
+                                {
+                                    "document_id": str(result.document_id),
+                                    "source": result.source,
+                                    "run_id": str(result.run_id) if result.run_id else None,
+                                    "document_status": result.document_status.value,
+                                    "created_at": result.created_at.isoformat(),
+                                    "classification_code": result.classification_code,
+                                    "classification_label": result.classification_label,
+                                    "score": result.score,
+                                    "snippet": result.snippet,
+                                    "transcript_citation": (
+                                        {
+                                            "matched_text": result.transcript_citation.matched_text,
+                                            "start_seconds": (
+                                                result.transcript_citation.start_seconds
+                                            ),
+                                            "end_seconds": result.transcript_citation.end_seconds,
+                                            "strategy": result.transcript_citation.strategy,
+                                            "confidence": result.transcript_citation.confidence,
+                                        }
+                                        if result.transcript_citation
+                                        else None
+                                    ),
+                                }
+                                for result in results
+                            ],
+                        },
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+                return
             console.print(
                 f"Showing {len(results)} of {total} results (offset={offset}, limit={limit})"
             )
@@ -1217,6 +1380,19 @@ def search(
             )
         except ValueError as exc:
             raise typer.BadParameter(sanitize_error_message(exc)) from exc
+        if json_output:
+            console.out(
+                json.dumps(
+                    {
+                        "document_ids": [str(document_id) for document_id in ids],
+                        "limit": limit,
+                        "offset": offset,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return
         for document_id in ids:
             console.print(document_id)
 

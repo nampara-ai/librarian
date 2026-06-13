@@ -2,7 +2,7 @@
 
 Librarian is a local-first document ingestion, cleaning, classification, and search system. It converts transcripts, Markdown, text files, DOCX, PDFs, and OCR images into clean Markdown or plain text; processes them with an OpenAI-compatible model while preserving source fidelity; classifies the result with Dewey-style labels; and exposes the same engine through a Mac app, a CLI, and a FastAPI service.
 
-Version `1.3.0` is the stable production release. The default deployment is local or single-node: source documents and generated outputs stay in SQLite-backed local storage unless you configure an external model provider for cleaning, classification, or OCR correction.
+Version `1.4.0` is the stable production release. The default deployment is local or single-node: source documents and generated outputs stay in SQLite-backed local storage unless you configure an external model provider for cleaning, classification, or OCR correction.
 
 ## Mac App
 
@@ -31,7 +31,7 @@ From a downloaded release wheel:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install "nampara_librarian-1.3.0-py3-none-any.whl[all]"
+pip install "nampara_librarian-1.4.0-py3-none-any.whl[all]"
 ```
 
 From a source checkout:
@@ -89,6 +89,10 @@ librarian api
 ```
 
 `librarian import` converts sources into the workspace by default: converted Markdown/text lands under `<data_dir>/converted` instead of next to your original files. Use `--output-mode` to opt into `new-directory`, `original`, or `subdirectory` placement.
+
+### Automation and scripting
+
+The query and control commands emit machine-readable JSON with `--json`, so an agent can drive the whole pipeline without scraping tables: `ingest --json` and `process --json` return the new `document_id`/`run_id`; `status --json` reports `status`, `stage`, `total_chunks`, and `completed_chunks` for polling; and `list`, `show`, and `search [--details] --json` return structured records. For bulk runs, `librarian import --recursive --process --report report.json` writes a full JSON report, `--manifest <path> --resume` makes large imports idempotent across restarts, and the command exits non-zero if any item failed. `doctor --json`, `admin db-stats --json`, `admin api-audit --json`, and `admin page-manifest --json` round out the machine-readable surface.
 
 Operator commands live under `librarian admin`, including database maintenance, backups, run controls, queue inspection, API audit logs, and PDF page-manifest inspection. Release and quality harnesses live under `librarian maintainer`; they ship with source checkouts only and are excluded from release wheels.
 
