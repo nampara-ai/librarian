@@ -78,12 +78,23 @@ DYLIB_ARGS=()
 for exe in "${EXES[@]}"; do
   DYLIB_ARGS+=(-x "$BIN_DIR/$exe")
 done
+# Homebrew binaries reference their dependencies via @rpath. dylibbundler
+# stops and prompts on stdin for a search path whenever it cannot resolve an
+# @rpath dependency, which hangs forever in CI. Hand it every Homebrew library
+# location up front (the linked lib dir plus each keg's opt/<name>/lib) so it
+# never needs to ask, and close stdin so it fails fast instead of hanging if a
+# stray dependency still slips through.
+SEARCH_ARGS=(-s "$BREW_PREFIX/lib")
+for opt_lib in "$BREW_PREFIX"/opt/*/lib; do
+  [[ -d "$opt_lib" ]] && SEARCH_ARGS+=(-s "$opt_lib")
+done
 # -of overwrite, -b fix the binaries, -cd create the dest dir,
 # -p set the rewritten load-path prefix relative to each executable.
 dylibbundler -of -b -cd \
   "${DYLIB_ARGS[@]}" \
+  "${SEARCH_ARGS[@]}" \
   -d "$LIB_DIR" \
-  -p "@executable_path/../lib"
+  -p "@executable_path/../lib" </dev/null
 
 echo "Verifying no Homebrew paths leak into the bundled OCR tools"
 leaked=0
