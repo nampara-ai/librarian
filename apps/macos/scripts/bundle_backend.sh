@@ -51,12 +51,21 @@ PYBIN="${BACKEND_DIR}/python/bin/python3"
 [[ -x "$PYBIN" ]] || { echo "Extracted Python interpreter not found at $PYBIN" >&2; exit 1; }
 
 # An x86_64 interpreter runs under Rosetta 2 on Apple Silicon, so pip can
-# install x86_64 wheels there too.
+# install x86_64 wheels there too. When cross-bundling x86_64 on an Apple
+# Silicon host, force prebuilt wheels: otherwise pip may source-build a
+# dependency (e.g. cryptography), and the native arm64 toolchain cross-compiles
+# it to x86_64 and fails (openssl-sys cannot find an x86_64 OpenSSL).
+PIP_BINARY=()
+if [[ "$PBS_ARCH" == "x86_64" && "$(uname -m)" == "arm64" ]]; then
+  PIP_BINARY+=(--only-binary=:all:)
+fi
 echo "Installing Librarian backend"
 if [[ -f "$WHEEL" ]]; then
-  "$PYBIN" -m pip install --quiet --no-warn-script-location "${WHEEL}[all]"
+  "$PYBIN" -m pip install --quiet --no-warn-script-location \
+    ${PIP_BINARY[@]+"${PIP_BINARY[@]}"} "${WHEEL}[all]"
 else
-  "$PYBIN" -m pip install --quiet --no-warn-script-location "$WHEEL"
+  "$PYBIN" -m pip install --quiet --no-warn-script-location \
+    ${PIP_BINARY[@]+"${PIP_BINARY[@]}"} "$WHEEL"
 fi
 
 "$PYBIN" -m librarian version >/dev/null

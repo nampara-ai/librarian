@@ -19,21 +19,22 @@ permissions:
 
 jobs:
   dmg:
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-14
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Build each DMG on a runner whose native architecture matches the
-          # target, so Homebrew's OCR binaries (tesseract/poppler) are the
-          # right arch without Rosetta gymnastics.
+          # Both DMGs build on plentiful Apple Silicon runners. The arm64
+          # binaries come from the native Homebrew; the x86_64 binaries come
+          # from an x86_64 Homebrew installed under Rosetta, so releases never
+          # wait on (increasingly scarce) native Intel runners.
           - arch: arm64
             artifact: Librarian-AppleSilicon
-            runner: macos-14
+            brew_prefix: /opt/homebrew
           - arch: x86_64
             artifact: Librarian-Intel
-            runner: macos-13
+            brew_prefix: /usr/local
     steps:
       - uses: actions/checkout@v6
         with:
@@ -48,6 +49,10 @@ jobs:
           python -m pip install --upgrade build
           python -m build --wheel
 
+      - name: Ensure Rosetta 2 (x86_64 build on Apple Silicon)
+        if: matrix.arch == 'x86_64'
+        run: sudo softwareupdate --install-rosetta --agree-to-license
+
       - name: Build app bundle
         working-directory: apps/macos
         run: make app ARCH_FLAGS="--arch ${{ matrix.arch }}"
@@ -60,12 +65,29 @@ jobs:
             --wheel "$(ls ../../dist/nampara_librarian-*.whl)" \
             --arch ${{ matrix.arch }}
 
-      - name: Install OCR tools (native arch)
+      - name: Install OCR tools (arm64 native Homebrew)
+        if: matrix.arch == 'arm64'
         run: brew install tesseract poppler dylibbundler
+
+      - name: Install OCR tools (x86_64 Homebrew under Rosetta)
+        if: matrix.arch == 'x86_64'
+        run: |
+          # Bootstrap an x86_64 Homebrew at /usr/local (the installer picks the
+          # prefix from the running architecture, so run it under Rosetta), then
+          # install the Intel OCR binaries there.
+          if [ ! -x /usr/local/bin/brew ]; then
+            NONINTERACTIVE=1 arch -x86_64 /bin/bash -c \
+              "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" </dev/null
+          fi
+          arch -x86_64 /usr/local/bin/brew install tesseract poppler dylibbundler
 
       - name: Bundle OCR tools
         working-directory: apps/macos
-        run: scripts/bundle_ocr.sh --app dist/Librarian.app --arch ${{ matrix.arch }}
+        run: |
+          scripts/bundle_ocr.sh \
+            --app dist/Librarian.app \
+            --arch ${{ matrix.arch }} \
+            --brew-prefix ${{ matrix.brew_prefix }}
 
       - name: Verify bundled OCR works end to end
         working-directory: apps/macos
