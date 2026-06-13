@@ -29,15 +29,18 @@ if [[ "$IDENTITY" != "-" ]]; then
   SIGN_FLAGS+=(--options runtime --timestamp --entitlements "$ENTITLEMENTS")
 fi
 
-# Sign nested Mach-O files first (the embedded Python and its extensions),
-# then the app bundle itself.
-if [[ -d "$APP/Contents/Resources/backend" ]]; then
+# Sign nested Mach-O files first (the embedded Python and its extensions, plus
+# the bundled OCR tools and their relocated dylibs), then the app bundle
+# itself. Notarization rejects any unsigned nested Mach-O.
+for nested in backend ocr; do
+  dir="$APP/Contents/Resources/$nested"
+  [[ -d "$dir" ]] || continue
   while IFS= read -r -d '' binary; do
     if file -b "$binary" | grep -q "Mach-O"; then
       codesign "${SIGN_FLAGS[@]}" "$binary"
     fi
-  done < <(find "$APP/Contents/Resources/backend" -type f \( -perm -111 -o -name "*.so" -o -name "*.dylib" \) -print0)
-fi
+  done < <(find "$dir" -type f \( -perm -111 -o -name "*.so" -o -name "*.dylib" \) -print0)
+done
 
 codesign "${SIGN_FLAGS[@]}" "$APP"
 codesign --verify --deep --strict "$APP"

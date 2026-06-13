@@ -19,16 +19,21 @@ permissions:
 
 jobs:
   dmg:
-    runs-on: macos-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Build each DMG on a runner whose native architecture matches the
+          # target, so Homebrew's OCR binaries (tesseract/poppler) are the
+          # right arch without Rosetta gymnastics.
           - arch: arm64
             artifact: Librarian-AppleSilicon
+            runner: macos-14
           - arch: x86_64
             artifact: Librarian-Intel
+            runner: macos-13
     steps:
       - uses: actions/checkout@v6
         with:
@@ -43,10 +48,6 @@ jobs:
           python -m pip install --upgrade build
           python -m build --wheel
 
-      - name: Ensure Rosetta 2 (x86_64 backend on Apple Silicon runner)
-        if: matrix.arch == 'x86_64'
-        run: sudo softwareupdate --install-rosetta --agree-to-license || true
-
       - name: Build app bundle
         working-directory: apps/macos
         run: make app ARCH_FLAGS="--arch ${{ matrix.arch }}"
@@ -58,6 +59,43 @@ jobs:
             --app dist/Librarian.app \
             --wheel "$(ls ../../dist/nampara_librarian-*.whl)" \
             --arch ${{ matrix.arch }}
+
+      - name: Install OCR tools (native arch)
+        run: brew install tesseract poppler dylibbundler
+
+      - name: Bundle OCR tools
+        working-directory: apps/macos
+        run: scripts/bundle_ocr.sh --app dist/Librarian.app --arch ${{ matrix.arch }}
+
+      - name: Verify bundled OCR works end to end
+        working-directory: apps/macos
+        run: |
+          # Exercise the exact production path — pdf2image (poppler) +
+          # pytesseract (tesseract) + bundled tessdata + relocated dylibs —
+          # from inside the app bundle, so a relocation or arch mistake fails
+          # the PR build instead of an immutable release tag.
+          APP="$PWD/dist/Librarian.app"
+          PY="$APP/Contents/Resources/backend/python/bin/python3"
+          export PATH="$APP/Contents/Resources/ocr/bin:$PATH"
+          export TESSDATA_PREFIX="$APP/Contents/Resources/ocr/share/tessdata"
+          tesseract --version
+          pdfinfo -v
+          "$PY" <<'CHECK'
+          from PIL import Image, ImageDraw, ImageFont
+
+          font = ImageFont.load_default(size=64)
+          image = Image.new("RGB", (900, 240), "white")
+          ImageDraw.Draw(image).text((30, 80), "LIBRARIAN OCR", fill="black", font=font)
+          image.save("ocrcheck.pdf")
+
+          import pdf2image
+          import pytesseract
+
+          pages = pdf2image.convert_from_path("ocrcheck.pdf", dpi=200)
+          text = pytesseract.image_to_string(pages[0]).upper()
+          assert "LIBRARIAN" in text, f"OCR did not read the test PDF: {text!r}"
+          print("bundled OCR OK:", text.strip())
+          CHECK
 
       - name: Verify bundled runtime can reach AI providers
         working-directory: apps/macos

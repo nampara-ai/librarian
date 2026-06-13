@@ -57,6 +57,15 @@ backend in `Librarian.app/Contents/Resources/backend`. On launch it starts
 `/health`, and talks to it over the same public HTTP API any other client
 would use. Quitting the app stops the backend.
 
+Scanned and image-based PDFs are OCR'd with a self-contained copy of Tesseract
+and Poppler (plus English language data) bundled under
+`Librarian.app/Contents/Resources/ocr`, with dependent libraries relocated into
+the bundle. The app puts these on the engine's `PATH` and sets `TESSDATA_PREFIX`
+at launch — so OCR works with no Homebrew install and no `PATH` setup. (macOS GUI
+apps inherit only a bare system `PATH`, which is why a system-installed OCR tool
+would otherwise be invisible to the engine.) Each DMG is built on a
+native-architecture runner so the bundled OCR binaries match the target Mac.
+
 Each launch generates a random API key and passes it to the backend through
 `LIBRARIAN_API_KEY`, so other local processes cannot read or modify your
 corpus over localhost — only the app holds the credential for its own
