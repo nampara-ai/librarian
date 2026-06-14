@@ -27,6 +27,16 @@ def test_prompt_catalog_loads_v3_classification_prompt() -> None:
     assert "confidence" in prompt
 
 
+def test_prompt_catalog_loads_v4_classification_prompt() -> None:
+    prompt = PromptCatalog().get("classification", "dewey_v4")
+
+    assert "Dewey Decimal Classification" in prompt
+    assert "single-sentence description" in prompt
+    assert '"description"' in prompt
+    assert '"title"' in prompt
+    assert '"tags"' in prompt
+
+
 def test_prompt_catalog_caches_prompt_reads() -> None:
     catalog = PromptCatalog()
     catalog.clear_cache()

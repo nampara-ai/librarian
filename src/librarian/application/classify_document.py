@@ -28,11 +28,13 @@ class ClassificationPayload(BaseModel):
     confidence: float | None = None
     title: str | None = None
     tags: list[str] = []
+    description: str | None = None
 
 
 _MAX_TAGS = 8
 _MAX_TAG_CHARS = 60
 _MAX_TITLE_CHARS = 120
+_MAX_DESCRIPTION_CHARS = 280
 
 
 def _clean_title(value: str | None) -> str | None:
@@ -40,6 +42,13 @@ def _clean_title(value: str | None) -> str | None:
         return None
     collapsed = " ".join(value.split())
     return collapsed[:_MAX_TITLE_CHARS].strip() or None
+
+
+def _clean_description(value: str | None) -> str | None:
+    if value is None:
+        return None
+    collapsed = " ".join(value.split())
+    return collapsed[:_MAX_DESCRIPTION_CHARS].strip() or None
 
 
 def _clean_tags(values: list[str]) -> tuple[str, ...]:
@@ -103,6 +112,7 @@ class ClassifyDocument:
             confidence=payload.confidence,
             title=_clean_title(payload.title),
             tags=_clean_tags(payload.tags),
+            description=_clean_description(payload.description),
         )
 
 

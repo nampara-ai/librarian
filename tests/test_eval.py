@@ -50,7 +50,7 @@ async def test_eval_suite_runs_against_configured_stack(tmp_path: Path) -> None:
     assert rendered["librarian_version"]
     assert rendered["generated_at"].endswith("+00:00")
     assert rendered["cleaning_prompt_version"] == "cmos_v2"
-    assert rendered["classification_prompt_version"] == "dewey_v3"
+    assert rendered["classification_prompt_version"] == "dewey_v4"
     assert rendered["summary"]["case_count"] == 1
     assert rendered["summary"]["passed_count"] == 1
     assert rendered["summary"]["failed_count"] == 0

@@ -1430,7 +1430,7 @@ def test_api_config_exposes_operational_controls(tmp_path: Path) -> None:
     assert payload["ocr_preserve_page_images"] is True
     assert payload["ocr_rotation_retry"] is True
     assert payload["cleaning_prompt_version"] == "cmos_v2"
-    assert payload["classification_prompt_version"] == "dewey_v3"
+    assert payload["classification_prompt_version"] == "dewey_v4"
     assert payload["universal_timeout_seconds"] == 77
     assert payload["llm_max_retries"] == settings.llm_max_retries
     assert payload["api_auth_keys_configured"] == 0
@@ -2725,3 +2725,51 @@ def _wait_for_run(client: TestClient, run_id: str):
         sleep(0.05)
         response = client.get(f"/runs/{run_id}")
     return response
+
+
+def test_api_export_okf_bundle_and_concept(tmp_path: Path) -> None:
+    import yaml
+
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=200,
+        chunk_overlap_chars=20,
+    )
+    with TestClient(create_app(settings)) as client:
+        upload = client.post(
+            "/documents",
+            files={
+                "file": (
+                    "horse.txt",
+                    b"Horse training transcript about saddle fit.",
+                    "text/plain",
+                )
+            },
+        )
+        assert upload.status_code == 200
+        document_id = upload.json()["id"]
+        run = client.post("/runs", json={"document_id": document_id})
+        assert run.status_code == 200
+        _wait_for_run(client, run.json()["id"])
+
+        bundle = client.get("/export/okf")
+        assert bundle.status_code == 200
+        payload = bundle.json()
+        assert payload["okf_version"] == "0.1"
+        assert "index.md" in payload["files"]
+        concept_paths = [p for p in payload["files"] if not p.endswith("index.md")]
+        assert concept_paths
+        frontmatter = yaml.safe_load(payload["files"][concept_paths[0]].split("---\n", 2)[1])
+        assert frontmatter["type"]
+        assert frontmatter["dewey_code"] == "636.1"
+
+        concept = client.get(f"/documents/{document_id}/okf")
+        assert concept.status_code == 200
+        assert concept.json()["path"].endswith(".md")
+        assert concept.json()["content"].startswith("---\n")
+
+    # A document that was never processed has no OKF concept.
+    with TestClient(create_app(settings)) as client:
+        missing = client.get("/documents/doc_missing/okf")
+        assert missing.status_code == 404

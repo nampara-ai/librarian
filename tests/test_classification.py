@@ -74,6 +74,38 @@ async def test_v3_classification_includes_title_and_tags() -> None:
 
 
 @pytest.mark.asyncio
+async def test_classification_includes_one_sentence_description() -> None:
+    classifier = _classifier(MockLLMProvider())
+
+    result = await classifier.execute(
+        DocumentId("doc_test"),
+        "A horse training transcript about a colt and groundwork.",
+    )
+
+    assert result.description == "A document about Horses & Equines."
+
+
+@pytest.mark.asyncio
+async def test_payload_without_description_leaves_it_unset() -> None:
+    classifier = _classifier(
+        _CannedProvider(
+            json.dumps(
+                {
+                    "summary": "A summary.",
+                    "dewey_code": "636.1",
+                    "category_name": "Horses & Equines",
+                    "confidence": 0.9,
+                }
+            )
+        )
+    )
+
+    result = await classifier.execute(DocumentId("doc_test"), "Saddle fit notes.")
+
+    assert result.description is None
+
+
+@pytest.mark.asyncio
 async def test_v2_style_payload_without_title_or_tags_still_parses() -> None:
     classifier = _classifier(
         _CannedProvider(

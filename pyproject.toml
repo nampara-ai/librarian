@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nampara-librarian"
-version = "1.4.0"
+version = "1.5.0"
 description = "Local-first corpus cleaner and library organizer with CLI and API surfaces."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -75,6 +75,10 @@ dev = [
   "httpx2>=2.3.0",
   "pip-audit>=2.9.0",
   "urllib3>=2.7.0",
+  # Tests parse emitted OKF frontmatter to assert bundle conformance; the OKF
+  # producer itself emits YAML with no runtime dependency.
+  "pyyaml>=6.0",
+  "types-pyyaml>=6.0",
 ]
 
 [project.scripts]

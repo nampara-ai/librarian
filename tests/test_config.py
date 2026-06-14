@@ -60,7 +60,7 @@ def test_settings_default_prompt_stack() -> None:
     settings = Settings()
 
     assert settings.cleaning_prompt_version == "cmos_v2"
-    assert settings.classification_prompt_version == "dewey_v3"
+    assert settings.classification_prompt_version == "dewey_v4"
 
 
 def test_database_path_defaults_inside_data_dir() -> None:

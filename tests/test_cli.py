@@ -149,6 +149,52 @@ def test_cli_json_drives_full_processing_loop(tmp_path: Path) -> None:
     assert detailed["results"][0]["classification_code"]
 
 
+def test_cli_export_okf_writes_conformant_bundle(tmp_path: Path) -> None:
+    import yaml
+
+    runner = CliRunner()
+    env = {
+        "LIBRARIAN_DATA_DIR": str(tmp_path / ".librarian"),
+        "LIBRARIAN_DATABASE_PATH": str(tmp_path / ".librarian" / "librarian.sqlite"),
+    }
+    source = tmp_path / "note.txt"
+    source.write_text(
+        "A horse training transcript about a colt and groundwork with saddle fit.",
+        encoding="utf-8",
+    )
+    document_id = json.loads(
+        _strip_ansi(runner.invoke(app, ["ingest", str(source), "--json"], env=env).output)
+    )["document_id"]
+    processed = runner.invoke(app, ["process", document_id, "--json"], env=env)
+    assert processed.exit_code == 0, processed.output
+
+    bundle = tmp_path / "bundle"
+    result = runner.invoke(app, ["export-okf", str(bundle), "--json"], env=env)
+    assert result.exit_code == 0, result.output
+    summary = json.loads(_strip_ansi(result.output))
+    assert summary["okf_version"] == "0.1"
+    assert summary["concepts"] == 1
+
+    assert (bundle / "index.md").exists()
+    concept_files = [p for p in bundle.rglob("*.md") if p.name != "index.md"]
+    assert concept_files
+    for path in concept_files:
+        text = path.read_text(encoding="utf-8")
+        assert text.startswith("---\n")
+        frontmatter = yaml.safe_load(text.split("---\n", 2)[1])
+        assert frontmatter.get("type")
+
+
+def test_cli_export_okf_exits_nonzero_when_no_documents(tmp_path: Path) -> None:
+    runner = CliRunner()
+    env = {
+        "LIBRARIAN_DATA_DIR": str(tmp_path / ".librarian"),
+        "LIBRARIAN_DATABASE_PATH": str(tmp_path / ".librarian" / "librarian.sqlite"),
+    }
+    result = runner.invoke(app, ["export-okf", str(tmp_path / "bundle"), "--json"], env=env)
+    assert result.exit_code == 1
+
+
 def test_cli_doctor_strict_fails_when_optional_dependencies_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
