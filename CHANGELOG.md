@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.6.1 - 2026-06-14
+
+Relicensed to MIT, plus an OKF output mode in the Mac app and a small PDF cleanup. (The v1.6.0
+tag was accidentally created on the v1.5.0 commit before this work merged; protected tags cannot
+be moved, so it is retained as inert history and superseded by 1.6.1.)
+
+- **License changed from Apache-2.0 to the MIT License.** Librarian is now fully permissively
+  open source; see [LICENSE](LICENSE).
+- The Mac app gains a **"Markdown (OKF bundle)"** output format. Selecting it makes the
+  destination folder an Open Knowledge Format bundle: each finished document is folded into a
+  Dewey-organized tree of concept files (with a debounced whole-bundle rebuild so indexes and
+  cross-links stay consistent), instead of writing one file per document. The other formats
+  (Markdown / Plain Text / JSON) are unchanged. Built on the OKF producer shipped in 1.5.0.
+- PDF page section markers are now level-four headings (`#### Page N`) instead of `## Page N`, so
+  page boundaries no longer dominate a document's heading outline.
+
 ## 1.5.0 - 2026-06-14
 
 Librarian can now emit a processed corpus as an Open Knowledge Format (OKF) v0.1 bundle — a

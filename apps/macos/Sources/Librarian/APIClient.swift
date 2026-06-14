@@ -122,6 +122,13 @@ struct APIClient {
         return RawExport(data: data, suggestedStem: stem)
     }
 
+    /// The whole processed corpus rendered as an Open Knowledge Format bundle
+    /// (a map of bundle-relative path to markdown content).
+    func exportOkfBundle() async throws -> OkfBundle {
+        let (data, _) = try await send("GET", "/export/okf")
+        return try Self.decoder.decode(OkfBundle.self, from: data)
+    }
+
     func content(documentId: String, offset: Int = 0) async throws -> ContentPage {
         let (data, _) = try await send(
             "GET", "/documents/\(documentId)/content",

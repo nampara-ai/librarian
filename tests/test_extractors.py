@@ -361,7 +361,7 @@ async def test_pdf_ocr_passes_timeout_to_rasterizer(
 
     text = await PdfExtractor(ocr_timeout_seconds=9, ocr_correction_mode="never").extract(path)
 
-    assert "## Page 1" in text
+    assert "#### Page 1" in text
     assert "OCR text" in text
     assert "source: ocr" in text
     assert captured_kwargs["timeout"] == 9
@@ -411,11 +411,11 @@ async def test_pdf_extractor_ocr_handles_mixed_text_and_scanned_pages(
 
     text = await PdfExtractor(ocr_correction_mode="never").extract(path)
 
-    assert "## Page 1" in text
+    assert "#### Page 1" in text
     assert "Text page 1" in text
-    assert "## Page 2" in text
+    assert "#### Page 2" in text
     assert "OCR page 2" in text
-    assert "## Page 3" in text
+    assert "#### Page 3" in text
     assert "Text page 3" in text
 
 

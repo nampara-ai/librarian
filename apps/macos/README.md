@@ -17,7 +17,11 @@ to Applications, double-click, done.
   overwritten. Markdown output opens with a short synopsis, the
   classification, and topic tags above the cleaned text.
 - **Destination strip** at the top: Save to (any folder; default
-  `~/Documents/Librarian`) and Format (Markdown, Plain Text, JSON).
+  `~/Documents/Librarian`) and Format (Markdown, Plain Text, JSON, or
+  **Markdown (OKF bundle)**). In OKF-bundle mode the destination folder becomes
+  a single [Open Knowledge Format](../../docs/OKF.md) bundle — a Dewey-organized,
+  cross-linked, indexed tree of concept files — rebuilt as documents finish,
+  rather than one file per document.
 - **Settings (⌘, or the gear)**: one pane. Provider (Anthropic / OpenAI /
   OpenAI-compatible / Ollama / None), model, API key with inline validation.
   Keys are stored in the macOS Keychain — never on disk — and handed to the

@@ -86,6 +86,12 @@ struct DestinationStripView: View {
             }
             .labelsHidden()
             .fixedSize()
+            .help(
+                model.exportFormat.isBundle
+                    ? "Builds one navigable Open Knowledge Format bundle in the destination "
+                        + "folder instead of separate files."
+                    : "Choose how cleaned documents are written to the destination folder."
+            )
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
