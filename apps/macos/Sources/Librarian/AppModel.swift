@@ -26,6 +26,7 @@ final class AppModel: ObservableObject {
     private var documents: [Document] = []
     private var runs: [Run] = []
     private var exportsInFlight: Set<UUID> = []
+    private var okfSyncTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
     private var backendObservation: AnyCancellable?
 
@@ -341,6 +342,15 @@ final class AppModel: ObservableObject {
 
     private func startExport(itemID: UUID, documentID: String) {
         guard !exportsInFlight.contains(itemID) else { return }
+        // In OKF-bundle mode the destination folder *is* the bundle: the
+        // document is processed, so mark it saved and (debounced) rebuild the
+        // whole bundle from the engine. reconcileQueue skips terminal items, so
+        // this fires once per document.
+        if exportFormat.isBundle {
+            setStage(itemID, .done(outputURL: outputFolderURL))
+            scheduleOkfBundleSync()
+            return
+        }
         exportsInFlight.insert(itemID)
         let format = exportFormat
         let client = self.client
@@ -395,6 +405,55 @@ final class AppModel: ObservableObject {
                 )
             )
         }
+    }
+
+    /// Rebuild the OKF bundle into the destination folder after a short quiet
+    /// period, coalescing bursts of completions into a single write so the
+    /// bundle's indexes and cross-links stay consistent.
+    private func scheduleOkfBundleSync() {
+        okfSyncTask?.cancel()
+        let client = self.client
+        let folder = outputFolderURL
+        okfSyncTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1.5))
+            if Task.isCancelled { return }
+            guard let self else { return }
+            do {
+                let bundle = try await client.exportOkfBundle()
+                try await Self.writeOkfBundle(bundle, into: folder)
+            } catch {
+                // The documents are processed and will appear on the next
+                // successful sync (another completion or a manual refresh);
+                // leave the rows saved rather than failing them on a transient
+                // bundle-write error.
+                return
+            }
+        }
+    }
+
+    /// Write the bundle's path -> content map under `folder`, creating
+    /// subdirectories. Never deletes unmanaged files; guards against path
+    /// escapes even though the engine emits safe relative paths.
+    nonisolated static func writeOkfBundle(_ bundle: OkfBundle, into folder: URL) async throws {
+        try await Task.detached(priority: .utility) {
+            let manager = FileManager.default
+            try manager.createDirectory(at: folder, withIntermediateDirectories: true)
+            for (relativePath, content) in bundle.files {
+                let components = relativePath.split(separator: "/").map(String.init)
+                if components.isEmpty || components.contains("..") {
+                    continue
+                }
+                var destination = folder
+                for component in components {
+                    destination.appendPathComponent(component)
+                }
+                try manager.createDirectory(
+                    at: destination.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try Data(content.utf8).write(to: destination)
+            }
+        }.value
     }
 
     /// The engine sanitizes its suggested stem, but the filesystem is ours:

@@ -115,6 +115,7 @@ enum ExportFormat: String, CaseIterable, Identifiable {
     case markdown = "md"
     case text = "txt"
     case json = "json"
+    case okfBundle = "okf"
 
     var id: String { rawValue }
 
@@ -123,10 +124,30 @@ enum ExportFormat: String, CaseIterable, Identifiable {
         case .markdown: return "Markdown"
         case .text: return "Plain Text"
         case .json: return "JSON"
+        case .okfBundle: return "Markdown (OKF bundle)"
         }
     }
 
-    var fileExtension: String { rawValue }
+    /// The per-document file extension. Unused for `.okfBundle`, which writes a
+    /// whole directory tree rather than one file per document.
+    var fileExtension: String {
+        switch self {
+        case .okfBundle: return "md"
+        default: return rawValue
+        }
+    }
+
+    /// Whether this format produces a single bundle directory instead of one
+    /// output file per document.
+    var isBundle: Bool { self == .okfBundle }
+}
+
+/// The Open Knowledge Format bundle returned by `GET /export/okf`: a map of
+/// bundle-relative path to file content, plus the declared OKF version.
+struct OkfBundle: Codable {
+    let okfVersion: String
+    let files: [String: String]
+    let skipped: [String]
 }
 
 /// One row in the main-window queue (redesign spec §5). The whole window

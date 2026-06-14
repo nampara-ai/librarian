@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nampara-librarian"
-version = "1.5.0"
+version = "1.6.0"
 description = "Local-first corpus cleaner and library organizer with CLI and API surfaces."
 readme = "README.md"
 requires-python = ">=3.12"
-license = "Apache-2.0"
+license = "MIT"
 authors = [
   { name = "Nampara AI" }
 ]
@@ -19,7 +19,7 @@ classifiers = [
   "Framework :: FastAPI",
   "Intended Audience :: Developers",
   "Intended Audience :: End Users/Desktop",
-  "License :: OSI Approved :: Apache Software License",
+  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.12",
   "Topic :: Text Processing",

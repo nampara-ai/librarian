@@ -1564,7 +1564,7 @@ def render_pdf_pages_markdown(path: Path, pages: Sequence[PdfPageExtraction]) ->
                     f"corrected: {str(page.corrected).lower()} -->"
                 ),
                 "",
-                f"## Page {page.page_number}",
+                f"#### Page {page.page_number}",
                 "",
                 page.text.strip(),
                 "",
