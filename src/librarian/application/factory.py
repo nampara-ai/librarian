@@ -30,6 +30,7 @@ class IngestContainer:
     repository: SQLiteRepository
     ingest_document: IngestDocument
     search_library: SearchLibrary
+    taxonomy: DeweyTaxonomy
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +86,7 @@ async def build_ingest_container(
         repository=repository,
         ingest_document=ingest,
         search_library=SearchLibrary(repository),
+        taxonomy=DeweyTaxonomy(),
     )
 
 
@@ -108,7 +110,7 @@ async def build_container(
         max_parallel_chunks=resolved_settings.llm_max_concurrency,
         max_response_chars=resolved_settings.llm_max_response_chars,
     )
-    taxonomy = DeweyTaxonomy()
+    taxonomy = ingest_container.taxonomy
     classifier = ClassifyDocument(
         provider=provider,
         prompt_catalog=PromptCatalog(),
@@ -140,6 +142,7 @@ async def build_container(
         repository=repository,
         ingest_document=ingest_container.ingest_document,
         search_library=ingest_container.search_library,
+        taxonomy=ingest_container.taxonomy,
         process_document=process,
     )
 

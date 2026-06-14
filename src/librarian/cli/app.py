@@ -31,6 +31,7 @@ from librarian.application.export_document import (
     ExportFormat,
     transcript_citation_for_document,
 )
+from librarian.application.export_okf import OKF_VERSION, build_bundle, collect_sources
 from librarian.application.factory import build_container, build_ingest_container
 from librarian.application.import_library import (
     ImportLibrary,
@@ -1440,6 +1441,75 @@ def export(
             console.print(rendered)
 
     asyncio.run(run())
+
+
+@app.command("export-okf")
+def export_okf(
+    bundle_dir: Annotated[
+        Path,
+        typer.Argument(help="Directory to write the Open Knowledge Format bundle into."),
+    ],
+    classification_prefix: Annotated[
+        str | None,
+        typer.Option(help="Only include documents whose Dewey code starts with this prefix."),
+    ] = None,
+    tag: Annotated[
+        str | None,
+        typer.Option(help="Only include documents carrying this tag."),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option(help="Maximum number of documents to include.", min=1),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print a machine-readable summary."),
+    ] = False,
+) -> None:
+    """Export processed documents as an Open Knowledge Format (OKF) bundle."""
+
+    async def run() -> None:
+        container = await build_ingest_container()
+        sources, skipped = await collect_sources(
+            container.repository,
+            classification_prefix=classification_prefix,
+            tag=tag,
+            limit=limit,
+        )
+        files = build_bundle(sources, taxonomy=container.taxonomy)
+        target = bundle_dir.expanduser()
+        await asyncio.to_thread(_write_okf_bundle, target, files)
+        if json_output:
+            console.out(
+                json.dumps(
+                    {
+                        "bundle_path": str(target),
+                        "okf_version": OKF_VERSION,
+                        "concepts": len(sources),
+                        "files_written": len(files),
+                        "skipped": len(skipped),
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+        else:
+            console.print(
+                f"Wrote {len(sources)} concept(s) in {len(files)} file(s) to {target} "
+                f"(OKF v{OKF_VERSION}); skipped {len(skipped)} unprocessed document(s)."
+            )
+        if not sources:
+            raise typer.Exit(code=1)
+
+    asyncio.run(run())
+
+
+def _write_okf_bundle(target: Path, files: dict[str, str]) -> None:
+    target.mkdir(parents=True, exist_ok=True)
+    for relative_path, content in files.items():
+        destination = target / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(content, encoding="utf-8")
 
 
 _MAINTAINER_HARNESS_MISSING = (

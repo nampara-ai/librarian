@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.5.0 - 2026-06-14
+
+Librarian can now emit a processed corpus as an Open Knowledge Format (OKF) v0.1 bundle — a
+vendor-neutral, agent- and human-readable knowledge format
+([spec](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf)). Turn a pile of
+scanned PDFs, transcripts, and documents into a portable knowledge wiki an agent can reason over.
+
+- New `librarian export-okf ./bundle` (and `GET /export/okf`, `GET /documents/{id}/okf`) render
+  processed documents as conformant OKF concept files: markdown with YAML frontmatter, organized
+  into a Dewey-derived directory hierarchy, cross-linked to same-classification siblings, and
+  accompanied by generated `index.md` files for progressive disclosure. The bundle root declares
+  `okf_version: "0.1"`. Filters: `--classification-prefix`, `--tag`, `--limit`; `--json` summary;
+  non-zero exit when nothing matches.
+- The classification stage now also produces a one-sentence `description` (the new `dewey_v4`
+  prompt), used as the OKF concept abstract; documents classified before v4 fall back to the first
+  sentence of their synopsis. Frontmatter maps title → `title`, the one-line abstract →
+  `description`, tags → `tags`, the document kind → `type`, with the Dewey code/label and
+  confidence as extension fields. There is no runtime OKF dependency — Librarian emits the format
+  directly. See [docs/OKF.md](docs/OKF.md).
+- A Mac-app "Markdown (OKF bundle)" output format is a planned fast follow.
+
 ## 1.4.0 - 2026-06-13
 
 Makes the CLI fully scriptable, so an agent can drive bulk document processing end to end

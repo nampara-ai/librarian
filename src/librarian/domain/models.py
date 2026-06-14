@@ -99,6 +99,7 @@ class Classification:
     confidence: float | None = None
     title: str | None = None
     tags: tuple[str, ...] = ()
+    description: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

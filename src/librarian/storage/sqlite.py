@@ -2412,9 +2412,9 @@ def _cleaned_output_from_row(row: sqlite3.Row) -> CleanedOutput:
 
 _CLASSIFICATION_UPSERT_SQL = """
     INSERT INTO classifications (
-      document_id, code, label, summary, taxonomy, confidence, title, tags
+      document_id, code, label, summary, taxonomy, confidence, title, tags, description
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(document_id) DO UPDATE SET
       code = excluded.code,
       label = excluded.label,
@@ -2422,13 +2422,14 @@ _CLASSIFICATION_UPSERT_SQL = """
       taxonomy = excluded.taxonomy,
       confidence = excluded.confidence,
       title = excluded.title,
-      tags = excluded.tags
+      tags = excluded.tags,
+      description = excluded.description
 """
 
 
 def _classification_upsert_params(
     classification: Classification,
-) -> tuple[str, str, str, str, str, float | None, str | None, str]:
+) -> tuple[str, str, str, str, str, float | None, str | None, str, str | None]:
     return (
         str(classification.document_id),
         classification.code,
@@ -2438,6 +2439,7 @@ def _classification_upsert_params(
         classification.confidence,
         classification.title,
         json.dumps(list(classification.tags)),
+        classification.description,
     )
 
 
@@ -2456,6 +2458,7 @@ def _classification_tags_from_column(value: object) -> tuple[str, ...]:
 def _classification_from_row(row: sqlite3.Row) -> Classification:
     confidence = row["confidence"]
     title = row["title"]
+    description = row["description"]
     return Classification(
         document_id=DocumentId(str(row["document_id"])),
         code=str(row["code"]),
@@ -2465,6 +2468,7 @@ def _classification_from_row(row: sqlite3.Row) -> Classification:
         confidence=float(confidence) if confidence is not None else None,
         title=str(title) if title is not None else None,
         tags=_classification_tags_from_column(row["tags"]),
+        description=str(description) if description is not None else None,
     )
 
 

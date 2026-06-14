@@ -40,6 +40,12 @@ from librarian.application.export_document import (
     ExportFormat,
     transcript_citation_for_document,
 )
+from librarian.application.export_okf import (
+    OKF_VERSION,
+    OkfSource,
+    build_bundle,
+    collect_sources,
+)
 from librarian.application.factory import build_container, build_ingest_container
 from librarian.application.import_library import ImportLibrary, ImportProcessingMode
 from librarian.application.jobs import InProcessJobRunner
@@ -269,6 +275,17 @@ class ExportDocumentResponse(BaseModel):
     suggested_stem: str
     text: str
     transcript_citation: SearchTranscriptCitationResponse | None = None
+
+
+class OkfBundleResponse(BaseModel):
+    okf_version: str
+    files: dict[str, str]
+    skipped: list[str]
+
+
+class OkfConceptResponse(BaseModel):
+    path: str
+    content: str
 
 
 class SearchRequest(BaseModel):
@@ -1108,6 +1125,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             transcript_citation=transcript_citation,
         )
         return _export_response(exported, export_format)
+
+    @app.get("/export/okf", response_model=OkfBundleResponse)
+    async def export_okf_bundle(
+        classification_prefix: str | None = None,
+        tag: str | None = None,
+        limit: Annotated[int | None, Query(ge=1, le=100_000)] = None,
+    ) -> OkfBundleResponse:
+        container = await build_ingest_container(settings)
+        sources, skipped = await collect_sources(
+            container.repository,
+            classification_prefix=classification_prefix,
+            tag=tag,
+            limit=limit,
+        )
+        files = build_bundle(sources, taxonomy=container.taxonomy)
+        return OkfBundleResponse(okf_version=OKF_VERSION, files=files, skipped=skipped)
+
+    @app.get("/documents/{document_id}/okf", response_model=OkfConceptResponse)
+    async def export_okf_concept(document_id: str) -> OkfConceptResponse:
+        container = await build_ingest_container(settings)
+        document = await container.repository.get_document(DocumentId(document_id))
+        if document is None:
+            raise HTTPException(status_code=404, detail="Document not found")
+        output = await container.repository.get_cleaned_output(DocumentId(document_id))
+        classification = await container.repository.get_classification(DocumentId(document_id))
+        if output is None or classification is None:
+            raise HTTPException(status_code=404, detail="Document is not processed yet")
+        files = build_bundle(
+            [OkfSource(document=document, output=output, classification=classification)],
+            taxonomy=container.taxonomy,
+        )
+        concept_path = next(path for path in files if not path.endswith("index.md"))
+        return OkfConceptResponse(path=concept_path, content=files[concept_path])
 
     @app.post("/runs", response_model=RunResponse)
     async def create_run(request: RunRequest, http_request: Request) -> RunResponse:

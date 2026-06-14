@@ -39,9 +39,11 @@ class MockLLMProvider:
             elif any(term in text for term in ("library", "catalog", "metadata", "search recall")):
                 code = "020"
                 label = "Library & Information Sciences"
+            summary_text = " ".join(user_prompt.split("Text to analyze:", 1)[-1].split())[:300]
             return json.dumps(
                 {
-                    "summary": " ".join(user_prompt.split("Text to analyze:", 1)[-1].split())[:300],
+                    "summary": summary_text,
+                    "description": f"A document about {label}.",
                     "dewey_code": code,
                     "category_name": label,
                     "title": f"{label} Notes",

@@ -42,6 +42,13 @@ Requests above `LIBRARIAN_API_MAX_REQUEST_BYTES` are rejected before routing, ei
   `citation_quote` when the original source is a timestamped transcript to include optional
   quote-grounded `transcript_citation` evidence in JSON and Markdown exports. Unsupported `format`
   values return `code: "bad_request"` before document lookup.
+- `GET /export/okf?classification_prefix=&tag=&limit=`: render all processed documents as an
+  [Open Knowledge Format](OKF.md) v0.1 bundle. Returns `{ "okf_version", "files": {path: content},
+  "skipped": [ids] }` where `files` is the complete bundle (concept markdown + generated
+  `index.md` files), organized by Dewey classification. Documents without a cleaned output and
+  classification are listed in `skipped`.
+- `GET /documents/{id}/okf`: the single OKF concept for one processed document as
+  `{ "path", "content" }`; `404` if the document is missing or not yet processed.
 
 ## Imports
 

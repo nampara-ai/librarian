@@ -2,7 +2,7 @@
 
 Librarian is a local-first document ingestion, cleaning, classification, and search system. It converts transcripts, Markdown, text files, DOCX, PDFs, and OCR images into clean Markdown or plain text; processes them with an OpenAI-compatible model while preserving source fidelity; classifies the result with Dewey-style labels; and exposes the same engine through a Mac app, a CLI, and a FastAPI service.
 
-Version `1.4.0` is the stable production release. The default deployment is local or single-node: source documents and generated outputs stay in SQLite-backed local storage unless you configure an external model provider for cleaning, classification, or OCR correction.
+Version `1.5.0` is the stable production release. The default deployment is local or single-node: source documents and generated outputs stay in SQLite-backed local storage unless you configure an external model provider for cleaning, classification, or OCR correction.
 
 ## Mac App
 
@@ -34,7 +34,7 @@ From a downloaded release wheel:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install "nampara_librarian-1.4.0-py3-none-any.whl[all]"
+pip install "nampara_librarian-1.5.0-py3-none-any.whl[all]"
 ```
 
 From a source checkout:
@@ -117,6 +117,7 @@ librarian delete doc_... --yes
 librarian status run_... --event-limit 500 --event-offset 0
 librarian search "horse training" --details
 librarian export doc_... --format json --citation-quote "quoted source phrase"
+librarian export-okf ./bundle --classification-prefix 6 --json
 librarian api
 ```
 
@@ -125,6 +126,8 @@ librarian api
 ### Automation and scripting
 
 The query and control commands emit machine-readable JSON with `--json`, so an agent can drive the whole pipeline without scraping tables: `ingest --json` and `process --json` return the new `document_id`/`run_id`; `status --json` reports `status`, `stage`, `total_chunks`, and `completed_chunks` for polling; and `list`, `show`, and `search [--details] --json` return structured records. For bulk runs, `librarian import --recursive --process --report report.json` writes a full JSON report, `--manifest <path> --resume` makes large imports idempotent across restarts, and the command exits non-zero if any item failed. `doctor --json`, `admin db-stats --json`, `admin api-audit --json`, and `admin page-manifest --json` round out the machine-readable surface.
+
+To hand a processed corpus to another agent or knowledge tool, `librarian export-okf ./bundle` renders all processed documents as an [Open Knowledge Format](docs/OKF.md) v0.1 bundle — a directory of markdown concept files with YAML frontmatter, organized by Dewey classification, cross-linked, and indexed. See [docs/OKF.md](docs/OKF.md) for the field mapping and layout.
 
 Operator commands live under `librarian admin`, including database maintenance, backups, run controls, queue inspection, API audit logs, and PDF page-manifest inspection. Release and quality harnesses live under `librarian maintainer`; they ship with source checkouts only and are excluded from release wheels.
 
@@ -142,6 +145,7 @@ Primary endpoints:
 - `POST /runs`, `GET /runs`, `GET /runs/{id}`, `POST /runs/{id}/cancel`, `POST /runs/{id}/retry`
 - `GET /runs/{id}/events`, `GET /runs/{id}/events/stream`
 - `GET /documents/{id}/content`, `GET /documents/{id}/export?format=json|txt|md`
+- `GET /export/okf`, `GET /documents/{id}/okf` (Open Knowledge Format bundle / single concept)
 - `POST /search`, `POST /search/results`, `POST /search/facets`
 - `GET /metrics`, `GET /metrics/prometheus`
 
@@ -153,7 +157,7 @@ Containerized deployment is optional and aimed at server installs; the Mac app a
 
 ## Architecture And Operations
 
-Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). API details are in [docs/API.md](docs/API.md), deployment guidance is in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), and production runbooks are in [docs/OPERATIONS.md](docs/OPERATIONS.md).
+Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). API details are in [docs/API.md](docs/API.md), deployment guidance is in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), production runbooks are in [docs/OPERATIONS.md](docs/OPERATIONS.md), and the Open Knowledge Format export is documented in [docs/OKF.md](docs/OKF.md).
 
 ## Privacy
 
