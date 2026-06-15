@@ -1457,6 +1457,10 @@ def export_okf(
         str | None,
         typer.Option(help="Only include documents carrying this tag."),
     ] = None,
+    series: Annotated[
+        str | None,
+        typer.Option(help="Only include documents in this series (series key or name fragment)."),
+    ] = None,
     limit: Annotated[
         int | None,
         typer.Option(help="Maximum number of documents to include.", min=1),
@@ -1474,6 +1478,7 @@ def export_okf(
             container.repository,
             classification_prefix=classification_prefix,
             tag=tag,
+            series=series,
             limit=limit,
         )
         files = build_bundle(sources, taxonomy=container.taxonomy)

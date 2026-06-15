@@ -16,7 +16,9 @@ LogFormatSetting = Literal["json", "text"]
 LogLevelSetting = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 LlmProviderSetting = Literal["mock", "openai-compatible"]
 CleaningPromptVersionSetting = Literal["cmos_v1", "cmos_v2"]
-ClassificationPromptVersionSetting = Literal["dewey_v1", "dewey_v2", "dewey_v3", "dewey_v4"]
+ClassificationPromptVersionSetting = Literal[
+    "dewey_v1", "dewey_v2", "dewey_v3", "dewey_v4", "dewey_v5"
+]
 CleaningModeSetting = Literal["standard"]
 
 
@@ -47,7 +49,7 @@ class Settings(BaseSettings):
     llm_max_response_chars: int = Field(default=2 * 1024 * 1024, gt=0)
 
     cleaning_prompt_version: CleaningPromptVersionSetting = Field(default="cmos_v2")
-    classification_prompt_version: ClassificationPromptVersionSetting = Field(default="dewey_v4")
+    classification_prompt_version: ClassificationPromptVersionSetting = Field(default="dewey_v5")
     cleaning_mode: CleaningModeSetting = Field(default="standard")
     coherence_mode: CoherenceModeSetting = Field(default="balanced")
 

@@ -1130,6 +1130,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def export_okf_bundle(
         classification_prefix: str | None = None,
         tag: str | None = None,
+        series: str | None = None,
         limit: Annotated[int | None, Query(ge=1, le=100_000)] = None,
     ) -> OkfBundleResponse:
         container = await build_ingest_container(settings)
@@ -1137,6 +1138,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             container.repository,
             classification_prefix=classification_prefix,
             tag=tag,
+            series=series,
             limit=limit,
         )
         files = build_bundle(sources, taxonomy=container.taxonomy)

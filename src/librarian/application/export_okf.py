@@ -69,17 +69,21 @@ async def collect_sources(
     *,
     classification_prefix: str | None = None,
     tag: str | None = None,
+    series: str | None = None,
     limit: int | None = None,
 ) -> tuple[list[OkfSource], list[str]]:
     """Gather processed documents (with output + classification) for a bundle.
 
     Returns the included sources and the ids of documents skipped because they
     have not been processed (no cleaned output or classification yet). Documents
-    excluded by the prefix/tag filters are not counted as skipped.
+    excluded by the prefix/tag/series filters are not counted as skipped. The
+    ``series`` filter matches the stable ``series_key`` exactly or any substring
+    of the series key or display name, so a key or a name fragment both work.
     """
     sources: list[OkfSource] = []
     skipped: list[str] = []
     wanted_tag = tag.lower() if tag else None
+    wanted_series = series.lower() if series else None
     page = 200
     offset = 0
     while True:
@@ -96,6 +100,8 @@ async def collect_sources(
                 continue
             if wanted_tag and wanted_tag not in {t.lower() for t in classification.tags}:
                 continue
+            if wanted_series and not _series_matches(wanted_series, classification):
+                continue
             sources.append(
                 OkfSource(document=document, output=output, classification=classification)
             )
@@ -105,6 +111,14 @@ async def collect_sources(
             break
         offset += page
     return sources, skipped
+
+
+def _series_matches(wanted_series: str, classification: Classification) -> bool:
+    key = (classification.series_key or "").lower()
+    name = (classification.series_title or "").lower()
+    if wanted_series == key:
+        return True
+    return bool((key and wanted_series in key) or (name and wanted_series in name))
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +134,10 @@ class _Concept:
     dewey_label: str
     source_filename: str
     confidence: float | None
+    issuer: str | None
+    series_key: str | None
+    series_title: str | None
+    period: str | None
     summary: str
     body: str
 
@@ -128,6 +146,7 @@ def build_bundle(sources: list[OkfSource], *, taxonomy: TaxonomyProvider) -> dic
     """Render the sources into a map of bundle-relative path -> file content."""
     concepts: list[_Concept] = []
     by_code: dict[str, list[_Concept]] = defaultdict(list)
+    by_series: dict[str, list[_Concept]] = defaultdict(list)
     dir_labels: dict[str, str] = {}
     used_paths: set[str] = set()
 
@@ -136,6 +155,8 @@ def build_bundle(sources: list[OkfSource], *, taxonomy: TaxonomyProvider) -> dic
         used_paths.add(concept.path)
         concepts.append(concept)
         by_code[concept.code].append(concept)
+        if concept.series_key:
+            by_series[concept.series_key].append(concept)
 
     files: dict[str, str] = {}
     for concept in concepts:
@@ -144,10 +165,28 @@ def build_bundle(sources: list[OkfSource], *, taxonomy: TaxonomyProvider) -> dic
             for other in by_code[concept.code]
             if other.path != concept.path
         ][:_MAX_RELATED]
-        files[concept.path] = _render_concept(concept, related)
+        editions = _series_editions(concept, by_series)
+        files[concept.path] = _render_concept(concept, related, editions)
 
     files.update(_build_indexes(concepts, dir_labels))
     return files
+
+
+def _series_editions(
+    concept: _Concept,
+    by_series: dict[str, list[_Concept]],
+) -> list[tuple[str, str]]:
+    """Other editions of the same recurring series, ordered by reporting period."""
+    if not concept.series_key:
+        return []
+    siblings = [
+        other for other in by_series.get(concept.series_key, []) if other.path != concept.path
+    ]
+    siblings.sort(key=lambda other: (other.period or "", other.title.lower()))
+    return [
+        (other.period or other.series_title or other.title, "/" + other.path)
+        for other in siblings[:_MAX_RELATED]
+    ]
 
 
 def _build_concept(
@@ -192,12 +231,20 @@ def _build_concept(
         dewey_label=label,
         source_filename=source.document.source.filename,
         confidence=classification.confidence,
+        issuer=classification.issuer,
+        series_key=classification.series_key,
+        series_title=classification.series_title,
+        period=classification.period,
         summary=classification.summary,
         body=source.output.text,
     )
 
 
-def _render_concept(concept: _Concept, related: list[tuple[str, str]]) -> str:
+def _render_concept(
+    concept: _Concept,
+    related: list[tuple[str, str]],
+    editions: list[tuple[str, str]],
+) -> str:
     frontmatter = _frontmatter(
         [
             ("type", concept.type),
@@ -210,6 +257,10 @@ def _render_concept(concept: _Concept, related: list[tuple[str, str]]) -> str:
             ("dewey_label", concept.dewey_label),
             ("source_filename", concept.source_filename),
             ("classification_confidence", concept.confidence),
+            ("issuer", concept.issuer),
+            ("series", concept.series_title),
+            ("series_key", concept.series_key),
+            ("period", concept.period),
         ]
     )
     parts = [frontmatter, ""]
@@ -217,6 +268,9 @@ def _render_concept(concept: _Concept, related: list[tuple[str, str]]) -> str:
     if summary:
         parts.extend([f"> {summary}", ""])
     parts.append(concept.body.strip())
+    if editions:
+        parts.extend(["", "## Series Editions", ""])
+        parts.extend(f"- [{label}]({link})" for label, link in editions)
     if related:
         parts.extend(["", "## Related", ""])
         parts.extend(f"- [{title}]({link})" for title, link in related)

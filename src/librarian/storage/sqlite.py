@@ -2412,9 +2412,10 @@ def _cleaned_output_from_row(row: sqlite3.Row) -> CleanedOutput:
 
 _CLASSIFICATION_UPSERT_SQL = """
     INSERT INTO classifications (
-      document_id, code, label, summary, taxonomy, confidence, title, tags, description
+      document_id, code, label, summary, taxonomy, confidence, title, tags, description,
+      issuer, series_key, series_title, period
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(document_id) DO UPDATE SET
       code = excluded.code,
       label = excluded.label,
@@ -2423,13 +2424,31 @@ _CLASSIFICATION_UPSERT_SQL = """
       confidence = excluded.confidence,
       title = excluded.title,
       tags = excluded.tags,
-      description = excluded.description
+      description = excluded.description,
+      issuer = excluded.issuer,
+      series_key = excluded.series_key,
+      series_title = excluded.series_title,
+      period = excluded.period
 """
 
 
 def _classification_upsert_params(
     classification: Classification,
-) -> tuple[str, str, str, str, str, float | None, str | None, str, str | None]:
+) -> tuple[
+    str,
+    str,
+    str,
+    str,
+    str,
+    float | None,
+    str | None,
+    str,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+]:
     return (
         str(classification.document_id),
         classification.code,
@@ -2440,6 +2459,10 @@ def _classification_upsert_params(
         classification.title,
         json.dumps(list(classification.tags)),
         classification.description,
+        classification.issuer,
+        classification.series_key,
+        classification.series_title,
+        classification.period,
     )
 
 
@@ -2453,6 +2476,12 @@ def _classification_tags_from_column(value: object) -> tuple[str, ...]:
     if not isinstance(decoded, list):
         return ()
     return tuple(str(tag) for tag in cast(list[object], decoded))
+
+
+def _classification_optional_text(row: sqlite3.Row, column: str) -> str | None:
+    """Read an optional TEXT column that may be absent on pre-migration rows."""
+    value = row[column] if column in row.keys() else None
+    return str(value) if value is not None else None
 
 
 def _classification_from_row(row: sqlite3.Row) -> Classification:
@@ -2469,6 +2498,10 @@ def _classification_from_row(row: sqlite3.Row) -> Classification:
         title=str(title) if title is not None else None,
         tags=_classification_tags_from_column(row["tags"]),
         description=str(description) if description is not None else None,
+        issuer=_classification_optional_text(row, "issuer"),
+        series_key=_classification_optional_text(row, "series_key"),
+        series_title=_classification_optional_text(row, "series_title"),
+        period=_classification_optional_text(row, "period"),
     )
 
 

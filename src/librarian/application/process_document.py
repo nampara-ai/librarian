@@ -230,7 +230,11 @@ class ProcessDocument:
                     status=RunStatus.RUNNING,
                     stage=RunStage.CLASSIFY,
                 )
-                classification = await self.classifier.execute(document_id, assembled)
+                classification = await self.classifier.execute(
+                    document_id,
+                    assembled,
+                    source_filename=document.source.filename,
+                )
             await self._raise_if_canceled(run_id)
             async with self._timed_stage(RunStage.INDEX, run_id, document_id):
                 await self.runs.update_status(
