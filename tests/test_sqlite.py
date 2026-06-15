@@ -12,7 +12,14 @@ from librarian.application.factory import build_container
 from librarian.application.jobs import InProcessJobRunner, QueueStatus, QueueWorker, RunQueue
 from librarian.config import Settings
 from librarian.domain.ids import DocumentId, RunId
-from librarian.domain.models import Document, DocumentStatus, RunStage, RunStatus, SourceFile
+from librarian.domain.models import (
+    Classification,
+    Document,
+    DocumentStatus,
+    RunStage,
+    RunStatus,
+    SourceFile,
+)
 from librarian.observability import MetricsRecorder
 from librarian.storage.sqlite import (
     SQLiteDatabase,
@@ -74,10 +81,48 @@ async def test_sqlite_initializes_schema(tmp_path: Path) -> None:
         "0005_api_audit_events.sql",
         "0006_classification_title_tags.sql",
         "0007_classification_description.sql",
+        "0008_classification_series.sql",
     ]
     assert busy_timeout == 5000
     assert str(journal_mode).lower() == "wal"
     assert synchronous == 1
+
+
+@pytest.mark.asyncio
+async def test_sqlite_classification_round_trips_series_fields(tmp_path: Path) -> None:
+    database = SQLiteDatabase(tmp_path / "librarian.sqlite")
+    await database.initialize()
+    repository = SQLiteRepository(database)
+    document = Document(
+        id=DocumentId("doc_series"),
+        source=SourceFile(
+            path=tmp_path / "cbre.pdf",
+            filename="cbre.pdf",
+            media_type="application/pdf",
+            byte_size=10,
+            sha256="series-sha",
+        ),
+    )
+    await repository.save_document(document)
+    classification = Classification(
+        document_id=document.id,
+        code="330",
+        label="Economics",
+        summary="Quarterly office market report.",
+        confidence=0.8,
+        title="CBRE Dallas Office MarketView",
+        tags=("office", "dallas"),
+        description="A Dallas office market update.",
+        issuer="CBRE",
+        series_key="cbre-marketview-dallas-office",
+        series_title="CBRE MarketView — Dallas Office",
+        period="2026-06",
+    )
+
+    await repository.save_classification(classification)
+    loaded = await repository.get_classification(document.id)
+
+    assert loaded == classification
 
 
 @pytest.mark.asyncio

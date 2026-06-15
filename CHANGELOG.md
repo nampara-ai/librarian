@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- Classification now captures a recurring-publication identity so editions of the same report are
+  connected over time: `issuer`, `series_title`, a normalized `series_key`, and an orderable
+  `period`. The new `dewey_v5` prompt extracts issuer/series/period; the `series_key` is derived
+  deterministically by stripping date/period tokens so monthly editions converge, and falls back to
+  a distinctive source filename when the model gives no series (generic names like `report.pdf` are
+  ignored). Documents classified before v5 keep parsing with these fields unset.
+- OKF export surfaces the series: each concept lists its other editions under a `## Series Editions`
+  heading ordered by reporting period, and carries `issuer` / `series` / `series_key` / `period` as
+  frontmatter extension fields. `librarian export-okf --series <key-or-name-fragment>` (and the
+  `series` query parameter on `GET /export/okf`) filters a bundle to one series.
+- New migration `0008_classification_series.sql` adds the four nullable columns and an index on
+  `series_key`.
+
 ## 1.6.1 - 2026-06-14
 
 Relicensed to MIT, plus an OKF output mode in the Mac app and a small PDF cleanup. (The v1.6.0

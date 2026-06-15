@@ -18,6 +18,7 @@ CLI (for agents and bulk runs):
 librarian export-okf ./bundle              # all processed documents
 librarian export-okf ./bundle --classification-prefix 6   # only Dewey 6xx
 librarian export-okf ./bundle --tag horses --limit 50 --json
+librarian export-okf ./bundle --series cbre-marketview-dallas-office   # one recurring series
 ```
 
 `export-okf` includes only documents that have been processed (have a cleaned
@@ -26,7 +27,7 @@ command exits non-zero when no documents match.
 
 HTTP:
 
-- `GET /export/okf?classification_prefix=&tag=&limit=` → `{ "okf_version", "files": {path: content}, "skipped": [...] }`
+- `GET /export/okf?classification_prefix=&tag=&series=&limit=` → `{ "okf_version", "files": {path: content}, "skipped": [...] }`
 - `GET /documents/{id}/okf` → `{ "path", "content" }` for a single concept
 
 ## Bundle layout
@@ -51,6 +52,9 @@ index.md                                  # bundle root; declares okf_version
   (the `okf_version` declaration), as the spec requires.
 - Concepts that share a Dewey code are cross-linked under a `## Related`
   section, forming a graph richer than the directory tree.
+- Concepts that belong to the same recurring publication (same `series_key`) are
+  cross-linked under a `## Series Editions` section, ordered by reporting period,
+  so successive editions of one report thread together over time.
 
 ## Field mapping
 
@@ -68,6 +72,9 @@ document metadata:
 | `dewey_code` / `dewey_label` | classification | extension fields |
 | `source_filename` | original filename | extension field |
 | `classification_confidence` | classification confidence | extension field |
+| `issuer` | classification issuer | extension field; publishing org |
+| `series` / `series_key` | classification series title / normalized key | extension fields; recurring-publication identity |
+| `period` | classification reporting period | extension field; orderable token (`2026-05`, `2026-Q2`, `2026`) |
 
 The body is the cleaned markdown, preceded by the full synopsis as a blockquote.
 

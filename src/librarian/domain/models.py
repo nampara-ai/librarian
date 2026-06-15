@@ -100,6 +100,10 @@ class Classification:
     title: str | None = None
     tags: tuple[str, ...] = ()
     description: str | None = None
+    issuer: str | None = None
+    series_key: str | None = None
+    series_title: str | None = None
+    period: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

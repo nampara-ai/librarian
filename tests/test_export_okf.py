@@ -1,13 +1,42 @@
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+import pytest
 import yaml
 
-from librarian.application.export_okf import OKF_VERSION, OkfSource, build_bundle
+from librarian.application.export_okf import (
+    OKF_VERSION,
+    OkfSource,
+    build_bundle,
+    collect_sources,
+)
 from librarian.domain.ids import DocumentId, RunId
 from librarian.domain.models import Classification, CleanedOutput, Document, SourceFile
 from librarian.taxonomy.dewey import DeweyTaxonomy
+
+
+class _StubRepository:
+    """In-memory OKF repository backed by a fixed list of sources."""
+
+    def __init__(self, sources: list[OkfSource]) -> None:
+        self._sources = sources
+
+    async def list(self, *, limit: int = 100, offset: int = 0) -> Sequence[Document]:
+        return [source.document for source in self._sources][offset : offset + limit]
+
+    async def get_cleaned_output(self, document_id: DocumentId) -> CleanedOutput | None:
+        return next(
+            (s.output for s in self._sources if s.document.id == document_id),
+            None,
+        )
+
+    async def get_classification(self, document_id: DocumentId) -> Classification | None:
+        return next(
+            (s.classification for s in self._sources if s.document.id == document_id),
+            None,
+        )
 
 
 def _source(
@@ -21,6 +50,10 @@ def _source(
     description: str | None = None,
     summary: str = "A synopsis. With two sentences.",
     text: str = "Cleaned body text.",
+    issuer: str | None = None,
+    series_key: str | None = None,
+    series_title: str | None = None,
+    period: str | None = None,
 ) -> OkfSource:
     document = Document(
         id=DocumentId(doc_id),
@@ -50,6 +83,10 @@ def _source(
         title=title,
         tags=tags,
         description=description,
+        issuer=issuer,
+        series_key=series_key,
+        series_title=series_title,
+        period=period,
     )
     return OkfSource(document=document, output=output, classification=classification)
 
@@ -245,3 +282,68 @@ def test_empty_bundle_still_emits_conformant_root_index() -> None:
     assert list(files) == ["index.md"]
     root_frontmatter, _ = _split_frontmatter(files["index.md"])
     assert root_frontmatter["okf_version"] == OKF_VERSION
+
+
+def test_series_editions_cross_link_in_period_order() -> None:
+    editions = [
+        _source(
+            doc_id=f"doc_{period}",
+            filename=f"{period}.pdf",
+            code="330",
+            label="Economics",
+            title=f"Dallas Office MarketView {period}",
+            issuer="CBRE",
+            series_key="cbre-marketview-dallas-office",
+            series_title="CBRE MarketView — Dallas Office",
+            period=period,
+        )
+        for period in ("2026-07", "2026-05", "2026-06")  # deliberately out of order
+    ]
+    files = build_bundle(editions, taxonomy=DeweyTaxonomy())
+
+    july_path = next(p for p in files if p.endswith("dallas-office-marketview-2026-07.md"))
+    july = files[july_path]
+    assert "## Series Editions" in july
+    # Sibling editions are listed by ascending period (May before June). Scope the
+    # check to the editions block so the frontmatter timestamp can't interfere.
+    editions_block = july.split("## Series Editions", 1)[1].split("## Related", 1)[0]
+    assert editions_block.index("2026-05") < editions_block.index("2026-06")
+
+    frontmatter, _ = _split_frontmatter(july)
+    assert frontmatter["issuer"] == "CBRE"
+    assert frontmatter["series"] == "CBRE MarketView — Dallas Office"
+    assert frontmatter["series_key"] == "cbre-marketview-dallas-office"
+    assert frontmatter["period"] == "2026-07"
+
+
+@pytest.mark.asyncio
+async def test_collect_sources_filters_by_series() -> None:
+    dallas = _source(
+        doc_id="doc_dallas",
+        filename="dallas.pdf",
+        code="330",
+        label="Economics",
+        title="Dallas Report",
+        series_key="cbre-marketview-dallas-office",
+        series_title="CBRE MarketView — Dallas Office",
+    )
+    austin = _source(
+        doc_id="doc_austin",
+        filename="austin.pdf",
+        code="330",
+        label="Economics",
+        title="Austin Report",
+        series_key="cbre-marketview-austin-office",
+        series_title="CBRE MarketView — Austin Office",
+    )
+    repository = _StubRepository([dallas, austin])
+
+    # Exact key and a name fragment both select only the Dallas series.
+    by_key, _ = await collect_sources(repository, series="cbre-marketview-dallas-office")
+    assert [s.document.id for s in by_key] == [DocumentId("doc_dallas")]
+
+    by_fragment, _ = await collect_sources(repository, series="dallas")
+    assert [s.document.id for s in by_fragment] == [DocumentId("doc_dallas")]
+
+    none_match, _ = await collect_sources(repository, series="austin")
+    assert [s.document.id for s in none_match] == [DocumentId("doc_austin")]
