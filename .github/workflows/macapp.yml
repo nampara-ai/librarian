@@ -36,7 +36,7 @@ jobs:
             artifact: Librarian-Intel
             brew_prefix: /usr/local
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
