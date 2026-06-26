@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.7.1 - 2026-06-26
 
 - Standalone images (PNG/JPG/scans) now get the full liteparse pipeline — reconstructed tables,
   headings, and figures — instead of flat OCR text. liteparse needs a PDF to do this and normally

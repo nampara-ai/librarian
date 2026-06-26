@@ -21,7 +21,7 @@ own machine.
 > exportable library. The extractor is best-in-class; the **clean-up and organization are what make
 > it Librarian**.
 
-Version `1.7.0` is the stable production release. Everything runs locally by default — source files
+Version `1.7.1` is the stable production release. Everything runs locally by default — source files
 and generated outputs live in a SQLite-backed workspace on your disk, and text leaves your machine
 only when *you* point cleaning, classification, or OCR-correction at an external model provider.
 
@@ -61,7 +61,7 @@ pip install "nampara-librarian[all]"      # [all] pulls every optional capabilit
 librarian doctor                          # confirm what's available
 ```
 
-> From a release wheel: `pip install "nampara_librarian-1.7.0-py3-none-any.whl[all]"` ·
+> From a release wheel: `pip install "nampara_librarian-1.7.1-py3-none-any.whl[all]"` ·
 > From a checkout: `pip install -e ".[dev,all]"`
 
 ---
