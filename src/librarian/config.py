@@ -12,6 +12,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 CoherenceModeSetting = Literal["fast", "balanced", "max-coherence"]
 OcrLlmCorrectionMode = Literal["always", "never", "low-confidence"]
 OcrPreprocessMode = Literal["none", "grayscale", "threshold", "deskew"]
+PdfEngineSetting = Literal["auto", "liteparse", "legacy"]
+LiteParseImageMode = Literal["off", "placeholder", "embed"]
 LogFormatSetting = Literal["json", "text"]
 LogLevelSetting = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 LlmProviderSetting = Literal["mock", "openai-compatible"]
@@ -60,6 +62,28 @@ class Settings(BaseSettings):
     docx_max_input_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
     pdf_max_input_bytes: int = Field(default=200 * 1024 * 1024, gt=0)
     pdf_max_pages: int = Field(default=1_000, gt=0)
+    # PDF/image extraction engine. "auto" uses the liteparse engine (richer
+    # Markdown: tables, headings, figures, selective OCR) when the optional
+    # liteparse package is installed, and otherwise falls back to the built-in
+    # pdfplumber + Tesseract path. "liteparse" forces it (still falls back if
+    # the package is absent); "legacy" always uses the built-in path.
+    pdf_engine: PdfEngineSetting = Field(default="auto")
+    liteparse_ocr_server_url: str | None = Field(default=None)
+    liteparse_dpi: int = Field(default=150, gt=0)
+    liteparse_image_mode: LiteParseImageMode = Field(default="placeholder")
+    # Extraction throughput controls. The content-hash extraction cache stores
+    # extracted Markdown keyed by file digest + extraction-config signature, so
+    # re-ingesting unchanged files (or the same file across documents) skips the
+    # expensive parser/OCR work. The timeout bounds a single extraction so one
+    # pathological file cannot hang a batch (0 disables the ceiling).
+    extraction_cache_enabled: bool = Field(default=True)
+    extraction_timeout_seconds: int = Field(default=0, ge=0)
+    # How many files a directory import converts/ingests concurrently. The
+    # expensive extraction step runs in worker threads, so parallel files
+    # overlap their parser/OCR work. For PROCESS/QUEUE imports this also overlaps
+    # per-document LLM work, multiplying with llm_max_concurrency; keep it modest
+    # on rate-limited providers. 1 restores fully sequential imports.
+    import_concurrency: int = Field(default=2, gt=0)
     ocr_language: str = Field(default="eng")
     ocr_timeout_seconds: int = Field(default=120, gt=0)
     ocr_pdf_dpi: int = Field(default=200, gt=0)

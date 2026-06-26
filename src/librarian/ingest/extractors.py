@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import importlib
+import importlib.util
 import json
 import multiprocessing
 import queue
@@ -13,7 +14,7 @@ import subprocess
 import tempfile
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
@@ -730,6 +731,235 @@ class MarkItDownExtractor:
         reject_disallowed_archive_signature(path)
 
 
+LITEPARSE_EXTENSIONS = frozenset({".pdf"}) | IMAGE_EXTENSIONS
+
+
+def liteparse_available() -> bool:
+    """Whether the optional ``liteparse`` engine can be imported."""
+    return importlib.util.find_spec("liteparse") is not None
+
+
+class LiteParseExtractor:
+    """Extract PDFs and images to rich Markdown via the liteparse engine.
+
+    liteparse (Apache-2.0, https://github.com/run-llama/liteparse) bundles
+    PDFium and Tesseract and reconstructs tables, headings, lists, and figure
+    placeholders, OCR-ing only the pages that need it. Its Markdown drops
+    straight into the cleaning/classification pipeline in place of the
+    pdfplumber + Tesseract path. Parsing is blocking, so it runs in a thread.
+    """
+
+    supported_extensions = LITEPARSE_EXTENSIONS
+
+    def __init__(
+        self,
+        *,
+        ocr_language: str = "eng",
+        ocr_server_url: str | None = None,
+        dpi: int = 150,
+        image_mode: str = "placeholder",
+        max_pages: int | None = None,
+        max_input_bytes: int = 200 * 1024 * 1024,
+    ) -> None:
+        self.ocr_language = ocr_language
+        self.ocr_server_url = ocr_server_url
+        self.dpi = dpi
+        self.image_mode = image_mode
+        self.max_pages = max_pages
+        self.max_input_bytes = max_input_bytes
+        self.last_metadata: dict[str, object] | None = None
+
+    async def extract(self, path: Path) -> str:
+        _validate_input_size(path, self.max_input_bytes, "LiteParse extraction input")
+        text = await asyncio.to_thread(self._extract_sync, path)
+        if not text.strip():
+            raise ValueError(f"No extractable content found: {path}")
+        self.last_metadata = {
+            "artifact_type": "liteparse-extraction",
+            "engine": "liteparse",
+            "source_file": path.name,
+        }
+        return text
+
+    def _extract_sync(self, path: Path) -> str:
+        try:
+            liteparse = importlib.import_module("liteparse")
+        except ImportError as exc:  # pragma: no cover - guarded by liteparse_available
+            raise RuntimeError("PDF/image extraction requires the 'liteparse' extra") from exc
+        parser = liteparse.LiteParse(
+            output_format="markdown",
+            ocr_enabled=True,
+            ocr_server_url=self.ocr_server_url,
+            ocr_language=self.ocr_language,
+            image_mode=self.image_mode,
+            dpi=self.dpi,
+            max_pages=self.max_pages,
+            quiet=True,
+        )
+        result = parser.parse(str(path))
+        return cast(str, result.text)
+
+
+class FallbackExtractor:
+    """Try a primary extractor, falling back to a legacy one on any failure.
+
+    Used to route PDFs/images through liteparse while preserving the built-in
+    pdfplumber/Tesseract path as a safety net (e.g. when a document trips the
+    new engine, or an image needs a system tool the engine can't find).
+    """
+
+    def __init__(
+        self,
+        primary: TextExtractorLike,
+        fallback: TextExtractorLike,
+        *,
+        supported_extensions: frozenset[str],
+    ) -> None:
+        self._primary = primary
+        self._fallback = fallback
+        self.supported_extensions = supported_extensions
+        self.last_metadata: dict[str, object] | None = None
+
+    async def extract(self, path: Path) -> str:
+        try:
+            text = await self._primary.extract(path)
+            self.last_metadata = _extractor_metadata(self._primary)
+            return text
+        except Exception:  # noqa: BLE001 - intentional fallback to the legacy extractor
+            text = await self._fallback.extract(path)
+            self.last_metadata = _extractor_metadata(self._fallback)
+            return text
+
+    def set_page_manifest_path(self, path: Path | None) -> None:
+        for extractor in (self._primary, self._fallback):
+            setter = getattr(extractor, "set_page_manifest_path", None)
+            if callable(setter):
+                setter(path)
+
+
+class TextExtractorLike(Protocol):
+    supported_extensions: frozenset[str]
+
+    async def extract(self, path: Path) -> str: ...
+
+
+def _extractor_metadata(extractor: object) -> dict[str, object] | None:
+    metadata = getattr(extractor, "last_metadata", None)
+    if isinstance(metadata, dict):
+        return cast("dict[str, object]", metadata)
+    return None
+
+
+# Bump when extraction output for a given config could change materially, to
+# invalidate every cached entry without a data migration.
+_EXTRACTION_CACHE_VERSION = 1
+
+
+def extraction_config_signature(params: Mapping[str, object]) -> str:
+    """Stable signature for the extraction-affecting configuration.
+
+    Two extractor configurations that would produce different Markdown for the
+    same bytes must hash differently; identical configurations must hash the
+    same across processes. Used as part of the extraction cache key so changing
+    the engine or OCR options correctly invalidates cached output.
+    """
+    payload = json.dumps(
+        {"version": _EXTRACTION_CACHE_VERSION, **params},
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+
+
+class ExtractionTimeoutError(TimeoutError):
+    """Raised when a single extraction exceeds the configured time ceiling."""
+
+
+@dataclass(frozen=True, slots=True)
+class ExtractionCacheEntry:
+    """A cached extraction result keyed by content digest and config signature."""
+
+    content_sha256: str
+    config_signature: str
+    source_extension: str
+    text: str
+
+
+class ExtractionCacheStore(Protocol):
+    """Persistence port for the content-hash extraction cache."""
+
+    async def get_extraction(self, content_sha256: str, config_signature: str) -> str | None: ...
+
+    async def put_extraction(self, entry: ExtractionCacheEntry) -> None: ...
+
+
+class CachingExtractor:
+    """Wrap an extractor with a content-hash + config-signature cache.
+
+    On a cache hit the expensive parser/OCR work is skipped entirely. The cache
+    is config-aware (the signature folds in the extraction engine and options),
+    so changing the engine or OCR settings re-extracts rather than serving stale
+    Markdown. Extraction failures are not cached: a transient error (e.g. an OCR
+    server being unreachable) must be retried on the next run.
+    """
+
+    def __init__(
+        self,
+        inner: TextExtractorLike,
+        cache: ExtractionCacheStore,
+        *,
+        config_signature: str,
+    ) -> None:
+        self._inner = inner
+        self._cache = cache
+        self._config_signature = config_signature
+        self.supported_extensions = inner.supported_extensions
+        self.last_metadata: dict[str, object] | None = None
+        self.last_cache_hit: bool | None = None
+        self._manifest_path: Path | None = None
+
+    async def extract(self, path: Path) -> str:
+        # A page-manifest request (the convert sidecar flow) needs the real
+        # per-page extraction to run, so bypass the cache while one is active.
+        if self._manifest_path is not None:
+            return await self._extract_uncached(path)
+
+        content_sha256 = await asyncio.to_thread(_file_sha256, path)
+        cached = await self._cache.get_extraction(content_sha256, self._config_signature)
+        if cached is not None:
+            self.last_cache_hit = True
+            self.last_metadata = {
+                "artifact_type": "extraction-cache-hit",
+                "engine": "cache",
+                "content_sha256": content_sha256,
+            }
+            return cached
+
+        text = await self._extract_uncached(path)
+        await self._cache.put_extraction(
+            ExtractionCacheEntry(
+                content_sha256=content_sha256,
+                config_signature=self._config_signature,
+                source_extension=path.suffix.lower(),
+                text=text,
+            )
+        )
+        return text
+
+    async def _extract_uncached(self, path: Path) -> str:
+        text = await self._inner.extract(path)
+        self.last_cache_hit = False
+        self.last_metadata = _extractor_metadata(self._inner)
+        return text
+
+    def set_page_manifest_path(self, path: Path | None) -> None:
+        self._manifest_path = path
+        setter = getattr(self._inner, "set_page_manifest_path", None)
+        if callable(setter):
+            setter(path)
+
+
 class CompositeExtractor:
     """Route extraction by file extension."""
 
@@ -755,52 +985,106 @@ class CompositeExtractor:
         docx_max_input_bytes: int = 100 * 1024 * 1024,
         pdf_max_input_bytes: int = 200 * 1024 * 1024,
         pdf_max_pages: int = 1_000,
+        pdf_engine: str = "auto",
+        liteparse_ocr_server_url: str | None = None,
+        liteparse_dpi: int = 150,
+        liteparse_image_mode: str = "placeholder",
         universal_max_input_bytes: int = 50 * 1024 * 1024,
         universal_timeout_seconds: int = 120,
+        extraction_timeout_seconds: int = 0,
         metrics: ExtractionMetrics | None = None,
     ) -> None:
+        pdf_extractor = PdfExtractor(
+            ocr_language=ocr_language,
+            ocr_timeout_seconds=ocr_timeout_seconds,
+            ocr_pdf_dpi=ocr_pdf_dpi,
+            ocr_pdf_max_pages=ocr_pdf_max_pages,
+            ocr_preprocess_mode=ocr_preprocess_mode,
+            ocr_threshold=ocr_threshold,
+            ocr_preserve_page_images=ocr_preserve_page_images,
+            ocr_rotation_retry=ocr_rotation_retry,
+            ocr_correction_provider=ocr_correction_provider,
+            ocr_correction_mode=ocr_correction_mode,
+            ocr_correction_model=ocr_correction_model,
+            ocr_low_confidence_threshold=ocr_low_confidence_threshold,
+            ocr_max_correction_response_chars=ocr_max_correction_response_chars,
+            ocr_page_concurrency=ocr_page_concurrency,
+            ocr_fail_on_page_error=ocr_fail_on_page_error,
+            max_input_bytes=pdf_max_input_bytes,
+            max_pages=pdf_max_pages,
+            metrics=metrics,
+        )
+        image_extractor = ImageOcrExtractor(
+            language=ocr_language,
+            timeout_seconds=ocr_timeout_seconds,
+            preprocess_mode=ocr_preprocess_mode,
+            threshold=ocr_threshold,
+        )
         extractors = [
             TextFamilyExtractor(max_input_bytes=text_max_input_bytes),
             TranscriptFileExtractor(max_input_bytes=text_max_input_bytes),
             DocxExtractor(max_input_bytes=docx_max_input_bytes),
-            PdfExtractor(
-                ocr_language=ocr_language,
-                ocr_timeout_seconds=ocr_timeout_seconds,
-                ocr_pdf_dpi=ocr_pdf_dpi,
-                ocr_pdf_max_pages=ocr_pdf_max_pages,
-                ocr_preprocess_mode=ocr_preprocess_mode,
-                ocr_threshold=ocr_threshold,
-                ocr_preserve_page_images=ocr_preserve_page_images,
-                ocr_rotation_retry=ocr_rotation_retry,
-                ocr_correction_provider=ocr_correction_provider,
-                ocr_correction_mode=ocr_correction_mode,
-                ocr_correction_model=ocr_correction_model,
-                ocr_low_confidence_threshold=ocr_low_confidence_threshold,
-                ocr_max_correction_response_chars=ocr_max_correction_response_chars,
-                ocr_page_concurrency=ocr_page_concurrency,
-                ocr_fail_on_page_error=ocr_fail_on_page_error,
-                max_input_bytes=pdf_max_input_bytes,
-                max_pages=pdf_max_pages,
-                metrics=metrics,
-            ),
-            ImageOcrExtractor(
-                language=ocr_language,
-                timeout_seconds=ocr_timeout_seconds,
-                preprocess_mode=ocr_preprocess_mode,
-                threshold=ocr_threshold,
-            ),
+            pdf_extractor,
+            image_extractor,
             MarkItDownExtractor(
                 max_input_bytes=universal_max_input_bytes,
                 timeout_seconds=universal_timeout_seconds,
             ),
         ]
-        self._extractors = {
+        self._extractors: dict[str, TextExtractorLike] = {
             extension: extractor
             for extractor in extractors
             for extension in extractor.supported_extensions
         }
+        # When the liteparse engine is selected and importable, route PDFs and
+        # images through it for richer Markdown (tables/headings/figures,
+        # selective OCR), keeping the built-in extractors as a fallback.
+        self.liteparse_active = pdf_engine != "legacy" and liteparse_available()
+        if self.liteparse_active:
+            liteparse_extractor = LiteParseExtractor(
+                ocr_language=ocr_language,
+                ocr_server_url=liteparse_ocr_server_url,
+                dpi=liteparse_dpi,
+                image_mode=liteparse_image_mode,
+                max_pages=pdf_max_pages,
+                max_input_bytes=pdf_max_input_bytes,
+            )
+            self._extractors[".pdf"] = FallbackExtractor(
+                liteparse_extractor, pdf_extractor, supported_extensions=frozenset({".pdf"})
+            )
+            for extension in IMAGE_EXTENSIONS:
+                self._extractors[extension] = FallbackExtractor(
+                    liteparse_extractor, image_extractor, supported_extensions=IMAGE_EXTENSIONS
+                )
         self.supported_extensions = frozenset(self._extractors)
         self.last_metadata: dict[str, object] | None = None
+        self._extraction_timeout_seconds = extraction_timeout_seconds
+        # Signature of the extraction-affecting configuration, used as part of
+        # the extraction cache key so engine/OCR changes invalidate cached text.
+        self.config_signature = extraction_config_signature(
+            {
+                "pdf_engine": pdf_engine,
+                "liteparse_active": self.liteparse_active,
+                "liteparse_ocr_server_url": liteparse_ocr_server_url,
+                "liteparse_dpi": liteparse_dpi,
+                "liteparse_image_mode": liteparse_image_mode,
+                "ocr_language": ocr_language,
+                "ocr_pdf_dpi": ocr_pdf_dpi,
+                "ocr_pdf_max_pages": ocr_pdf_max_pages,
+                "ocr_preprocess_mode": ocr_preprocess_mode,
+                "ocr_threshold": ocr_threshold,
+                "ocr_rotation_retry": ocr_rotation_retry,
+                "ocr_correction_mode": ocr_correction_mode,
+                "ocr_correction_model": ocr_correction_model,
+                "ocr_low_confidence_threshold": ocr_low_confidence_threshold,
+                "ocr_correction": ocr_correction_provider is not None,
+                "pdf_max_pages": pdf_max_pages,
+                "pdf_max_input_bytes": pdf_max_input_bytes,
+                "text_max_input_bytes": text_max_input_bytes,
+                "docx_max_input_bytes": docx_max_input_bytes,
+                "universal_max_input_bytes": universal_max_input_bytes,
+            }
+        )
 
     async def extract(self, path: Path) -> str:
         extension = path.suffix.lower()
@@ -809,10 +1093,22 @@ class CompositeExtractor:
         extractor = self._extractors.get(extension)
         if extractor is None:
             raise ValueError(f"Unsupported file extension: {extension}")
-        text = await extractor.extract(path)
+        text = await self._extract_with_timeout(extractor, path)
         metadata = getattr(extractor, "last_metadata", None)
         self.last_metadata = metadata if isinstance(metadata, dict) else None
         return text
+
+    async def _extract_with_timeout(self, extractor: TextExtractorLike, path: Path) -> str:
+        if self._extraction_timeout_seconds <= 0:
+            return await extractor.extract(path)
+        try:
+            return await asyncio.wait_for(
+                extractor.extract(path), timeout=self._extraction_timeout_seconds
+            )
+        except TimeoutError as exc:
+            raise ExtractionTimeoutError(
+                f"Extraction exceeded {self._extraction_timeout_seconds}s: {path.name}"
+            ) from exc
 
     def set_page_manifest_path(self, path: Path | None) -> None:
         """Forward page manifest paths to extractors that support them."""

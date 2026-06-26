@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- High-fidelity PDF/image extraction via the optional `liteparse` engine
+  ([liteparse](https://github.com/run-llama/liteparse), Apache-2.0). When the `liteparse` extra is
+  installed (included in `[all]`), PDFs and images are extracted to Markdown with reconstructed
+  **tables, headings, lists, and figure placeholders**, OCR-ing only the pages that need it, and
+  bundling its own PDFium + Tesseract (no `poppler` system binary needed for PDFs). The richer
+  Markdown feeds the existing cleaning/classification/OKF pipeline unchanged. `LIBRARIAN_PDF_ENGINE`
+  selects `auto` (default; liteparse when installed, otherwise the built-in pdfplumber + Tesseract
+  path), `liteparse`, or `legacy`; the built-in path remains a per-document fallback. See `NOTICE`
+  for attribution.
+- Content-hash extraction cache: extracted Markdown is cached by source SHA-256 plus a signature of
+  the extraction configuration (engine + OCR options), so re-ingesting unchanged files — or the same
+  bytes across documents — skips the parser/OCR work. The cache is config-aware (changing the engine
+  or OCR settings re-extracts rather than serving stale text) and never caches failures (transient
+  errors retry). New migration `0009_extraction_cache.sql`; toggle with
+  `LIBRARIAN_EXTRACTION_CACHE_ENABLED` (default on). `admin db-stats` reports the `extraction_cache`
+  row count.
+- Extraction timeout ceiling: `LIBRARIAN_EXTRACTION_TIMEOUT_SECONDS` (default `0`, disabled) bounds a
+  single document's extraction so one pathological file cannot hang a batch, raising
+  `ExtractionTimeoutError` when exceeded.
+- Directory imports now convert/ingest files with bounded concurrency
+  (`LIBRARIAN_IMPORT_CONCURRENCY`, default `2`), so the per-file extraction work overlaps instead of
+  running strictly one at a time. Output paths are reserved up front to stay collision-free, and
+  result order, manifest resume, and per-file failure isolation are preserved. Set it to `1` for
+  fully sequential imports; raising it speeds bulk imports but, for `--process`/`--queue` runs, also
+  multiplies with `llm_max_concurrency`, so keep it modest on rate-limited providers.
+
 - Classification now captures a recurring-publication identity so editions of the same report are
   connected over time: `issuer`, `series_title`, a normalized `series_key`, and an orderable
   `period`. The new `dewey_v5` prompt extracts issuer/series/period; the `series_key` is derived

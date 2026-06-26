@@ -52,11 +52,43 @@ everything):
 
 | Extra | Enables |
 | --- | --- |
-| `pdf` | PDF text extraction (`pdfplumber`) |
-| `ocr` | Scanned/image-PDF OCR (`pdf2image`, `pillow`, `pytesseract`) |
+| `pdf` | Built-in PDF text extraction (`pdfplumber`) |
+| `ocr` | Scanned/image-PDF OCR for the built-in engine (`pdf2image`, `pillow`, `pytesseract`) |
+| `liteparse` | High-fidelity PDF/image extraction — tables, headings, figures, selective OCR — via the `liteparse` engine (bundles PDFium + Tesseract; see below) |
 | `universal` | Broad document conversion via `markitdown` (PPTX, XLSX, Outlook, …) |
 | `otel` | OpenTelemetry tracing/metrics export |
 | `all` | All of the above |
+
+### PDF/image extraction engine
+
+With the `liteparse` extra installed (included in `[all]`), Librarian extracts PDFs and images
+with [liteparse](https://github.com/run-llama/liteparse) (Apache-2.0) instead of the built-in
+pdfplumber + Tesseract path. It reconstructs **Markdown tables, headings, lists, and figure
+placeholders** and OCRs only the pages that need it, and it bundles its own PDFium + Tesseract
+(no `poppler` system binary required for PDFs). The richer Markdown feeds the same cleaning,
+classification, and OKF pipeline. Set `LIBRARIAN_PDF_ENGINE` to `auto` (default — use liteparse
+when installed, else built-in), `liteparse` (force), or `legacy` (always built-in). Point
+`LIBRARIAN_LITEPARSE_OCR_SERVER_URL` at a Surya/EasyOCR/PaddleOCR server for higher-accuracy OCR.
+
+### Extraction throughput
+
+Two controls keep bulk ingestion fast and bounded:
+
+- **Content-hash extraction cache** (on by default): extracted Markdown is cached by the source
+  file's SHA-256 plus a signature of the extraction configuration, so re-ingesting unchanged files —
+  or the same bytes across documents — skips the parser/OCR work. The cache is config-aware (changing
+  `LIBRARIAN_PDF_ENGINE` or OCR settings re-extracts instead of serving stale text) and never caches
+  failures, so a transient error (e.g. an unreachable OCR server) is retried on the next run. Disable
+  with `LIBRARIAN_EXTRACTION_CACHE_ENABLED=false`. `librarian admin db-stats` reports the
+  `extraction_cache` row count.
+- **Extraction timeout** (off by default): set `LIBRARIAN_EXTRACTION_TIMEOUT_SECONDS` to a positive
+  number to cap how long a single document may spend in extraction, so one pathological file cannot
+  hang a batch.
+- **Parallel directory import** (`LIBRARIAN_IMPORT_CONCURRENCY`, default `2`): a directory import
+  converts and ingests several files at once, overlapping their extraction/OCR work, while keeping
+  result order, manifest resume, and per-file failure isolation intact. Set it to `1` for sequential
+  imports; higher values speed bulk imports but, for `--process`/`--queue` runs, multiply with
+  `LIBRARIAN_LLM_MAX_CONCURRENCY`, so keep it modest on rate-limited model providers.
 
 ### OCR system dependencies (CLI/API only)
 

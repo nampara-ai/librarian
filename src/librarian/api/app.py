@@ -1334,6 +1334,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             process=getattr(container, "process_document", None),
             queue_factory=lambda: SQLiteRunQueue(container.database),
             manifest_max_bytes=settings.api_max_import_manifest_bytes,
+            import_concurrency=settings.import_concurrency,
         )
         try:
             result = await importer.import_path(
@@ -2452,8 +2453,13 @@ def _build_extractor(
         docx_max_input_bytes=settings.docx_max_input_bytes,
         pdf_max_input_bytes=settings.pdf_max_input_bytes,
         pdf_max_pages=settings.pdf_max_pages,
+        pdf_engine=settings.pdf_engine,
+        liteparse_ocr_server_url=settings.liteparse_ocr_server_url,
+        liteparse_dpi=settings.liteparse_dpi,
+        liteparse_image_mode=settings.liteparse_image_mode,
         universal_max_input_bytes=settings.universal_max_input_bytes,
         universal_timeout_seconds=settings.universal_timeout_seconds,
+        extraction_timeout_seconds=settings.extraction_timeout_seconds,
         metrics=metrics,
     )
 
