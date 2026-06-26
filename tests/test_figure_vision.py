@@ -110,7 +110,7 @@ def test_enrich_skips_placeholders_absent_from_markdown() -> None:
     figures = [_fig("present", 1, 5000), _fig("absent", 1, 5000)]
 
     provider = _FakeVision()
-    out, count = _enrich(md, figures, provider)
+    _out, count = _enrich(md, figures, provider)
 
     assert count == 1
     assert provider.calls == 1  # the absent figure was never sent to the model
