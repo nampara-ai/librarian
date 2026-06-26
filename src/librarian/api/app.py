@@ -2455,6 +2455,7 @@ def _build_extractor(
         pdf_max_pages=settings.pdf_max_pages,
         pdf_engine=settings.pdf_engine,
         liteparse_ocr_server_url=settings.liteparse_ocr_server_url,
+        liteparse_tessdata_path=settings.liteparse_tessdata_path,
         liteparse_dpi=settings.liteparse_dpi,
         liteparse_image_mode=settings.liteparse_image_mode,
         figure_vision_provider=(

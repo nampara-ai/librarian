@@ -69,6 +69,10 @@ placeholders** and OCRs only the pages that need it, and it bundles its own PDFi
 classification, and OKF pipeline. Set `LIBRARIAN_PDF_ENGINE` to `auto` (default — use liteparse
 when installed, else built-in), `liteparse` (force), or `legacy` (always built-in). Point
 `LIBRARIAN_LITEPARSE_OCR_SERVER_URL` at a Surya/EasyOCR/PaddleOCR server for higher-accuracy OCR.
+liteparse's bundled Tesseract fetches its language data on first use; to run fully offline, set
+`LIBRARIAN_LITEPARSE_TESSDATA_PATH` to a directory of Tesseract `*.traineddata` (the Mac app does
+this automatically, pointing it at its bundled `eng`/`osd` data). The Mac app ships the `[all]`
+extras, so the liteparse engine is the default there with no setup.
 
 ### Figure & chart enrichment (vision)
 

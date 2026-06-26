@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- The macOS app now ships the high-fidelity liteparse engine as its default (the bundled backend
+  already installs the `[all]` extras), with fully offline OCR: the app points liteparse's bundled
+  Tesseract at the same bundled `eng`/`osd` traineddata via the new
+  `LIBRARIAN_LITEPARSE_TESSDATA_PATH` setting, so scanned PDFs are read without any first-use
+  language-data download. `librarian doctor` now reports liteparse availability.
+
 - Vision-LLM figure/chart enrichment (opt-in, `LIBRARIAN_FIGURE_VISION_ENABLED`). With the liteparse
   engine active, each embedded figure image is sent to a vision-capable model that returns a
   description and, for charts, a reconstructed Markdown data table; the result is injected next to the

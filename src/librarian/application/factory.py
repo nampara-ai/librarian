@@ -72,6 +72,7 @@ async def build_ingest_container(
         pdf_max_pages=resolved_settings.pdf_max_pages,
         pdf_engine=resolved_settings.pdf_engine,
         liteparse_ocr_server_url=resolved_settings.liteparse_ocr_server_url,
+        liteparse_tessdata_path=resolved_settings.liteparse_tessdata_path,
         liteparse_dpi=resolved_settings.liteparse_dpi,
         liteparse_image_mode=resolved_settings.liteparse_image_mode,
         figure_vision_provider=(

@@ -885,6 +885,7 @@ class LiteParseExtractor:
         *,
         ocr_language: str = "eng",
         ocr_server_url: str | None = None,
+        tessdata_path: str | None = None,
         dpi: int = 150,
         image_mode: str = "placeholder",
         max_pages: int | None = None,
@@ -899,6 +900,7 @@ class LiteParseExtractor:
     ) -> None:
         self.ocr_language = ocr_language
         self.ocr_server_url = ocr_server_url
+        self.tessdata_path = tessdata_path
         self.dpi = dpi
         self.image_mode = image_mode
         self.max_pages = max_pages
@@ -956,6 +958,7 @@ class LiteParseExtractor:
             ocr_enabled=True,
             ocr_server_url=self.ocr_server_url,
             ocr_language=self.ocr_language,
+            tessdata_path=self.tessdata_path,
             image_mode=image_mode,
             dpi=self.dpi,
             max_pages=self.max_pages,
@@ -1163,6 +1166,7 @@ class CompositeExtractor:
         pdf_max_pages: int = 1_000,
         pdf_engine: str = "auto",
         liteparse_ocr_server_url: str | None = None,
+        liteparse_tessdata_path: str | None = None,
         liteparse_dpi: int = 150,
         liteparse_image_mode: str = "placeholder",
         figure_vision_provider: FigureVisionProvider | None = None,
@@ -1230,6 +1234,7 @@ class CompositeExtractor:
             liteparse_extractor = LiteParseExtractor(
                 ocr_language=ocr_language,
                 ocr_server_url=liteparse_ocr_server_url,
+                tessdata_path=liteparse_tessdata_path,
                 dpi=liteparse_dpi,
                 image_mode=liteparse_image_mode,
                 max_pages=pdf_max_pages,

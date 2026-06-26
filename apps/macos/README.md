@@ -56,19 +56,29 @@ releases (built with a Developer ID, see below) open without any warning.
 ## How it works
 
 The app bundles a relocatable Python runtime plus the `nampara-librarian`
-backend in `Librarian.app/Contents/Resources/backend`. On launch it starts
+backend (installed with the `[all]` extras) in
+`Librarian.app/Contents/Resources/backend`. On launch it starts
 `python -m librarian api` on a local port (127.0.0.1 only), waits for
 `/health`, and talks to it over the same public HTTP API any other client
 would use. Quitting the app stops the backend.
+
+Because the backend ships the `[all]` extras, the high-fidelity
+[liteparse](https://github.com/run-llama/liteparse) PDF/image engine — Markdown
+tables, headings, figure placeholders, and selective OCR — is the default
+inside the app, with its own bundled PDFium + Tesseract. No engine selection or
+extra install is needed.
 
 Scanned and image-based PDFs are OCR'd with a self-contained copy of Tesseract
 and Poppler (plus English language data) bundled under
 `Librarian.app/Contents/Resources/ocr`, with dependent libraries relocated into
 the bundle. The app puts these on the engine's `PATH` and sets `TESSDATA_PREFIX`
-at launch — so OCR works with no Homebrew install and no `PATH` setup. (macOS GUI
-apps inherit only a bare system `PATH`, which is why a system-installed OCR tool
-would otherwise be invisible to the engine.) Each DMG is built on a
-native-architecture runner so the bundled OCR binaries match the target Mac.
+at launch — and points the liteparse engine at the same traineddata via
+`LIBRARIAN_LITEPARSE_TESSDATA_PATH` — so OCR (built-in and liteparse) works fully
+offline with no Homebrew install, no `PATH` setup, and no first-use language-data
+download. (macOS GUI apps inherit only a bare system `PATH`, which is why a
+system-installed OCR tool would otherwise be invisible to the engine.) Each DMG
+is built on a native-architecture runner so the bundled OCR binaries match the
+target Mac.
 
 Each launch generates a random API key and passes it to the backend through
 `LIBRARIAN_API_KEY`, so other local processes cannot read or modify your

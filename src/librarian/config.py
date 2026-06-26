@@ -71,6 +71,10 @@ class Settings(BaseSettings):
     liteparse_ocr_server_url: str | None = Field(default=None)
     liteparse_dpi: int = Field(default=150, gt=0)
     liteparse_image_mode: LiteParseImageMode = Field(default="placeholder")
+    # Directory holding Tesseract traineddata for the liteparse engine's bundled
+    # OCR. Set this to ship fully offline OCR (the Mac app points it at its
+    # bundled tessdata); when unset, liteparse uses its own default lookup.
+    liteparse_tessdata_path: str | None = Field(default=None)
     # Extraction throughput controls. The content-hash extraction cache stores
     # extracted Markdown keyed by file digest + extraction-config signature, so
     # re-ingesting unchanged files (or the same file across documents) skips the
