@@ -189,6 +189,10 @@ final class BackendController: ObservableObject {
         }
         if let tessdata = Self.bundledTessdataURL {
             environment["TESSDATA_PREFIX"] = tessdata.path
+            // Point the bundled liteparse engine's in-process Tesseract at the
+            // same traineddata so high-fidelity OCR works fully offline instead
+            // of trying to fetch language data on first use.
+            environment["LIBRARIAN_LITEPARSE_TESSDATA_PATH"] = tessdata.path
         }
         let existingPath = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
         pathEntries.append(existingPath)

@@ -1981,6 +1981,7 @@ def _reject_symlinked_cli_output_path(path: Path) -> None:
 
 def _doctor_module_checks() -> list[tuple[str, str, str, str]]:
     modules = [
+        ("liteparse", "high-fidelity PDF/image extraction", "pip install -e '.[liteparse]'"),
         ("pdfplumber", "embedded PDF extraction", "pip install -e '.[pdf]'"),
         ("pdf2image", "scanned PDF rasterization", "pip install -e '.[ocr]'"),
         ("pytesseract", "OCR confidence diagnostics", "pip install -e '.[ocr]'"),
@@ -2427,6 +2428,7 @@ def _build_extractor(settings: Settings) -> CompositeExtractor:
         pdf_max_pages=settings.pdf_max_pages,
         pdf_engine=settings.pdf_engine,
         liteparse_ocr_server_url=settings.liteparse_ocr_server_url,
+        liteparse_tessdata_path=settings.liteparse_tessdata_path,
         liteparse_dpi=settings.liteparse_dpi,
         liteparse_image_mode=settings.liteparse_image_mode,
         figure_vision_provider=(

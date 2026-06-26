@@ -73,6 +73,63 @@ def test_liteparse_extractor_reconstructs_markdown_table(tmp_path: Path) -> None
 
 
 @requires_liteparse
+def test_liteparse_extractor_forwards_tessdata_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import liteparse
+
+    captured: dict[str, object] = {}
+
+    class _RecordingParser:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        def parse(self, _path: str) -> object:
+            class _Result:
+                text = "extracted"
+                images: list[object] = []
+
+            return _Result()
+
+    monkeypatch.setattr(liteparse, "LiteParse", _RecordingParser)
+    source = tmp_path / "doc.pdf"
+    source.write_bytes(_table_pdf_bytes())
+
+    asyncio.run(LiteParseExtractor(tessdata_path="/bundle/tessdata").extract(source))
+
+    assert captured["tessdata_path"] == "/bundle/tessdata"
+
+
+@requires_liteparse
+def test_composite_forwards_liteparse_tessdata_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import liteparse
+
+    captured: dict[str, object] = {}
+
+    class _RecordingParser:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        def parse(self, _path: str) -> object:
+            class _Result:
+                text = "extracted"
+                images: list[object] = []
+
+            return _Result()
+
+    monkeypatch.setattr(liteparse, "LiteParse", _RecordingParser)
+    source = tmp_path / "doc.pdf"
+    source.write_bytes(_table_pdf_bytes())
+    composite = CompositeExtractor(liteparse_tessdata_path="/bundle/tessdata")
+
+    asyncio.run(composite.extract(source))
+
+    assert captured["tessdata_path"] == "/bundle/tessdata"
+
+
+@requires_liteparse
 def test_composite_routes_pdf_through_liteparse_by_default(tmp_path: Path) -> None:
     source = tmp_path / "report.pdf"
     source.write_bytes(_table_pdf_bytes())
