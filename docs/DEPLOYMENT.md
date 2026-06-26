@@ -48,7 +48,7 @@ import root:
 docker run --rm -p 8080:8080 \
   -e LIBRARIAN_API_KEY=change-me \
   -e LIBRARIAN_API_IMPORT_ROOT=/data/imports \
-  ghcr.io/nampara-ai/librarian:v1.7.0
+  ghcr.io/nampara-ai/librarian:v1.7.1
 ```
 
 ## Environment
