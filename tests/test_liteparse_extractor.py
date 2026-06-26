@@ -1,6 +1,7 @@
 """Tests for the optional liteparse-backed extraction engine."""
 
 import asyncio
+import shutil
 from pathlib import Path
 
 import pytest
@@ -183,3 +184,61 @@ def test_fallback_extractor_uses_legacy_on_primary_failure(tmp_path: Path) -> No
 
     assert result == "legacy extracted text"
     assert fallback.last_metadata == {"engine": "legacy"}
+
+
+def _text_image_png(tmp_path: Path, *, rotate: int = 0) -> Path:
+    image_module = pytest.importorskip("PIL.Image")
+    from PIL import ImageDraw, ImageFont
+
+    image = image_module.new("RGB", (820, 300), "white")
+    draw = ImageDraw.Draw(image)
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 30)
+    except OSError:
+        font = ImageFont.load_default()
+    for index, line in enumerate(
+        ["The annual report summarizes revenue", "and dividend policy for shareholders."]
+    ):
+        draw.text((25, 40 + index * 90), line, fill="black", font=font)
+    path = tmp_path / f"report_{rotate}.png"
+    image.rotate(rotate, expand=True, fillcolor="white").save(path)
+    return path
+
+
+@requires_liteparse
+def test_liteparse_extracts_image_without_imagemagick(tmp_path: Path) -> None:
+    pytest.importorskip("PIL.Image")
+    source = _text_image_png(tmp_path)
+
+    # liteparse cannot ingest a loose image without ImageMagick; the extractor
+    # converts it to a one-page PDF with Pillow first, so this must succeed.
+    markdown = asyncio.run(LiteParseExtractor().extract(source))
+
+    assert "revenue" in markdown.lower()
+    assert "dividend" in markdown.lower()
+
+
+@requires_liteparse
+def test_composite_routes_image_through_liteparse(tmp_path: Path) -> None:
+    pytest.importorskip("PIL.Image")
+    source = _text_image_png(tmp_path)
+
+    composite = CompositeExtractor()
+    markdown = asyncio.run(composite.extract(source))
+
+    assert "revenue" in markdown.lower()
+    assert composite.last_metadata is not None
+    assert composite.last_metadata["engine"] == "liteparse"
+
+
+@requires_liteparse
+@pytest.mark.skipif(shutil.which("tesseract") is None, reason="no system tesseract")
+def test_liteparse_image_shim_orients_rotated_scan(tmp_path: Path) -> None:
+    pytest.importorskip("PIL.Image")
+    source = _text_image_png(tmp_path, rotate=180)
+
+    markdown = asyncio.run(LiteParseExtractor(auto_orient=True).extract(source))
+
+    # Upright text recovered from an upside-down image (OSD orients before OCR).
+    assert "revenue" in markdown.lower()
+    assert "dividend" in markdown.lower()

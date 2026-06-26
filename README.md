@@ -113,7 +113,9 @@ With the `liteparse` extra (included in `[all]`), Librarian extracts PDFs and im
 [liteparse](https://github.com/run-llama/liteparse) (Apache-2.0) — reconstructed **Markdown tables,
 headings, lists, and figure placeholders**, with selective OCR and its own bundled PDFium +
 Tesseract (no `poppler` needed). The built-in `pdfplumber` + Tesseract path stays as a per-document
-fallback.
+fallback. Standalone images (PNG/JPG/scans) get the same treatment: Librarian converts them to a
+one-page PDF with Pillow (oriented upright first) and runs them through liteparse — no ImageMagick
+required.
 
 | Capability | How to turn it on | What it does |
 | --- | --- | --- |
