@@ -10,6 +10,7 @@ import importlib.util
 import json
 import multiprocessing
 import queue
+import re
 import shutil
 import subprocess
 import tempfile
@@ -221,6 +222,7 @@ class PdfExtractor:
         ocr_threshold: int = 180,
         ocr_preserve_page_images: bool = False,
         ocr_rotation_retry: bool = False,
+        ocr_auto_orient: bool = True,
         ocr_correction_provider: OcrCorrectionProvider | None = None,
         ocr_correction_mode: OcrCorrectionMode = "always",
         ocr_correction_model: str = "mock-cleaner",
@@ -241,6 +243,7 @@ class PdfExtractor:
         self.ocr_threshold = ocr_threshold
         self.ocr_preserve_page_images = ocr_preserve_page_images
         self.ocr_rotation_retry = ocr_rotation_retry
+        self.ocr_auto_orient = ocr_auto_orient
         self.ocr_correction_provider = ocr_correction_provider
         self.ocr_correction_mode = ocr_correction_mode
         self.ocr_correction_model = ocr_correction_model
@@ -335,6 +338,7 @@ class PdfExtractor:
                         image_artifact_path=self._ocr_page_image_artifact_path(page_number),
                         rotation_retry=self.ocr_rotation_retry,
                         low_confidence_threshold=self.ocr_low_confidence_threshold,
+                        auto_orient=self.ocr_auto_orient,
                     )
                     ocr_result = _coerce_ocr_result(ocr_result_obj)
                     correction = await self._correct_ocr_page(
@@ -514,6 +518,7 @@ class PdfExtractor:
                         image_artifact_path=None,
                         rotation_retry=self.ocr_rotation_retry,
                         low_confidence_threshold=self.ocr_low_confidence_threshold,
+                        auto_orient=self.ocr_auto_orient,
                     )
                 )
             except (RuntimeError, ValueError) as exc:
@@ -652,12 +657,14 @@ class ImageOcrExtractor:
         timeout_seconds: int = 120,
         preprocess_mode: OcrPreprocessMode = "none",
         threshold: int = 180,
+        auto_orient: bool = True,
     ) -> None:
         self.language = language
         self.timeout_seconds = timeout_seconds
         _validate_ocr_preprocess_config(preprocess_mode, threshold=threshold)
         self.preprocess_mode: OcrPreprocessMode = preprocess_mode
         self.threshold = threshold
+        self.auto_orient = auto_orient
 
     async def extract(self, path: Path) -> str:
         return await asyncio.to_thread(
@@ -667,6 +674,7 @@ class ImageOcrExtractor:
             timeout_seconds=self.timeout_seconds,
             preprocess_mode=self.preprocess_mode,
             threshold=self.threshold,
+            auto_orient=self.auto_orient,
         )
 
 
@@ -1153,6 +1161,7 @@ class CompositeExtractor:
         ocr_threshold: int = 180,
         ocr_preserve_page_images: bool = False,
         ocr_rotation_retry: bool = False,
+        ocr_auto_orient: bool = True,
         ocr_correction_provider: OcrCorrectionProvider | None = None,
         ocr_correction_mode: OcrCorrectionMode = "always",
         ocr_correction_model: str = "mock-cleaner",
@@ -1190,6 +1199,7 @@ class CompositeExtractor:
             ocr_threshold=ocr_threshold,
             ocr_preserve_page_images=ocr_preserve_page_images,
             ocr_rotation_retry=ocr_rotation_retry,
+            ocr_auto_orient=ocr_auto_orient,
             ocr_correction_provider=ocr_correction_provider,
             ocr_correction_mode=ocr_correction_mode,
             ocr_correction_model=ocr_correction_model,
@@ -1206,6 +1216,7 @@ class CompositeExtractor:
             timeout_seconds=ocr_timeout_seconds,
             preprocess_mode=ocr_preprocess_mode,
             threshold=ocr_threshold,
+            auto_orient=ocr_auto_orient,
         )
         extractors = [
             TextFamilyExtractor(max_input_bytes=text_max_input_bytes),
@@ -1290,6 +1301,7 @@ class CompositeExtractor:
                 "ocr_preprocess_mode": ocr_preprocess_mode,
                 "ocr_threshold": ocr_threshold,
                 "ocr_rotation_retry": ocr_rotation_retry,
+                "ocr_auto_orient": ocr_auto_orient,
                 "ocr_correction_mode": ocr_correction_mode,
                 "ocr_correction_model": ocr_correction_model,
                 "ocr_low_confidence_threshold": ocr_low_confidence_threshold,
@@ -1343,13 +1355,22 @@ def _ocr_image(
     timeout_seconds: int = 120,
     preprocess_mode: OcrPreprocessMode = "none",
     threshold: int = 180,
+    auto_orient: bool = True,
 ) -> str:
     tesseract_path = shutil.which("tesseract")
     if tesseract_path is None:
         raise RuntimeError("OCR requires the 'tesseract' executable on PATH")
     with tempfile.TemporaryDirectory() as tmp_dir:
+        source_path = path
+        if auto_orient:
+            source_path = auto_orient_image(
+                path,
+                tesseract_path=tesseract_path,
+                timeout_seconds=timeout_seconds,
+                output_dir=Path(tmp_dir),
+            )
         prepared_path = _prepare_ocr_image(
-            path,
+            source_path,
             output_dir=Path(tmp_dir),
             preprocess_mode=preprocess_mode,
             threshold=threshold,
@@ -1373,13 +1394,22 @@ def _ocr_image_result(
     timeout_seconds: int = 120,
     preprocess_mode: OcrPreprocessMode = "none",
     threshold: int = 180,
+    auto_orient: bool = True,
 ) -> OcrTextResult:
     tesseract_path = shutil.which("tesseract")
     if tesseract_path is None:
         raise RuntimeError("OCR requires the 'tesseract' executable on PATH")
     with tempfile.TemporaryDirectory() as tmp_dir:
+        source_path = path
+        if auto_orient:
+            source_path = auto_orient_image(
+                path,
+                tesseract_path=tesseract_path,
+                timeout_seconds=timeout_seconds,
+                output_dir=Path(tmp_dir),
+            )
         prepared_path = _prepare_ocr_image(
-            path,
+            source_path,
             output_dir=Path(tmp_dir),
             preprocess_mode=preprocess_mode,
             threshold=threshold,
@@ -1441,6 +1471,68 @@ def _run_tesseract(
         text=True,
         timeout=timeout_seconds,
     )
+
+
+_OSD_ROTATE_RE = re.compile(r"^Rotate:\s*(\d+)", re.MULTILINE)
+_OSD_CONFIDENCE_RE = re.compile(r"^Orientation confidence:\s*([\d.]+)", re.MULTILINE)
+# Tesseract OSD reports a clear orientation at confidence ~3-5; ambiguous or
+# text-sparse pages score well under 1. Require a modest floor so a correctly
+# oriented image is never flipped on a low-confidence guess.
+_OSD_MIN_CONFIDENCE = 1.5
+
+
+def auto_orient_image(
+    path: Path,
+    *,
+    tesseract_path: str,
+    timeout_seconds: int,
+    output_dir: Path,
+) -> Path:
+    """Rotate an image upright using Tesseract OSD before OCR (best effort).
+
+    A sideways or upside-down scan otherwise OCRs to garbage. Tesseract's
+    orientation/script detection (``osd.traineddata``) reports how many degrees
+    the page must rotate clockwise to read upright; we apply that with Pillow
+    only when OSD is confident. Any failure -- OSD data missing, too few
+    characters to decide, low confidence, Pillow not installed, a malformed
+    image -- leaves the original untouched, so this can never make extraction
+    worse than the un-oriented pass.
+    """
+    try:
+        completed = subprocess.run(  # noqa: S603
+            [tesseract_path, str(path), "stdout", "--psm", "0"],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return path
+    output = completed.stdout or ""
+    match = _OSD_ROTATE_RE.search(output)
+    if match is None:
+        return path
+    degrees = int(match.group(1)) % 360
+    if degrees == 0:
+        return path
+    confidence_match = _OSD_CONFIDENCE_RE.search(output)
+    confidence = float(confidence_match.group(1)) if confidence_match else 0.0
+    if confidence < _OSD_MIN_CONFIDENCE:
+        return path
+    try:
+        image_module = importlib.import_module("PIL.Image")
+    except ImportError:
+        return path
+    try:
+        with image_module.open(path) as image:
+            # OSD reports clockwise degrees-to-upright; Pillow rotates counter-
+            # clockwise, so negate. ``expand`` keeps the whole rotated canvas.
+            oriented = image.rotate(-degrees, expand=True, fillcolor="white")
+            oriented_path = output_dir / f"{path.stem}.ocr-oriented.png"
+            oriented.save(oriented_path)
+    except Exception:  # noqa: BLE001 - orientation is best-effort
+        return path
+    return oriented_path
 
 
 def _prepare_ocr_image(
@@ -1604,6 +1696,7 @@ def _ocr_pdf_page(
     image_artifact_path: Path | None = None,
     rotation_retry: bool = False,
     low_confidence_threshold: float = 85.0,
+    auto_orient: bool = True,
 ) -> OcrTextResult:
     if shutil.which("tesseract") is None:
         raise RuntimeError("Scanned PDF OCR requires the 'tesseract' executable on PATH")
@@ -1636,6 +1729,7 @@ def _ocr_pdf_page(
                 rotation_retry=rotation_retry,
                 low_confidence_threshold=low_confidence_threshold,
                 output_dir=Path(tmp_dir),
+                auto_orient=auto_orient,
             )
             for image_path in image_paths
         ]
@@ -1672,6 +1766,7 @@ def _ocr_image_result_with_rotation_retry(
     rotation_retry: bool,
     low_confidence_threshold: float,
     output_dir: Path,
+    auto_orient: bool = True,
 ) -> OcrTextResult:
     original = _ocr_image_result(
         path,
@@ -1679,6 +1774,7 @@ def _ocr_image_result_with_rotation_retry(
         timeout_seconds=timeout_seconds,
         preprocess_mode=preprocess_mode,
         threshold=threshold,
+        auto_orient=auto_orient,
     )
     if not rotation_retry or _ocr_confidence_is_usable(
         original.confidence,
@@ -1696,6 +1792,8 @@ def _ocr_image_result_with_rotation_retry(
                 timeout_seconds=timeout_seconds,
                 preprocess_mode=preprocess_mode,
                 threshold=threshold,
+                # Don't let OSD undo the deliberate brute-force rotation.
+                auto_orient=False,
             )
         except (RuntimeError, ValueError, subprocess.SubprocessError):
             continue

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Sideways and upside-down images and scans now extract real text instead of garbage: before OCR,
+  Librarian auto-rotates pages upright using Tesseract's orientation detection (`osd.traineddata`),
+  applying the rotation only when detection is confident so a correctly-oriented page is never
+  flipped. On by default for both standalone images and scanned PDF pages; disable with
+  `LIBRARIAN_OCR_AUTO_ORIENT=false`. Best-effort and graceful — if orientation can't be determined
+  (e.g. too little text, OSD data unavailable), the page is left as-is.
+
 ## 1.7.0 - 2026-06-26
 
 - The macOS app now ships the high-fidelity liteparse engine as its default (the bundled backend

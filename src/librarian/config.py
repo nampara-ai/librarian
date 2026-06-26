@@ -109,6 +109,11 @@ class Settings(BaseSettings):
     ocr_threshold: int = Field(default=180, ge=0, le=255)
     ocr_preserve_page_images: bool = Field(default=False)
     ocr_rotation_retry: bool = Field(default=False)
+    # Auto-rotate sideways/upside-down scans upright (Tesseract OSD) before OCR,
+    # so rotated images and pages extract real text instead of garbage. On by
+    # default; best-effort (leaves the image untouched if orientation can't be
+    # determined).
+    ocr_auto_orient: bool = Field(default=True)
     ocr_llm_correction: OcrLlmCorrectionMode = Field(default="always")
     ocr_llm_model: str | None = Field(default=None)
     ocr_low_confidence_threshold: float = Field(default=85.0, ge=0, le=100)
