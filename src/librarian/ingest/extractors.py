@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import importlib
+import importlib.util
 import json
 import multiprocessing
 import queue
@@ -730,6 +731,125 @@ class MarkItDownExtractor:
         reject_disallowed_archive_signature(path)
 
 
+LITEPARSE_EXTENSIONS = frozenset({".pdf"}) | IMAGE_EXTENSIONS
+
+
+def liteparse_available() -> bool:
+    """Whether the optional ``liteparse`` engine can be imported."""
+    return importlib.util.find_spec("liteparse") is not None
+
+
+class LiteParseExtractor:
+    """Extract PDFs and images to rich Markdown via the liteparse engine.
+
+    liteparse (Apache-2.0, https://github.com/run-llama/liteparse) bundles
+    PDFium and Tesseract and reconstructs tables, headings, lists, and figure
+    placeholders, OCR-ing only the pages that need it. Its Markdown drops
+    straight into the cleaning/classification pipeline in place of the
+    pdfplumber + Tesseract path. Parsing is blocking, so it runs in a thread.
+    """
+
+    supported_extensions = LITEPARSE_EXTENSIONS
+
+    def __init__(
+        self,
+        *,
+        ocr_language: str = "eng",
+        ocr_server_url: str | None = None,
+        dpi: int = 150,
+        image_mode: str = "placeholder",
+        max_pages: int | None = None,
+        max_input_bytes: int = 200 * 1024 * 1024,
+    ) -> None:
+        self.ocr_language = ocr_language
+        self.ocr_server_url = ocr_server_url
+        self.dpi = dpi
+        self.image_mode = image_mode
+        self.max_pages = max_pages
+        self.max_input_bytes = max_input_bytes
+        self.last_metadata: dict[str, object] | None = None
+
+    async def extract(self, path: Path) -> str:
+        _validate_input_size(path, self.max_input_bytes, "LiteParse extraction input")
+        text = await asyncio.to_thread(self._extract_sync, path)
+        if not text.strip():
+            raise ValueError(f"No extractable content found: {path}")
+        self.last_metadata = {
+            "artifact_type": "liteparse-extraction",
+            "engine": "liteparse",
+            "source_file": path.name,
+        }
+        return text
+
+    def _extract_sync(self, path: Path) -> str:
+        try:
+            liteparse = importlib.import_module("liteparse")
+        except ImportError as exc:  # pragma: no cover - guarded by liteparse_available
+            raise RuntimeError("PDF/image extraction requires the 'liteparse' extra") from exc
+        parser = liteparse.LiteParse(
+            output_format="markdown",
+            ocr_enabled=True,
+            ocr_server_url=self.ocr_server_url,
+            ocr_language=self.ocr_language,
+            image_mode=self.image_mode,
+            dpi=self.dpi,
+            max_pages=self.max_pages,
+            quiet=True,
+        )
+        result = parser.parse(str(path))
+        return cast(str, result.text)
+
+
+class FallbackExtractor:
+    """Try a primary extractor, falling back to a legacy one on any failure.
+
+    Used to route PDFs/images through liteparse while preserving the built-in
+    pdfplumber/Tesseract path as a safety net (e.g. when a document trips the
+    new engine, or an image needs a system tool the engine can't find).
+    """
+
+    def __init__(
+        self,
+        primary: TextExtractorLike,
+        fallback: TextExtractorLike,
+        *,
+        supported_extensions: frozenset[str],
+    ) -> None:
+        self._primary = primary
+        self._fallback = fallback
+        self.supported_extensions = supported_extensions
+        self.last_metadata: dict[str, object] | None = None
+
+    async def extract(self, path: Path) -> str:
+        try:
+            text = await self._primary.extract(path)
+            self.last_metadata = _extractor_metadata(self._primary)
+            return text
+        except Exception:  # noqa: BLE001 - intentional fallback to the legacy extractor
+            text = await self._fallback.extract(path)
+            self.last_metadata = _extractor_metadata(self._fallback)
+            return text
+
+    def set_page_manifest_path(self, path: Path | None) -> None:
+        for extractor in (self._primary, self._fallback):
+            setter = getattr(extractor, "set_page_manifest_path", None)
+            if callable(setter):
+                setter(path)
+
+
+class TextExtractorLike(Protocol):
+    supported_extensions: frozenset[str]
+
+    async def extract(self, path: Path) -> str: ...
+
+
+def _extractor_metadata(extractor: object) -> dict[str, object] | None:
+    metadata = getattr(extractor, "last_metadata", None)
+    if isinstance(metadata, dict):
+        return cast("dict[str, object]", metadata)
+    return None
+
+
 class CompositeExtractor:
     """Route extraction by file extension."""
 
@@ -755,50 +875,76 @@ class CompositeExtractor:
         docx_max_input_bytes: int = 100 * 1024 * 1024,
         pdf_max_input_bytes: int = 200 * 1024 * 1024,
         pdf_max_pages: int = 1_000,
+        pdf_engine: str = "auto",
+        liteparse_ocr_server_url: str | None = None,
+        liteparse_dpi: int = 150,
+        liteparse_image_mode: str = "placeholder",
         universal_max_input_bytes: int = 50 * 1024 * 1024,
         universal_timeout_seconds: int = 120,
         metrics: ExtractionMetrics | None = None,
     ) -> None:
+        pdf_extractor = PdfExtractor(
+            ocr_language=ocr_language,
+            ocr_timeout_seconds=ocr_timeout_seconds,
+            ocr_pdf_dpi=ocr_pdf_dpi,
+            ocr_pdf_max_pages=ocr_pdf_max_pages,
+            ocr_preprocess_mode=ocr_preprocess_mode,
+            ocr_threshold=ocr_threshold,
+            ocr_preserve_page_images=ocr_preserve_page_images,
+            ocr_rotation_retry=ocr_rotation_retry,
+            ocr_correction_provider=ocr_correction_provider,
+            ocr_correction_mode=ocr_correction_mode,
+            ocr_correction_model=ocr_correction_model,
+            ocr_low_confidence_threshold=ocr_low_confidence_threshold,
+            ocr_max_correction_response_chars=ocr_max_correction_response_chars,
+            ocr_page_concurrency=ocr_page_concurrency,
+            ocr_fail_on_page_error=ocr_fail_on_page_error,
+            max_input_bytes=pdf_max_input_bytes,
+            max_pages=pdf_max_pages,
+            metrics=metrics,
+        )
+        image_extractor = ImageOcrExtractor(
+            language=ocr_language,
+            timeout_seconds=ocr_timeout_seconds,
+            preprocess_mode=ocr_preprocess_mode,
+            threshold=ocr_threshold,
+        )
         extractors = [
             TextFamilyExtractor(max_input_bytes=text_max_input_bytes),
             TranscriptFileExtractor(max_input_bytes=text_max_input_bytes),
             DocxExtractor(max_input_bytes=docx_max_input_bytes),
-            PdfExtractor(
-                ocr_language=ocr_language,
-                ocr_timeout_seconds=ocr_timeout_seconds,
-                ocr_pdf_dpi=ocr_pdf_dpi,
-                ocr_pdf_max_pages=ocr_pdf_max_pages,
-                ocr_preprocess_mode=ocr_preprocess_mode,
-                ocr_threshold=ocr_threshold,
-                ocr_preserve_page_images=ocr_preserve_page_images,
-                ocr_rotation_retry=ocr_rotation_retry,
-                ocr_correction_provider=ocr_correction_provider,
-                ocr_correction_mode=ocr_correction_mode,
-                ocr_correction_model=ocr_correction_model,
-                ocr_low_confidence_threshold=ocr_low_confidence_threshold,
-                ocr_max_correction_response_chars=ocr_max_correction_response_chars,
-                ocr_page_concurrency=ocr_page_concurrency,
-                ocr_fail_on_page_error=ocr_fail_on_page_error,
-                max_input_bytes=pdf_max_input_bytes,
-                max_pages=pdf_max_pages,
-                metrics=metrics,
-            ),
-            ImageOcrExtractor(
-                language=ocr_language,
-                timeout_seconds=ocr_timeout_seconds,
-                preprocess_mode=ocr_preprocess_mode,
-                threshold=ocr_threshold,
-            ),
+            pdf_extractor,
+            image_extractor,
             MarkItDownExtractor(
                 max_input_bytes=universal_max_input_bytes,
                 timeout_seconds=universal_timeout_seconds,
             ),
         ]
-        self._extractors = {
+        self._extractors: dict[str, TextExtractorLike] = {
             extension: extractor
             for extractor in extractors
             for extension in extractor.supported_extensions
         }
+        # When the liteparse engine is selected and importable, route PDFs and
+        # images through it for richer Markdown (tables/headings/figures,
+        # selective OCR), keeping the built-in extractors as a fallback.
+        self.liteparse_active = pdf_engine != "legacy" and liteparse_available()
+        if self.liteparse_active:
+            liteparse_extractor = LiteParseExtractor(
+                ocr_language=ocr_language,
+                ocr_server_url=liteparse_ocr_server_url,
+                dpi=liteparse_dpi,
+                image_mode=liteparse_image_mode,
+                max_pages=pdf_max_pages,
+                max_input_bytes=pdf_max_input_bytes,
+            )
+            self._extractors[".pdf"] = FallbackExtractor(
+                liteparse_extractor, pdf_extractor, supported_extensions=frozenset({".pdf"})
+            )
+            for extension in IMAGE_EXTENSIONS:
+                self._extractors[extension] = FallbackExtractor(
+                    liteparse_extractor, image_extractor, supported_extensions=IMAGE_EXTENSIONS
+                )
         self.supported_extensions = frozenset(self._extractors)
         self.last_metadata: dict[str, object] | None = None
 

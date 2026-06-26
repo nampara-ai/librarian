@@ -1,0 +1,20 @@
+Librarian
+Copyright (c) 2026 Nampara AI
+
+This product is licensed under the MIT License (see LICENSE).
+
+------------------------------------------------------------------------
+Third-party components
+------------------------------------------------------------------------
+
+When installed with the optional "liteparse" / "all" extras, Librarian uses
+liteparse for PDF and image extraction:
+
+  liteparse — https://github.com/run-llama/liteparse
+  Copyright (c) LlamaIndex, Inc. and the liteparse authors
+  Licensed under the Apache License, Version 2.0.
+
+liteparse is distributed as a separate PyPI package and is not bundled in
+Librarian's source distribution. Its license terms apply to that package and
+to the PDFium and Tesseract components it ships. A copy of the Apache License
+2.0 is available at https://www.apache.org/licenses/LICENSE-2.0.

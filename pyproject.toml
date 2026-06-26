@@ -47,12 +47,16 @@ ocr = [
   "pytesseract>=0.3.13",
 ]
 universal = ["markitdown[pdf,docx,pptx,xlsx,xls,outlook]>=0.1.5"]
+# liteparse (Apache-2.0): richer PDF/image extraction — tables, headings,
+# figures, selective OCR — via a bundled PDFium + Tesseract engine.
+liteparse = ["liteparse>=2.0.0"]
 otel = [
   "opentelemetry-api>=1.27.0",
   "opentelemetry-exporter-otlp-proto-http>=1.27.0",
   "opentelemetry-sdk>=1.27.0",
 ]
 all = [
+  "liteparse>=2.0.0",
   "markitdown[pdf,docx,pptx,xlsx,xls,outlook]>=0.1.5",
   "opentelemetry-api>=1.27.0",
   "opentelemetry-exporter-otlp-proto-http>=1.27.0",

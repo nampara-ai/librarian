@@ -52,11 +52,23 @@ everything):
 
 | Extra | Enables |
 | --- | --- |
-| `pdf` | PDF text extraction (`pdfplumber`) |
-| `ocr` | Scanned/image-PDF OCR (`pdf2image`, `pillow`, `pytesseract`) |
+| `pdf` | Built-in PDF text extraction (`pdfplumber`) |
+| `ocr` | Scanned/image-PDF OCR for the built-in engine (`pdf2image`, `pillow`, `pytesseract`) |
+| `liteparse` | High-fidelity PDF/image extraction — tables, headings, figures, selective OCR — via the `liteparse` engine (bundles PDFium + Tesseract; see below) |
 | `universal` | Broad document conversion via `markitdown` (PPTX, XLSX, Outlook, …) |
 | `otel` | OpenTelemetry tracing/metrics export |
 | `all` | All of the above |
+
+### PDF/image extraction engine
+
+With the `liteparse` extra installed (included in `[all]`), Librarian extracts PDFs and images
+with [liteparse](https://github.com/run-llama/liteparse) (Apache-2.0) instead of the built-in
+pdfplumber + Tesseract path. It reconstructs **Markdown tables, headings, lists, and figure
+placeholders** and OCRs only the pages that need it, and it bundles its own PDFium + Tesseract
+(no `poppler` system binary required for PDFs). The richer Markdown feeds the same cleaning,
+classification, and OKF pipeline. Set `LIBRARIAN_PDF_ENGINE` to `auto` (default — use liteparse
+when installed, else built-in), `liteparse` (force), or `legacy` (always built-in). Point
+`LIBRARIAN_LITEPARSE_OCR_SERVER_URL` at a Surya/EasyOCR/PaddleOCR server for higher-accuracy OCR.
 
 ### OCR system dependencies (CLI/API only)
 
