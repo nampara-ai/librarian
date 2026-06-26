@@ -12,6 +12,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 CoherenceModeSetting = Literal["fast", "balanced", "max-coherence"]
 OcrLlmCorrectionMode = Literal["always", "never", "low-confidence"]
 OcrPreprocessMode = Literal["none", "grayscale", "threshold", "deskew"]
+PdfEngineSetting = Literal["auto", "liteparse", "legacy"]
+LiteParseImageMode = Literal["off", "placeholder", "embed"]
 LogFormatSetting = Literal["json", "text"]
 LogLevelSetting = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 LlmProviderSetting = Literal["mock", "openai-compatible"]
@@ -60,6 +62,15 @@ class Settings(BaseSettings):
     docx_max_input_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
     pdf_max_input_bytes: int = Field(default=200 * 1024 * 1024, gt=0)
     pdf_max_pages: int = Field(default=1_000, gt=0)
+    # PDF/image extraction engine. "auto" uses the liteparse engine (richer
+    # Markdown: tables, headings, figures, selective OCR) when the optional
+    # liteparse package is installed, and otherwise falls back to the built-in
+    # pdfplumber + Tesseract path. "liteparse" forces it (still falls back if
+    # the package is absent); "legacy" always uses the built-in path.
+    pdf_engine: PdfEngineSetting = Field(default="auto")
+    liteparse_ocr_server_url: str | None = Field(default=None)
+    liteparse_dpi: int = Field(default=150, gt=0)
+    liteparse_image_mode: LiteParseImageMode = Field(default="placeholder")
     ocr_language: str = Field(default="eng")
     ocr_timeout_seconds: int = Field(default=120, gt=0)
     ocr_pdf_dpi: int = Field(default=200, gt=0)

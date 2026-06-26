@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- High-fidelity PDF/image extraction via the optional `liteparse` engine
+  ([liteparse](https://github.com/run-llama/liteparse), Apache-2.0). When the `liteparse` extra is
+  installed (included in `[all]`), PDFs and images are extracted to Markdown with reconstructed
+  **tables, headings, lists, and figure placeholders**, OCR-ing only the pages that need it, and
+  bundling its own PDFium + Tesseract (no `poppler` system binary needed for PDFs). The richer
+  Markdown feeds the existing cleaning/classification/OKF pipeline unchanged. `LIBRARIAN_PDF_ENGINE`
+  selects `auto` (default; liteparse when installed, otherwise the built-in pdfplumber + Tesseract
+  path), `liteparse`, or `legacy`; the built-in path remains a per-document fallback. See `NOTICE`
+  for attribution.
+
 - Classification now captures a recurring-publication identity so editions of the same report are
   connected over time: `issuer`, `series_title`, a normalized `series_key`, and an orderable
   `period`. The new `dewey_v5` prompt extracts issuer/series/period; the `series_key` is derived
