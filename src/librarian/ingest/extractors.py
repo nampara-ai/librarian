@@ -898,6 +898,8 @@ class LiteParseExtractor:
         image_mode: str = "placeholder",
         max_pages: int | None = None,
         max_input_bytes: int = 200 * 1024 * 1024,
+        ocr_timeout_seconds: int = 120,
+        auto_orient: bool = True,
         vision_provider: FigureVisionProvider | None = None,
         vision_model: str = "mock-cleaner",
         vision_max_figures: int = 20,
@@ -913,6 +915,8 @@ class LiteParseExtractor:
         self.image_mode = image_mode
         self.max_pages = max_pages
         self.max_input_bytes = max_input_bytes
+        self.ocr_timeout_seconds = ocr_timeout_seconds
+        self.auto_orient = auto_orient
         self.vision_provider = vision_provider
         self.vision_model = vision_model
         self.vision_max_figures = vision_max_figures
@@ -972,7 +976,22 @@ class LiteParseExtractor:
             max_pages=self.max_pages,
             quiet=True,
         )
-        result = parser.parse(str(path))
+        # liteparse parses PDFs natively but converts loose images to PDF first,
+        # which needs ImageMagick. Do that conversion ourselves with Pillow (after
+        # orienting the image upright) so images get the full liteparse pipeline
+        # -- tables, headings, figures -- with no ImageMagick dependency.
+        if path.suffix.lower() in IMAGE_EXTENSIONS:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                pdf_path = _image_to_single_page_pdf(
+                    path,
+                    output_dir=Path(tmp_dir),
+                    auto_orient=self.auto_orient,
+                    ocr_timeout_seconds=self.ocr_timeout_seconds,
+                )
+                return self._collect_result(parser.parse(str(pdf_path)))
+        return self._collect_result(parser.parse(str(path)))
+
+    def _collect_result(self, result: Any) -> tuple[str, list[FigureImage]]:
         figures: list[FigureImage] = []
         if self.vision_provider is not None:
             for image in result.images:
@@ -1250,6 +1269,8 @@ class CompositeExtractor:
                 image_mode=liteparse_image_mode,
                 max_pages=pdf_max_pages,
                 max_input_bytes=pdf_max_input_bytes,
+                ocr_timeout_seconds=ocr_timeout_seconds,
+                auto_orient=ocr_auto_orient,
                 vision_provider=figure_vision_provider,
                 vision_model=figure_vision_model,
                 vision_max_figures=figure_vision_max_figures,
@@ -1533,6 +1554,46 @@ def auto_orient_image(
     except Exception:  # noqa: BLE001 - orientation is best-effort
         return path
     return oriented_path
+
+
+def _image_to_single_page_pdf(
+    image_path: Path,
+    *,
+    output_dir: Path,
+    auto_orient: bool,
+    ocr_timeout_seconds: int,
+) -> Path:
+    """Render a loose image as a one-page PDF so liteparse can parse it.
+
+    liteparse handles PDFs natively but shells out to ImageMagick to turn a
+    standalone image into a PDF first. Doing the conversion with Pillow (already
+    available via the ``ocr`` extra and bundled in the Mac app) gives images the
+    full liteparse pipeline -- tables, headings, figures -- without that
+    heavyweight dependency. The image is oriented upright first so rotated
+    photos and scans extract correctly.
+    """
+    try:
+        image_module = importlib.import_module("PIL.Image")
+    except ImportError as exc:
+        raise RuntimeError(
+            "liteparse image extraction requires Pillow (install the 'ocr' extra)"
+        ) from exc
+    source = image_path
+    if auto_orient:
+        tesseract_path = shutil.which("tesseract")
+        if tesseract_path is not None:
+            source = auto_orient_image(
+                image_path,
+                tesseract_path=tesseract_path,
+                timeout_seconds=ocr_timeout_seconds,
+                output_dir=output_dir,
+            )
+    pdf_path = output_dir / f"{image_path.stem}.liteparse.pdf"
+    with image_module.open(source) as image:
+        # Flatten onto white so transparency does not become a black page.
+        rgb = image.convert("RGB")
+        rgb.save(pdf_path, "PDF", resolution=200.0)
+    return pdf_path
 
 
 def _prepare_ocr_image(

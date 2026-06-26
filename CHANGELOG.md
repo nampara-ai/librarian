@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Standalone images (PNG/JPG/scans) now get the full liteparse pipeline — reconstructed tables,
+  headings, and figures — instead of flat OCR text. liteparse needs a PDF to do this and normally
+  shells out to ImageMagick to convert an image; Librarian does the conversion with Pillow (already
+  bundled) and orients the image upright first, so images extract at the same fidelity as PDFs with
+  no ImageMagick dependency. The built-in OCR path remains the per-image fallback.
 - Sideways and upside-down images and scans now extract real text instead of garbage: before OCR,
   Librarian auto-rotates pages upright using Tesseract's orientation detection (`osd.traineddata`),
   applying the rotation only when detection is confident so a correctly-oriented page is never
