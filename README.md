@@ -137,6 +137,11 @@ sudo apt-get install -y tesseract-ocr poppler-utils  # Debian/Ubuntu
 Without them, text-layer PDFs still work; scanned pages can't be read by the fallback path. Run
 `librarian doctor` to see exactly what's available.
 
+**Rotated scans** are handled automatically: sideways or upside-down images and pages are detected
+with Tesseract's orientation detection and rotated upright before OCR, so they yield real text
+instead of garbage (it only rotates when detection is confident, never flipping a correct page).
+On by default; set `LIBRARIAN_OCR_AUTO_ORIENT=false` to disable.
+
 ---
 
 ## ⌨️ CLI reference (every command)

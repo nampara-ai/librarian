@@ -2442,6 +2442,7 @@ def _build_extractor(
         ocr_threshold=settings.ocr_threshold,
         ocr_preserve_page_images=settings.ocr_preserve_page_images,
         ocr_rotation_retry=settings.ocr_rotation_retry,
+        ocr_auto_orient=settings.ocr_auto_orient,
         ocr_correction_provider=LazyLLMProvider(settings, metrics=metrics),
         ocr_correction_mode=settings.ocr_llm_correction,
         ocr_correction_model=settings.ocr_llm_model or settings.llm_model,
