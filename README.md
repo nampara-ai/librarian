@@ -84,6 +84,11 @@ Two controls keep bulk ingestion fast and bounded:
 - **Extraction timeout** (off by default): set `LIBRARIAN_EXTRACTION_TIMEOUT_SECONDS` to a positive
   number to cap how long a single document may spend in extraction, so one pathological file cannot
   hang a batch.
+- **Parallel directory import** (`LIBRARIAN_IMPORT_CONCURRENCY`, default `2`): a directory import
+  converts and ingests several files at once, overlapping their extraction/OCR work, while keeping
+  result order, manifest resume, and per-file failure isolation intact. Set it to `1` for sequential
+  imports; higher values speed bulk imports but, for `--process`/`--queue` runs, multiply with
+  `LIBRARIAN_LLM_MAX_CONCURRENCY`, so keep it modest on rate-limited model providers.
 
 ### OCR system dependencies (CLI/API only)
 

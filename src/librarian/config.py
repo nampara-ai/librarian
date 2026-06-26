@@ -78,6 +78,12 @@ class Settings(BaseSettings):
     # pathological file cannot hang a batch (0 disables the ceiling).
     extraction_cache_enabled: bool = Field(default=True)
     extraction_timeout_seconds: int = Field(default=0, ge=0)
+    # How many files a directory import converts/ingests concurrently. The
+    # expensive extraction step runs in worker threads, so parallel files
+    # overlap their parser/OCR work. For PROCESS/QUEUE imports this also overlaps
+    # per-document LLM work, multiplying with llm_max_concurrency; keep it modest
+    # on rate-limited providers. 1 restores fully sequential imports.
+    import_concurrency: int = Field(default=2, gt=0)
     ocr_language: str = Field(default="eng")
     ocr_timeout_seconds: int = Field(default=120, gt=0)
     ocr_pdf_dpi: int = Field(default=200, gt=0)

@@ -760,6 +760,7 @@ def import_directory(
             process=getattr(container, "process_document", None),
             queue_factory=lambda: SQLiteRunQueue(container.database),
             manifest_max_bytes=container.settings.api_max_import_manifest_bytes,
+            import_concurrency=container.settings.import_concurrency,
         )
         try:
             result = await importer.import_path(

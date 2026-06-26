@@ -1334,6 +1334,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             process=getattr(container, "process_document", None),
             queue_factory=lambda: SQLiteRunQueue(container.database),
             manifest_max_bytes=settings.api_max_import_manifest_bytes,
+            import_concurrency=settings.import_concurrency,
         )
         try:
             result = await importer.import_path(
