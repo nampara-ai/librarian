@@ -129,6 +129,20 @@ def test_enrich_swallows_per_figure_failure() -> None:
     assert "**Figure (page 2)" not in out
 
 
+def test_enrich_dedupes_duplicate_placeholders() -> None:
+    # Two figures resolving to the same placeholder must not both inject (the
+    # second replace(count=1) would otherwise land inside the first's block).
+    md = "![](image_dup.png)\n"
+    figures = [_fig("dup", 1, 5000), _fig("dup", 2, 5000)]
+    provider = _FakeVision()
+
+    out, count = _enrich(md, figures, provider)
+
+    assert count == 1
+    assert provider.calls == 1
+    assert out.count("**Figure") == 1
+
+
 def test_figure_media_type_mapping() -> None:
     assert figure_media_type("png") == "image/png"
     assert figure_media_type("JPG") == "image/jpeg"
@@ -247,3 +261,23 @@ def test_composite_vision_active_and_signature_changes() -> None:
     assert plain.figure_vision_active is False
     assert with_vision.figure_vision_active is True
     assert plain.config_signature != with_vision.config_signature
+
+
+@requires_liteparse
+def test_composite_signature_tracks_vision_size_gates() -> None:
+    # Changing which figures get described (min/max bytes) or how much text each
+    # yields (response cap) must invalidate the extraction cache.
+    base = CompositeExtractor(figure_vision_provider=_FakeVision())
+    min_changed = CompositeExtractor(
+        figure_vision_provider=_FakeVision(), figure_vision_min_bytes=999
+    )
+    max_changed = CompositeExtractor(
+        figure_vision_provider=_FakeVision(), figure_vision_max_bytes=123
+    )
+    resp_changed = CompositeExtractor(
+        figure_vision_provider=_FakeVision(), figure_vision_max_response_chars=512
+    )
+
+    assert base.config_signature != min_changed.config_signature
+    assert base.config_signature != max_changed.config_signature
+    assert base.config_signature != resp_changed.config_signature

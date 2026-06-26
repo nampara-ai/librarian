@@ -8,8 +8,9 @@
   figure's placeholder so otherwise-lost chart data becomes searchable, classifiable text. Bounded by
   `LIBRARIAN_FIGURE_VISION_MAX_FIGURES`/`_MIN_BYTES`/`_MAX_BYTES`/`_MAX_CONCURRENCY`; uses
   `LIBRARIAN_FIGURE_VISION_MODEL` (defaults to the cleaning model). Per-figure failures are swallowed
-  so one bad image never fails the document, and the vision settings fold into the extraction-cache
-  signature. Providers gained a `describe_image` capability (OpenAI-compatible vision content parts;
+  so one bad image never fails the document, and the output-affecting vision settings (model, figure
+  cap, and the size/length gates) fold into the extraction-cache signature so toggling them
+  re-extracts instead of serving stale text. Providers gained a `describe_image` capability (OpenAI-compatible vision content parts;
   deterministic mock for tests/dry runs).
 - High-fidelity PDF/image extraction via the optional `liteparse` engine
   ([liteparse](https://github.com/run-llama/liteparse), Apache-2.0). When the `liteparse` extra is

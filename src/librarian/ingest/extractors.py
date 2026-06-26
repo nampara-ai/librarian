@@ -820,11 +820,20 @@ async def enrich_markdown_figures(
     fails the whole extraction. Returns the enriched markdown and the number of
     figures successfully described.
     """
-    eligible = [
-        figure
-        for figure in figures
-        if figure.placeholder in markdown and min_bytes <= len(figure.data) <= max_bytes
-    ][:max_figures]
+    # One placeholder maps to one injection site; if two figures somehow share a
+    # placeholder, keep the first so the replace(count=1) loop can't append the
+    # second figure's description into the first figure's (now re-introduced)
+    # placeholder text.
+    eligible: list[FigureImage] = []
+    seen_placeholders: set[str] = set()
+    for figure in figures:
+        if figure.placeholder in seen_placeholders:
+            continue
+        if figure.placeholder in markdown and min_bytes <= len(figure.data) <= max_bytes:
+            eligible.append(figure)
+            seen_placeholders.add(figure.placeholder)
+        if len(eligible) >= max_figures:
+            break
     if not eligible:
         return markdown, 0
 
@@ -1252,10 +1261,23 @@ class CompositeExtractor:
                 "liteparse_ocr_server_url": liteparse_ocr_server_url,
                 "liteparse_dpi": liteparse_dpi,
                 "liteparse_image_mode": liteparse_image_mode,
+                # Every vision knob that changes which figures are described, or
+                # how much text each yields, must invalidate the cache when the
+                # vision pass is active (gated so toggling unrelated knobs while
+                # vision is off does not churn the cache).
                 "figure_vision": self.figure_vision_active,
                 "figure_vision_model": figure_vision_model if self.figure_vision_active else None,
                 "figure_vision_max_figures": (
                     figure_vision_max_figures if self.figure_vision_active else None
+                ),
+                "figure_vision_min_bytes": (
+                    figure_vision_min_bytes if self.figure_vision_active else None
+                ),
+                "figure_vision_max_bytes": (
+                    figure_vision_max_bytes if self.figure_vision_active else None
+                ),
+                "figure_vision_max_response_chars": (
+                    figure_vision_max_response_chars if self.figure_vision_active else None
                 ),
                 "ocr_language": ocr_language,
                 "ocr_pdf_dpi": ocr_pdf_dpi,
@@ -1266,6 +1288,8 @@ class CompositeExtractor:
                 "ocr_correction_mode": ocr_correction_mode,
                 "ocr_correction_model": ocr_correction_model,
                 "ocr_low_confidence_threshold": ocr_low_confidence_threshold,
+                "ocr_max_correction_response_chars": ocr_max_correction_response_chars,
+                "ocr_fail_on_page_error": ocr_fail_on_page_error,
                 "ocr_correction": ocr_correction_provider is not None,
                 "pdf_max_pages": pdf_max_pages,
                 "pdf_max_input_bytes": pdf_max_input_bytes,

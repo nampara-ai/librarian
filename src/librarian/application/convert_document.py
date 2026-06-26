@@ -185,16 +185,16 @@ class DocumentConverter:
         if callable(set_page_manifest_path):
             set_page_manifest_path(page_manifest_path if write_sidecar else None)
         text = await self.extractor.extract(source_path)
+        # Capture the extractor's per-run metadata immediately, before any further
+        # await: the extractor instance is shared, so a concurrently-converting
+        # file (parallel imports) would otherwise overwrite last_metadata and the
+        # sidecar would record the wrong source provenance.
+        metadata_obj = getattr(self.extractor, "last_metadata", None)
+        metadata = cast(dict[str, object], metadata_obj) if isinstance(metadata_obj, dict) else None
         rendered = render_conversion(text, source_path=source_path, format=format)
         await asyncio.to_thread(output_path.parent.mkdir, parents=True, exist_ok=True)
         await asyncio.to_thread(_write_text_atomic, output_path, rendered)
         if write_sidecar:
-            metadata_obj = getattr(self.extractor, "last_metadata", None)
-            metadata = (
-                cast(dict[str, object], metadata_obj)
-                if isinstance(metadata_obj, dict)
-                else None
-            )
             await write_conversion_sidecar(
                 source_path=source_path,
                 output_path=output_path,

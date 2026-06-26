@@ -145,6 +145,16 @@ def test_composite_config_signature_tracks_engine_change() -> None:
     assert auto.config_signature != legacy.config_signature
 
 
+def test_composite_config_signature_tracks_output_affecting_ocr_options() -> None:
+    base = CompositeExtractor(pdf_engine="legacy")
+    fail_changed = CompositeExtractor(pdf_engine="legacy", ocr_fail_on_page_error=False)
+    resp_changed = CompositeExtractor(
+        pdf_engine="legacy", ocr_max_correction_response_chars=4096
+    )
+    assert base.config_signature != fail_changed.config_signature
+    assert base.config_signature != resp_changed.config_signature
+
+
 def test_extraction_timeout_raises(tmp_path: Path) -> None:
     source = _write(tmp_path, "doc.txt", b"hello world")
     composite = CompositeExtractor(pdf_engine="legacy", extraction_timeout_seconds=1)
