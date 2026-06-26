@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import random
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 from openai import (
     APIConnectionError,
@@ -76,10 +76,13 @@ class OpenAICompatibleProvider:
         max_tokens: int,
         temperature: float,
     ) -> str:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
         async with self._semaphore:
-            response = await self._complete_with_retries(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
+            response = await self._chat_with_retries(
+                messages=messages,
                 model=model,
                 max_tokens=max_tokens,
                 temperature=temperature,
@@ -87,11 +90,44 @@ class OpenAICompatibleProvider:
         self._record_usage(response, model=model)
         return response.choices[0].message.content or ""
 
-    async def _complete_with_retries(
+    async def describe_image(
         self,
         *,
+        image_base64: str,
+        media_type: str,
         system_prompt: str,
         user_prompt: str,
+        model: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{media_type};base64,{image_base64}"},
+                    },
+                ],
+            },
+        ]
+        async with self._semaphore:
+            response = await self._chat_with_retries(
+                messages=messages,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+        self._record_usage(response, model=model)
+        return response.choices[0].message.content or ""
+
+    async def _chat_with_retries(
+        self,
+        *,
+        messages: list[Any],
         model: str,
         max_tokens: int,
         temperature: float,
@@ -103,10 +139,7 @@ class OpenAICompatibleProvider:
                     model=model,
                     max_tokens=max_tokens,
                     temperature=temperature,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
+                    messages=cast("Any", messages),
                 )
             except Exception as exc:  # noqa: BLE001 - provider errors feed retry policy
                 if not is_retriable_openai_error(exc):

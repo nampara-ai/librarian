@@ -74,6 +74,19 @@ async def build_ingest_container(
         liteparse_ocr_server_url=resolved_settings.liteparse_ocr_server_url,
         liteparse_dpi=resolved_settings.liteparse_dpi,
         liteparse_image_mode=resolved_settings.liteparse_image_mode,
+        figure_vision_provider=(
+            LazyLLMProvider(resolved_settings, metrics=metrics)
+            if resolved_settings.figure_vision_enabled
+            else None
+        ),
+        figure_vision_model=(
+            resolved_settings.figure_vision_model or resolved_settings.llm_model
+        ),
+        figure_vision_max_figures=resolved_settings.figure_vision_max_figures,
+        figure_vision_min_bytes=resolved_settings.figure_vision_min_bytes,
+        figure_vision_max_bytes=resolved_settings.figure_vision_max_bytes,
+        figure_vision_max_concurrency=resolved_settings.figure_vision_max_concurrency,
+        figure_vision_max_response_chars=resolved_settings.figure_vision_max_response_chars,
         universal_max_input_bytes=resolved_settings.universal_max_input_bytes,
         universal_timeout_seconds=resolved_settings.universal_timeout_seconds,
         extraction_timeout_seconds=resolved_settings.extraction_timeout_seconds,

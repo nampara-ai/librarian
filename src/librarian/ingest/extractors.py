@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import importlib
 import importlib.util
@@ -739,6 +740,125 @@ def liteparse_available() -> bool:
     return importlib.util.find_spec("liteparse") is not None
 
 
+FIGURE_VISION_SYSTEM_PROMPT = """You describe figures extracted from documents so their \
+information survives as text. Be faithful and specific; never invent data that is not visible."""
+
+FIGURE_VISION_USER_PROMPT = """Describe this figure from a document in Markdown.
+- State what the figure shows in one or two sentences.
+- If it is a chart or graph, reconstruct the underlying data as a Markdown table (axis labels,
+  series names, and the values you can read). Include units.
+- If it is a diagram, photo, or logo, describe it briefly instead of tabulating.
+Return only the description (and table if applicable). Do not add commentary about the task."""
+
+
+class FigureVisionProvider(Protocol):
+    """Minimal vision-capable LLM surface for figure enrichment."""
+
+    @property
+    def name(self) -> str: ...
+
+    async def describe_image(
+        self,
+        *,
+        image_base64: str,
+        media_type: str,
+        system_prompt: str,
+        user_prompt: str,
+        model: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> str: ...
+
+
+@dataclass(frozen=True, slots=True)
+class FigureImage:
+    """One embedded figure image to enrich, keyed by its markdown placeholder id."""
+
+    id: str
+    page: int
+    media_type: str
+    data: bytes
+
+    @property
+    def placeholder(self) -> str:
+        """The markdown placeholder liteparse emits for this image."""
+        return f"![](image_{self.id}.png)"
+
+
+_FIGURE_MEDIA_TYPES = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+}
+
+
+def figure_media_type(image_format: str) -> str:
+    """Map a liteparse image format to an IANA media type (default PNG)."""
+    return _FIGURE_MEDIA_TYPES.get(image_format.lower().lstrip("."), "image/png")
+
+
+async def enrich_markdown_figures(
+    markdown: str,
+    figures: Sequence[FigureImage],
+    *,
+    provider: FigureVisionProvider,
+    model: str,
+    max_figures: int,
+    min_bytes: int,
+    max_bytes: int,
+    max_concurrency: int,
+    max_response_chars: int,
+    temperature: float = 0.0,
+) -> tuple[str, int]:
+    """Inject vision-LLM descriptions next to figure placeholders in the markdown.
+
+    Only figures whose placeholder actually appears in the markdown and whose
+    size is within ``[min_bytes, max_bytes]`` are sent to the model, capped at
+    ``max_figures``. Per-figure failures are swallowed so one bad image never
+    fails the whole extraction. Returns the enriched markdown and the number of
+    figures successfully described.
+    """
+    eligible = [
+        figure
+        for figure in figures
+        if figure.placeholder in markdown and min_bytes <= len(figure.data) <= max_bytes
+    ][:max_figures]
+    if not eligible:
+        return markdown, 0
+
+    semaphore = asyncio.Semaphore(max(1, max_concurrency))
+
+    async def describe(figure: FigureImage) -> tuple[FigureImage, str | None]:
+        async with semaphore:
+            try:
+                description = await provider.describe_image(
+                    image_base64=base64.b64encode(figure.data).decode("ascii"),
+                    media_type=figure.media_type,
+                    system_prompt=FIGURE_VISION_SYSTEM_PROMPT,
+                    user_prompt=FIGURE_VISION_USER_PROMPT,
+                    model=model,
+                    max_tokens=2048,
+                    temperature=temperature,
+                )
+            except Exception:  # noqa: BLE001 - one figure must not fail the document
+                return figure, None
+        return figure, description.strip()[:max_response_chars] or None
+
+    described = await asyncio.gather(*(describe(figure) for figure in eligible))
+
+    enriched = markdown
+    count = 0
+    for figure, description in described:
+        if not description:
+            continue
+        block = f"{figure.placeholder}\n\n**Figure (page {figure.page}):** {description}"
+        enriched = enriched.replace(figure.placeholder, block, 1)
+        count += 1
+    return enriched, count
+
+
 class LiteParseExtractor:
     """Extract PDFs and images to rich Markdown via the liteparse engine.
 
@@ -760,6 +880,13 @@ class LiteParseExtractor:
         image_mode: str = "placeholder",
         max_pages: int | None = None,
         max_input_bytes: int = 200 * 1024 * 1024,
+        vision_provider: FigureVisionProvider | None = None,
+        vision_model: str = "mock-cleaner",
+        vision_max_figures: int = 20,
+        vision_min_bytes: int = 2048,
+        vision_max_bytes: int = 8 * 1024 * 1024,
+        vision_max_concurrency: int = 2,
+        vision_max_response_chars: int = 16 * 1024,
     ) -> None:
         self.ocr_language = ocr_language
         self.ocr_server_url = ocr_server_url
@@ -767,37 +894,77 @@ class LiteParseExtractor:
         self.image_mode = image_mode
         self.max_pages = max_pages
         self.max_input_bytes = max_input_bytes
+        self.vision_provider = vision_provider
+        self.vision_model = vision_model
+        self.vision_max_figures = vision_max_figures
+        self.vision_min_bytes = vision_min_bytes
+        self.vision_max_bytes = vision_max_bytes
+        self.vision_max_concurrency = vision_max_concurrency
+        self.vision_max_response_chars = vision_max_response_chars
         self.last_metadata: dict[str, object] | None = None
+
+    @property
+    def vision_active(self) -> bool:
+        return self.vision_provider is not None
 
     async def extract(self, path: Path) -> str:
         _validate_input_size(path, self.max_input_bytes, "LiteParse extraction input")
-        text = await asyncio.to_thread(self._extract_sync, path)
+        text, figures = await asyncio.to_thread(self._extract_sync, path)
         if not text.strip():
             raise ValueError(f"No extractable content found: {path}")
-        self.last_metadata = {
+        metadata: dict[str, object] = {
             "artifact_type": "liteparse-extraction",
             "engine": "liteparse",
             "source_file": path.name,
         }
+        if self.vision_provider is not None and figures:
+            text, described = await enrich_markdown_figures(
+                text,
+                figures,
+                provider=self.vision_provider,
+                model=self.vision_model,
+                max_figures=self.vision_max_figures,
+                min_bytes=self.vision_min_bytes,
+                max_bytes=self.vision_max_bytes,
+                max_concurrency=self.vision_max_concurrency,
+                max_response_chars=self.vision_max_response_chars,
+            )
+            if described:
+                metadata["figures_described"] = described
+        self.last_metadata = metadata
         return text
 
-    def _extract_sync(self, path: Path) -> str:
+    def _extract_sync(self, path: Path) -> tuple[str, list[FigureImage]]:
         try:
             liteparse = importlib.import_module("liteparse")
         except ImportError as exc:  # pragma: no cover - guarded by liteparse_available
             raise RuntimeError("PDF/image extraction requires the 'liteparse' extra") from exc
+        # Vision enrichment needs the raw image bytes, which liteparse only
+        # populates in "embed" mode; the markdown placeholders are identical.
+        image_mode = "embed" if self.vision_provider is not None else self.image_mode
         parser = liteparse.LiteParse(
             output_format="markdown",
             ocr_enabled=True,
             ocr_server_url=self.ocr_server_url,
             ocr_language=self.ocr_language,
-            image_mode=self.image_mode,
+            image_mode=image_mode,
             dpi=self.dpi,
             max_pages=self.max_pages,
             quiet=True,
         )
         result = parser.parse(str(path))
-        return cast(str, result.text)
+        figures: list[FigureImage] = []
+        if self.vision_provider is not None:
+            for image in result.images:
+                figures.append(
+                    FigureImage(
+                        id=str(image.id),
+                        page=int(image.page),
+                        media_type=figure_media_type(str(image.format)),
+                        data=bytes(image.bytes),
+                    )
+                )
+        return cast(str, result.text), figures
 
 
 class FallbackExtractor:
@@ -989,6 +1156,13 @@ class CompositeExtractor:
         liteparse_ocr_server_url: str | None = None,
         liteparse_dpi: int = 150,
         liteparse_image_mode: str = "placeholder",
+        figure_vision_provider: FigureVisionProvider | None = None,
+        figure_vision_model: str = "mock-cleaner",
+        figure_vision_max_figures: int = 20,
+        figure_vision_min_bytes: int = 2048,
+        figure_vision_max_bytes: int = 8 * 1024 * 1024,
+        figure_vision_max_concurrency: int = 2,
+        figure_vision_max_response_chars: int = 16 * 1024,
         universal_max_input_bytes: int = 50 * 1024 * 1024,
         universal_timeout_seconds: int = 120,
         extraction_timeout_seconds: int = 0,
@@ -1040,6 +1214,9 @@ class CompositeExtractor:
         # images through it for richer Markdown (tables/headings/figures,
         # selective OCR), keeping the built-in extractors as a fallback.
         self.liteparse_active = pdf_engine != "legacy" and liteparse_available()
+        # Vision enrichment only applies to the liteparse engine (it needs the
+        # engine's embedded figure images); it is off unless a provider is given.
+        self.figure_vision_active = self.liteparse_active and figure_vision_provider is not None
         if self.liteparse_active:
             liteparse_extractor = LiteParseExtractor(
                 ocr_language=ocr_language,
@@ -1048,6 +1225,13 @@ class CompositeExtractor:
                 image_mode=liteparse_image_mode,
                 max_pages=pdf_max_pages,
                 max_input_bytes=pdf_max_input_bytes,
+                vision_provider=figure_vision_provider,
+                vision_model=figure_vision_model,
+                vision_max_figures=figure_vision_max_figures,
+                vision_min_bytes=figure_vision_min_bytes,
+                vision_max_bytes=figure_vision_max_bytes,
+                vision_max_concurrency=figure_vision_max_concurrency,
+                vision_max_response_chars=figure_vision_max_response_chars,
             )
             self._extractors[".pdf"] = FallbackExtractor(
                 liteparse_extractor, pdf_extractor, supported_extensions=frozenset({".pdf"})
@@ -1068,6 +1252,11 @@ class CompositeExtractor:
                 "liteparse_ocr_server_url": liteparse_ocr_server_url,
                 "liteparse_dpi": liteparse_dpi,
                 "liteparse_image_mode": liteparse_image_mode,
+                "figure_vision": self.figure_vision_active,
+                "figure_vision_model": figure_vision_model if self.figure_vision_active else None,
+                "figure_vision_max_figures": (
+                    figure_vision_max_figures if self.figure_vision_active else None
+                ),
                 "ocr_language": ocr_language,
                 "ocr_pdf_dpi": ocr_pdf_dpi,
                 "ocr_pdf_max_pages": ocr_pdf_max_pages,

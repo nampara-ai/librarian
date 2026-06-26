@@ -70,6 +70,23 @@ classification, and OKF pipeline. Set `LIBRARIAN_PDF_ENGINE` to `auto` (default 
 when installed, else built-in), `liteparse` (force), or `legacy` (always built-in). Point
 `LIBRARIAN_LITEPARSE_OCR_SERVER_URL` at a Surya/EasyOCR/PaddleOCR server for higher-accuracy OCR.
 
+### Figure & chart enrichment (vision)
+
+Charts and figures carry data that plain extraction loses — liteparse leaves them as image
+placeholders. With a vision-capable model you can recover that data as text. Set
+`LIBRARIAN_FIGURE_VISION_ENABLED=true` (and `LIBRARIAN_FIGURE_VISION_MODEL` if your cleaning model
+isn't vision-capable): when the liteparse engine is active, each embedded figure image is sent to the
+model, which returns a description and — for charts — a reconstructed Markdown data table. The result
+is injected next to the figure's placeholder, so the chart's numbers flow into the same cleaning,
+classification, search, and OKF pipeline as everything else.
+
+It's off by default because it needs a vision model and adds per-figure cost/latency. Tunables:
+`LIBRARIAN_FIGURE_VISION_MAX_FIGURES` (cap per document, default 20),
+`LIBRARIAN_FIGURE_VISION_MIN_BYTES` / `_MAX_BYTES` (skip icons / oversized images), and
+`LIBRARIAN_FIGURE_VISION_MAX_CONCURRENCY`. A figure the model can't read is left as its plain
+placeholder rather than failing the document. (Vector-drawn charts that liteparse doesn't emit as
+embedded raster images aren't covered yet.)
+
 ### Extraction throughput
 
 Two controls keep bulk ingestion fast and bounded:
