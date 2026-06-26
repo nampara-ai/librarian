@@ -11,6 +11,16 @@
   selects `auto` (default; liteparse when installed, otherwise the built-in pdfplumber + Tesseract
   path), `liteparse`, or `legacy`; the built-in path remains a per-document fallback. See `NOTICE`
   for attribution.
+- Content-hash extraction cache: extracted Markdown is cached by source SHA-256 plus a signature of
+  the extraction configuration (engine + OCR options), so re-ingesting unchanged files — or the same
+  bytes across documents — skips the parser/OCR work. The cache is config-aware (changing the engine
+  or OCR settings re-extracts rather than serving stale text) and never caches failures (transient
+  errors retry). New migration `0009_extraction_cache.sql`; toggle with
+  `LIBRARIAN_EXTRACTION_CACHE_ENABLED` (default on). `admin db-stats` reports the `extraction_cache`
+  row count.
+- Extraction timeout ceiling: `LIBRARIAN_EXTRACTION_TIMEOUT_SECONDS` (default `0`, disabled) bounds a
+  single document's extraction so one pathological file cannot hang a batch, raising
+  `ExtractionTimeoutError` when exceeded.
 
 - Classification now captures a recurring-publication identity so editions of the same report are
   connected over time: `issuer`, `series_title`, a normalized `series_key`, and an orderable

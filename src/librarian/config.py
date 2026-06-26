@@ -71,6 +71,13 @@ class Settings(BaseSettings):
     liteparse_ocr_server_url: str | None = Field(default=None)
     liteparse_dpi: int = Field(default=150, gt=0)
     liteparse_image_mode: LiteParseImageMode = Field(default="placeholder")
+    # Extraction throughput controls. The content-hash extraction cache stores
+    # extracted Markdown keyed by file digest + extraction-config signature, so
+    # re-ingesting unchanged files (or the same file across documents) skips the
+    # expensive parser/OCR work. The timeout bounds a single extraction so one
+    # pathological file cannot hang a batch (0 disables the ceiling).
+    extraction_cache_enabled: bool = Field(default=True)
+    extraction_timeout_seconds: int = Field(default=0, ge=0)
     ocr_language: str = Field(default="eng")
     ocr_timeout_seconds: int = Field(default=120, gt=0)
     ocr_pdf_dpi: int = Field(default=200, gt=0)
