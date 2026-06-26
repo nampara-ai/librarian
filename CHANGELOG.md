@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.7.0 - 2026-06-26
 
 - The macOS app now ships the high-fidelity liteparse engine as its default (the bundled backend
   already installs the `[all]` extras), with fully offline OCR: the app points liteparse's bundled
