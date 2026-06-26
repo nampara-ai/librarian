@@ -21,6 +21,12 @@
 - Extraction timeout ceiling: `LIBRARIAN_EXTRACTION_TIMEOUT_SECONDS` (default `0`, disabled) bounds a
   single document's extraction so one pathological file cannot hang a batch, raising
   `ExtractionTimeoutError` when exceeded.
+- Directory imports now convert/ingest files with bounded concurrency
+  (`LIBRARIAN_IMPORT_CONCURRENCY`, default `2`), so the per-file extraction work overlaps instead of
+  running strictly one at a time. Output paths are reserved up front to stay collision-free, and
+  result order, manifest resume, and per-file failure isolation are preserved. Set it to `1` for
+  fully sequential imports; raising it speeds bulk imports but, for `--process`/`--queue` runs, also
+  multiplies with `llm_max_concurrency`, so keep it modest on rate-limited providers.
 
 - Classification now captures a recurring-publication identity so editions of the same report are
   connected over time: `issuer`, `series_title`, a normalized `series_key`, and an orderable

@@ -20,7 +20,6 @@ from librarian.application.convert_document import (
     conversion_output_exclusions,
     conversion_output_path,
     discover_supported_files,
-    unique_output_path,
     validate_directory_output,
 )
 from librarian.application.ingest_document import IngestDocument
@@ -41,6 +40,16 @@ class ImportProcessingMode(StrEnum):
     NONE = "none"
     PROCESS = "process"
     QUEUE = "queue"
+
+
+@dataclass(frozen=True, slots=True)
+class _ImportPlan:
+    """A planned import unit: either a resume hit or a file to convert."""
+
+    index: int
+    source_path: Path
+    resume_item: ImportItem | None
+    destination: Path | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +128,7 @@ class ImportLibrary:
     process: ProcessDocument | None
     queue_factory: Callable[[], RunQueue] | None = None
     manifest_max_bytes: int = _DEFAULT_IMPORT_MANIFEST_MAX_BYTES
+    import_concurrency: int = 1
 
     async def import_path(
         self,
@@ -224,30 +234,14 @@ class ImportLibrary:
                 subdirectory_name=subdirectory_name,
             )
             if not overwrite:
-                destination = await unique_output_path(destination)
-            try:
-                await self.converter.convert_file(
-                    source_path,
-                    destination,
-                    format=format,
-                    overwrite=overwrite,
-                    write_sidecar=True,
-                )
-                conversion = BatchConversionItem(
-                    source_path=source_path,
-                    output_path=destination,
-                    status="converted",
-                )
-            except Exception as exc:  # noqa: BLE001 - failure recorded per file
-                self.converter.record_conversion_failure(source_path, exc)
-                conversion = BatchConversionItem(
-                    source_path=source_path,
-                    output_path=destination,
-                    status="failed",
-                    error=sanitize_error_message(exc),
-                    error_type=classify_conversion_error(exc),
-                )
-            item = await self._ingest_converted(conversion, processing_mode)
+                destination = await _unique_output_path(destination, set())
+            item = await self._convert_and_ingest(
+                source_path,
+                destination,
+                format=format,
+                overwrite=overwrite,
+                processing_mode=processing_mode,
+            )
         result = ImportResult(items=(item,))
         if manifest_path is not None:
             await _write_manifest(manifest_path, result)
@@ -293,52 +287,95 @@ class ImportLibrary:
                 subdirectory_name=subdirectory_name,
             ),
         )
-        items: list[ImportItem] = []
-        for source_path in files:
+        # Plan sequentially first: resume decisions and output-path allocation
+        # are cheap (stat-only) and must stay race-free, so reserve every
+        # destination up front before any concurrent conversion runs.
+        plans: list[_ImportPlan] = []
+        reserved: set[Path] = set()
+        for index, source_path in enumerate(files):
             previous = manifest.get(str(source_path))
             if previous and _can_resume(previous, processing_mode):
-                item = _item_from_manifest(previous)
-            else:
-                destination = conversion_output_path(
-                    source_path,
-                    source_dir=source_dir,
-                    format=format,
-                    output_mode=output_mode,
-                    output_dir=output_dir,
-                    subdirectory_name=subdirectory_name,
-                )
-                if not overwrite:
-                    destination = await unique_output_path(destination)
-                try:
-                    await self.converter.convert_file(
-                        source_path,
-                        destination,
+                plans.append(_ImportPlan(index, source_path, _item_from_manifest(previous), None))
+                continue
+            destination = conversion_output_path(
+                source_path,
+                source_dir=source_dir,
+                format=format,
+                output_mode=output_mode,
+                output_dir=output_dir,
+                subdirectory_name=subdirectory_name,
+            )
+            if not overwrite:
+                destination = await _unique_output_path(destination, reserved)
+            reserved.add(destination)
+            plans.append(_ImportPlan(index, source_path, None, destination))
+
+        # Execute the expensive convert/ingest work with bounded concurrency.
+        # Only extraction (run in worker threads) truly parallelizes; the
+        # surrounding coroutine state is mutated between awaits, so plain
+        # assignment is safe and just the manifest file write needs a lock.
+        results: list[ImportItem | None] = [None] * len(plans)
+        semaphore = asyncio.Semaphore(max(1, self.import_concurrency))
+        manifest_lock = asyncio.Lock()
+
+        async def _run(plan: _ImportPlan) -> None:
+            async with semaphore:
+                if plan.resume_item is not None:
+                    item = plan.resume_item
+                else:
+                    assert plan.destination is not None  # noqa: S101 - set when not resuming
+                    item = await self._convert_and_ingest(
+                        plan.source_path,
+                        plan.destination,
                         format=format,
                         overwrite=overwrite,
-                        write_sidecar=True,
+                        processing_mode=processing_mode,
                     )
-                    conversion = BatchConversionItem(
-                        source_path=source_path,
-                        output_path=destination,
-                        status="converted",
-                    )
-                except Exception as exc:  # noqa: BLE001 - failure recorded per file
-                    self.converter.record_conversion_failure(source_path, exc)
-                    conversion = BatchConversionItem(
-                        source_path=source_path,
-                        output_path=destination,
-                        status="failed",
-                        error=sanitize_error_message(exc),
-                        error_type=classify_conversion_error(exc),
-                    )
-                item = await self._ingest_converted(conversion, processing_mode)
-            items.append(item)
-            if manifest_path is not None:
-                await _write_manifest(manifest_path, ImportResult(items=tuple(items)))
+                results[plan.index] = item
+                if manifest_path is not None:
+                    completed = tuple(entry for entry in results if entry is not None)
+                    async with manifest_lock:
+                        await _write_manifest(manifest_path, ImportResult(items=completed))
+
+        await asyncio.gather(*(_run(plan) for plan in plans))
+        items = [entry for entry in results if entry is not None]
         result = ImportResult(items=tuple(items))
         if manifest_path is not None:
             await _write_manifest(manifest_path, result)
         return result
+
+    async def _convert_and_ingest(
+        self,
+        source_path: Path,
+        destination: Path,
+        *,
+        format: ConversionFormat,
+        overwrite: bool,
+        processing_mode: ImportProcessingMode,
+    ) -> ImportItem:
+        try:
+            await self.converter.convert_file(
+                source_path,
+                destination,
+                format=format,
+                overwrite=overwrite,
+                write_sidecar=True,
+            )
+            conversion = BatchConversionItem(
+                source_path=source_path,
+                output_path=destination,
+                status="converted",
+            )
+        except Exception as exc:  # noqa: BLE001 - failure recorded per file
+            self.converter.record_conversion_failure(source_path, exc)
+            conversion = BatchConversionItem(
+                source_path=source_path,
+                output_path=destination,
+                status="failed",
+                error=sanitize_error_message(exc),
+                error_type=classify_conversion_error(exc),
+            )
+        return await self._ingest_converted(conversion, processing_mode)
 
     async def _ingest_converted(
         self,
@@ -498,6 +535,22 @@ async def _validate_manifest_path(path: Path | None, *, max_bytes: int) -> None:
 
 async def _write_manifest(path: Path, result: ImportResult) -> None:
     await write_import_report(path, result)
+
+
+async def _unique_output_path(path: Path, reserved: set[Path]) -> Path:
+    """Return an output path that is free on disk and not already reserved.
+
+    Like ``convert_document.unique_output_path`` but also avoids names handed
+    out earlier in the same planning pass, since destinations are reserved
+    before their files exist when imports run concurrently.
+    """
+    if path not in reserved and not await asyncio.to_thread(path.exists):
+        return path
+    for index in range(2, 10_000):
+        candidate = path.with_name(f"{path.stem}-{index}{path.suffix}")
+        if candidate not in reserved and not await asyncio.to_thread(candidate.exists):
+            return candidate
+    raise FileExistsError(f"Could not find available output path for {path}")
 
 
 def _write_text_atomic(path: Path, payload: str) -> None:
