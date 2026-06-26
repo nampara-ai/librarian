@@ -1,193 +1,250 @@
 # Librarian
 
-Librarian is a local-first document ingestion, cleaning, classification, and search system. It converts transcripts, Markdown, text files, DOCX, PDFs, and OCR images into clean Markdown or plain text; processes them with an OpenAI-compatible model while preserving source fidelity; classifies the result with Dewey-style labels; and exposes the same engine through a Mac app, a CLI, and a FastAPI service.
+### Drop in messy documents. Get back a clean, classified, searchable library.
 
-Version `1.7.0` is the stable production release. The default deployment is local or single-node: source documents and generated outputs stay in SQLite-backed local storage unless you configure an external model provider for cleaning, classification, or OCR correction.
+Librarian is a local-first **parser + copy-editor + librarian** in one. Hand it transcripts, PDFs,
+DOCX, images, or scans; it extracts the text at near-commercial fidelity, **cleans it with an LLM to
+Chicago-Manual style without inventing or dropping a single fact**, files every document under a
+Dewey-style classification, and makes the whole collection full-text searchable. Runs as a native
+**Mac app**, a scriptable **CLI**, and a **FastAPI service** — all on the same engine, all on your
+own machine.
 
-## Mac App
+⬇️ [**Download the Mac app**](https://github.com/nampara-ai/librarian/releases/latest) ·
+🚀 [Quick start](#-quick-start-60-seconds) ·
+⌨️ [CLI reference](#️-cli-reference-every-command) ·
+🔌 [API](#-api) ·
+🏛️ [Architecture](docs/ARCHITECTURE.md)
 
-The easiest way to use Librarian is the native Mac app — a self-contained download with the entire engine inside:
+> This is not just a PDF-to-text converter. Plenty of tools turn a PDF into a wall of text.
+> Librarian's job starts *after* extraction: it copy-edits the result, gives it a clean title and a
+> Dewey number, writes an 80–100 word synopsis and metadata tags, and drops it into a searchable,
+> exportable library. The extractor is best-in-class; the **clean-up and organization are what make
+> it Librarian**.
 
-1. Download [Librarian-AppleSilicon.dmg](https://github.com/nampara-ai/librarian/releases/latest/download/Librarian-AppleSilicon.dmg) (M-series Macs) or [Librarian-Intel.dmg](https://github.com/nampara-ai/librarian/releases/latest/download/Librarian-Intel.dmg) (Intel Macs). If a direct link does not resolve, download the DMG from the assets of the [latest release](https://github.com/nampara-ai/librarian/releases/latest).
-2. Open the DMG and drag **Librarian** to **Applications**.
-3. Launch it and drop files anywhere in the window.
+Version `1.7.0` is the stable production release. Everything runs locally by default — source files
+and generated outputs live in a SQLite-backed workspace on your disk, and text leaves your machine
+only when *you* point cleaning, classification, or OCR-correction at an external model provider.
 
-Drag-and-drop ingest, live processing progress, full-text search, and Markdown export — no terminal required. See [apps/macos](apps/macos/README.md) for first-launch notes, data locations, LLM provider configuration, and how the app is built and released.
+---
 
-Everything below covers the engine itself — the CLI and API the app is built on.
+## What it is
 
-## Install
+| Surface | What you get | Best for |
+| --- | --- | --- |
+| 🖥️ **Mac app** | Drag files into a window. Live progress, full-text search, one-click Markdown export. The entire engine, Python runtime, and OCR tools are inside the download. | Just using it. Zero terminal. |
+| ⌨️ **CLI** | The whole pipeline as composable commands, every query command speaks `--json`. | Scripting, automation, bulk corpora. |
+| 🔌 **API** | A local FastAPI service with the same engine behind an HTTP surface. | Wiring Librarian into other tools/agents. |
 
-Requires **Python 3.12+**. (The Mac app needs none of this — it bundles the engine, the Python
-runtime, and the OCR tools. This section is for the CLI and API.)
+All three run the **same engine** and the **same local SQLite library**.
 
-From PyPI:
+---
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install "nampara-librarian[all]"
-```
+## ⬇️ Install in 60 seconds
 
-From a downloaded release wheel:
+### The Mac app (no terminal, nothing to set up)
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install "nampara_librarian-1.7.0-py3-none-any.whl[all]"
-```
+1. Download [**Librarian-AppleSilicon.dmg**](https://github.com/nampara-ai/librarian/releases/latest/download/Librarian-AppleSilicon.dmg)
+   (M-series) or [**Librarian-Intel.dmg**](https://github.com/nampara-ai/librarian/releases/latest/download/Librarian-Intel.dmg)
+   (Intel). If a direct link doesn't resolve, grab the DMG from the [latest release](https://github.com/nampara-ai/librarian/releases/latest) assets.
+2. Open the DMG and drag **Librarian** to **Applications**. First launch: right-click → **Open** once to clear Gatekeeper.
+3. Drop files anywhere in the window.
 
-From a source checkout:
+The app bundles the high-fidelity extraction engine **and** its OCR — scanned PDFs are read fully
+offline, no Homebrew, no `PATH` setup, no first-run downloads. See [apps/macos](apps/macos/README.md)
+for data locations, model-provider setup, and how it's built.
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev,all]"
-```
-
-### Optional dependency extras
-
-The base install is intentionally lean; opt into capabilities with extras (or `[all]` for
-everything):
-
-| Extra | Enables |
-| --- | --- |
-| `pdf` | Built-in PDF text extraction (`pdfplumber`) |
-| `ocr` | Scanned/image-PDF OCR for the built-in engine (`pdf2image`, `pillow`, `pytesseract`) |
-| `liteparse` | High-fidelity PDF/image extraction — tables, headings, figures, selective OCR — via the `liteparse` engine (bundles PDFium + Tesseract; see below) |
-| `universal` | Broad document conversion via `markitdown` (PPTX, XLSX, Outlook, …) |
-| `otel` | OpenTelemetry tracing/metrics export |
-| `all` | All of the above |
-
-### PDF/image extraction engine
-
-With the `liteparse` extra installed (included in `[all]`), Librarian extracts PDFs and images
-with [liteparse](https://github.com/run-llama/liteparse) (Apache-2.0) instead of the built-in
-pdfplumber + Tesseract path. It reconstructs **Markdown tables, headings, lists, and figure
-placeholders** and OCRs only the pages that need it, and it bundles its own PDFium + Tesseract
-(no `poppler` system binary required for PDFs). The richer Markdown feeds the same cleaning,
-classification, and OKF pipeline. Set `LIBRARIAN_PDF_ENGINE` to `auto` (default — use liteparse
-when installed, else built-in), `liteparse` (force), or `legacy` (always built-in). Point
-`LIBRARIAN_LITEPARSE_OCR_SERVER_URL` at a Surya/EasyOCR/PaddleOCR server for higher-accuracy OCR.
-liteparse's bundled Tesseract fetches its language data on first use; to run fully offline, set
-`LIBRARIAN_LITEPARSE_TESSDATA_PATH` to a directory of Tesseract `*.traineddata` (the Mac app does
-this automatically, pointing it at its bundled `eng`/`osd` data). The Mac app ships the `[all]`
-extras, so the liteparse engine is the default there with no setup.
-
-### Figure & chart enrichment (vision)
-
-Charts and figures carry data that plain extraction loses — liteparse leaves them as image
-placeholders. With a vision-capable model you can recover that data as text. Set
-`LIBRARIAN_FIGURE_VISION_ENABLED=true` (and `LIBRARIAN_FIGURE_VISION_MODEL` if your cleaning model
-isn't vision-capable): when the liteparse engine is active, each embedded figure image is sent to the
-model, which returns a description and — for charts — a reconstructed Markdown data table. The result
-is injected next to the figure's placeholder, so the chart's numbers flow into the same cleaning,
-classification, search, and OKF pipeline as everything else.
-
-It's off by default because it needs a vision model and adds per-figure cost/latency. Tunables:
-`LIBRARIAN_FIGURE_VISION_MAX_FIGURES` (cap per document, default 20),
-`LIBRARIAN_FIGURE_VISION_MIN_BYTES` / `_MAX_BYTES` (skip icons / oversized images), and
-`LIBRARIAN_FIGURE_VISION_MAX_CONCURRENCY`. A figure the model can't read is left as its plain
-placeholder rather than failing the document. (Vector-drawn charts that liteparse doesn't emit as
-embedded raster images aren't covered yet.)
-
-### Extraction throughput
-
-Two controls keep bulk ingestion fast and bounded:
-
-- **Content-hash extraction cache** (on by default): extracted Markdown is cached by the source
-  file's SHA-256 plus a signature of the extraction configuration, so re-ingesting unchanged files —
-  or the same bytes across documents — skips the parser/OCR work. The cache is config-aware (changing
-  `LIBRARIAN_PDF_ENGINE` or OCR settings re-extracts instead of serving stale text) and never caches
-  failures, so a transient error (e.g. an unreachable OCR server) is retried on the next run. Disable
-  with `LIBRARIAN_EXTRACTION_CACHE_ENABLED=false`. `librarian admin db-stats` reports the
-  `extraction_cache` row count.
-- **Extraction timeout** (off by default): set `LIBRARIAN_EXTRACTION_TIMEOUT_SECONDS` to a positive
-  number to cap how long a single document may spend in extraction, so one pathological file cannot
-  hang a batch.
-- **Parallel directory import** (`LIBRARIAN_IMPORT_CONCURRENCY`, default `2`): a directory import
-  converts and ingests several files at once, overlapping their extraction/OCR work, while keeping
-  result order, manifest resume, and per-file failure isolation intact. Set it to `1` for sequential
-  imports; higher values speed bulk imports but, for `--process`/`--queue` runs, multiply with
-  `LIBRARIAN_LLM_MAX_CONCURRENCY`, so keep it modest on rate-limited model providers.
-
-### OCR system dependencies (CLI/API only)
-
-OCR for scanned or image-based PDFs needs two **system** binaries that cannot be installed via
-pip — they must be on your `PATH`:
+### The CLI / API (Python 3.12+)
 
 ```bash
-# macOS
-brew install tesseract poppler
-
-# Debian/Ubuntu
-sudo apt-get install -y tesseract-ocr poppler-utils
+python -m venv .venv && source .venv/bin/activate
+pip install "nampara-librarian[all]"      # [all] pulls every optional capability
+librarian doctor                          # confirm what's available
 ```
 
-Without them, text-layer PDFs still work, but scanned pages cannot be read. (The Mac app bundles
-both, so app users never need this.) Run `librarian doctor` to verify what's available.
+> From a release wheel: `pip install "nampara_librarian-1.7.0-py3-none-any.whl[all]"` ·
+> From a checkout: `pip install -e ".[dev,all]"`
 
-## Quick Start
+---
+
+## 🚀 Quick start (60 seconds)
 
 ```bash
-librarian init
-librarian doctor --strict
-librarian import examples/corpus/markdown-transcript.md --format md --process
-librarian list
-librarian search "library processing" --details
-librarian export doc_... --format md --output cleaned.md
+librarian init                                  # create a local workspace (./.librarian)
+librarian import ./my-documents --recursive --process   # convert → clean → classify everything
+librarian list                                  # see what landed, with Dewey codes + titles
+librarian search "canter transitions" --details # full-text search across the library
+librarian show doc_1a2b3c4d                      # one document's metadata + synopsis
+librarian export doc_1a2b3c4d --format md --output clean.md
 ```
 
-For a real model provider:
+That's the whole loop: **import → search → export.** By default everything runs with a built-in
+*mock* model (no network, deterministic), so you can try the mechanics instantly. Point it at a real
+model when you want real cleaning and classification:
 
 ```bash
 export LIBRARIAN_LLM_PROVIDER=openai-compatible
 export LIBRARIAN_LLM_MODEL=gpt-4.1-mini
-export OPENAI_API_KEY=...
+export OPENAI_API_KEY=sk-...
 librarian import ./input --recursive --format md --process
 ```
 
-## CLI
+---
 
-User-facing commands:
+## 🧠 What actually happens to a document
+
+Each file flows through five stages — and you can stop at any of them:
+
+1. **Extract** — PDFs, DOCX, images, transcripts, and 20+ formats → clean Markdown. Tables,
+   headings, lists, and figures are reconstructed; only the pages that *need* OCR get it.
+2. **Clean** — an LLM copy-edits the Markdown to Chicago-Manual-of-Style prose, fixing OCR noise,
+   line-break artifacts, and spacing **without summarizing, reordering, or inventing**. Source
+   fidelity is validated, not assumed.
+3. **Classify** — a Dewey-style code, a human title, an 80–100 word synopsis, and metadata tags.
+   Recurring publications are linked into series across editions.
+4. **Search** — everything is indexed for fast full-text search with facets and citation lookup.
+5. **Export** — single documents as Markdown/JSON/text, or the whole library as an
+   [Open Knowledge Format](docs/OKF.md) bundle for handing to another agent or knowledge tool.
+
+---
+
+## 📄 The extraction engine
+
+With the `liteparse` extra (included in `[all]`), Librarian extracts PDFs and images with
+[liteparse](https://github.com/run-llama/liteparse) (Apache-2.0) — reconstructed **Markdown tables,
+headings, lists, and figure placeholders**, with selective OCR and its own bundled PDFium +
+Tesseract (no `poppler` needed). The built-in `pdfplumber` + Tesseract path stays as a per-document
+fallback.
+
+| Capability | How to turn it on | What it does |
+| --- | --- | --- |
+| **Engine select** | `LIBRARIAN_PDF_ENGINE=auto\|liteparse\|legacy` | `auto` (default) uses liteparse when installed, else built-in. |
+| **Offline OCR data** | `LIBRARIAN_LITEPARSE_TESSDATA_PATH=/path/to/tessdata` | Point liteparse's OCR at local language data (the Mac app does this for you). |
+| **Higher-accuracy OCR** | `LIBRARIAN_LITEPARSE_OCR_SERVER_URL=...` | Offload OCR to a Surya/EasyOCR/PaddleOCR server. |
+| **Figure → data (vision)** | `LIBRARIAN_FIGURE_VISION_ENABLED=true` | A vision model describes each figure and **reconstructs chart data as a Markdown table**, injected next to the figure so the numbers become searchable text. |
+| **Extraction cache** | on by default | Re-ingesting unchanged files skips re-extraction (keyed by content hash + engine/OCR config). |
+| **Parallel imports** | `LIBRARIAN_IMPORT_CONCURRENCY=N` (default 2) | Convert/ingest several files at once; order, resume, and per-file failure isolation preserved. |
+| **Extraction timeout** | `LIBRARIAN_EXTRACTION_TIMEOUT_SECONDS=N` | Bound a single document's extraction so one pathological file can't hang a batch. |
+
+### OCR system tools (CLI/API only — the Mac app bundles these)
+
+The built-in OCR fallback needs two system binaries on your `PATH`:
 
 ```bash
-librarian version
-librarian doctor
-librarian init
-librarian migrate
-librarian convert path/to/report.docx --format md --output converted/report.md
-librarian convert-dir path/to/folder --format md --output-mode subdirectory
-librarian transcript-normalize path/to/captions.srt --format md --output normalized.md
-librarian transcript-find path/to/captions.srt "quoted source phrase" --json
-librarian import path/to/folder --recursive --format md --process
-librarian ingest path/to/transcript.txt
-librarian process doc_...
-librarian worker --once
-librarian list
-librarian show doc_...
-librarian delete doc_... --yes
-librarian status run_... --event-limit 500 --event-offset 0
-librarian search "horse training" --details
-librarian export doc_... --format json --citation-quote "quoted source phrase"
-librarian export-okf ./bundle --classification-prefix 6 --json
-librarian api
+brew install tesseract poppler                       # macOS
+sudo apt-get install -y tesseract-ocr poppler-utils  # Debian/Ubuntu
 ```
 
-`librarian import` converts sources into the workspace by default: converted Markdown/text lands under `<data_dir>/converted` instead of next to your original files. Use `--output-mode` to opt into `new-directory`, `original`, or `subdirectory` placement.
+Without them, text-layer PDFs still work; scanned pages can't be read by the fallback path. Run
+`librarian doctor` to see exactly what's available.
 
-### Automation and scripting
+---
 
-The query and control commands emit machine-readable JSON with `--json`, so an agent can drive the whole pipeline without scraping tables: `ingest --json` and `process --json` return the new `document_id`/`run_id`; `status --json` reports `status`, `stage`, `total_chunks`, and `completed_chunks` for polling; and `list`, `show`, and `search [--details] --json` return structured records. For bulk runs, `librarian import --recursive --process --report report.json` writes a full JSON report, `--manifest <path> --resume` makes large imports idempotent across restarts, and the command exits non-zero if any item failed. `doctor --json`, `admin db-stats --json`, `admin api-audit --json`, and `admin page-manifest --json` round out the machine-readable surface.
+## ⌨️ CLI reference (every command)
 
-To hand a processed corpus to another agent or knowledge tool, `librarian export-okf ./bundle` renders all processed documents as an [Open Knowledge Format](docs/OKF.md) v0.1 bundle — a directory of markdown concept files with YAML frontmatter, organized by Dewey classification, cross-linked, and indexed. See [docs/OKF.md](docs/OKF.md) for the field mapping and layout.
+All query/control commands accept `--json` for machine-readable output, so an agent can drive the
+whole pipeline without scraping tables. Run any command with `--help` for its full flag set.
 
-Operator commands live under `librarian admin`, including database maintenance, backups, run controls, queue inspection, API audit logs, and PDF page-manifest inspection. Release and quality harnesses live under `librarian maintainer`; they ship with source checkouts only and are excluded from release wheels.
+### Setup & health
+| Command | What it does |
+| --- | --- |
+| `librarian init` | Create a local workspace (`.librarian/` with the SQLite database). |
+| `librarian doctor [--strict] [--json]` | Report optional dependencies and OCR tools, with install hints. |
+| `librarian migrate` | Apply pending database migrations. |
+| `librarian version` | Print the Librarian version. |
 
-## API
+### Convert (no database, file → file)
+| Command | What it does |
+| --- | --- |
+| `librarian convert report.docx --format md --output out/report.md` | Convert one file to Markdown/text. |
+| `librarian convert-dir ./folder --format md --output-mode subdirectory` | Convert every supported file in a folder. |
+| `librarian transcript-normalize captions.srt --format md --output clean.md` | Normalize an SRT/VTT transcript to clean Markdown/text. |
+| `librarian transcript-find captions.srt "a quoted phrase" --json` | Locate a quote in a transcript with timestamps. |
+
+### Ingest, clean & classify
+| Command | What it does |
+| --- | --- |
+| `librarian import ./folder --recursive --process` | The big one: convert → ingest → (optionally) clean+classify a whole tree. `--manifest <path> --resume` makes huge imports idempotent; `--report report.json` writes a full run report; exits non-zero if anything failed. |
+| `librarian ingest transcript.txt` | Ingest a single file and persist its extracted text. |
+| `librarian process doc_...` | Run cleaning + classification on an ingested document. |
+| `librarian worker --once` | Drain the durable SQLite job queue (for `--process`-deferred imports). |
+
+### Browse, search & export
+| Command | What it does |
+| --- | --- |
+| `librarian list [--details] [--json]` | List ingested documents. |
+| `librarian show doc_... [--json]` | Show a document's metadata and latest output summary. |
+| `librarian search "query" [--details] [--json]` | Full-text search across the library. |
+| `librarian status run_... [--json]` | Poll a processing run's status, stage, and chunk progress. |
+| `librarian delete doc_... --yes` | Delete a document and its dependent local records. |
+| `librarian export doc_... --format json\|txt\|md [--citation-quote "..."]` | Export one document's cleaned text + metadata. |
+| `librarian export-okf ./bundle [--classification-prefix 6] [--series <key>] [--json]` | Export the whole library as an [Open Knowledge Format](docs/OKF.md) bundle. |
+
+### Run the service
+| Command | What it does |
+| --- | --- |
+| `librarian api` | Start the local FastAPI service (see [API](#-api)). |
+
+### `librarian admin …` — operator & storage
+| Command | What it does |
+| --- | --- |
+| `admin db-stats [--json]` | File size, page usage, row counts, stored-text totals (incl. the extraction cache). |
+| `admin db-maintain [--vacuum]` | SQLite `optimize`, WAL checkpoint, optional `VACUUM`. |
+| `admin db-check` | Verify integrity, foreign keys, and migration state. |
+| `admin db-backup <dest>` / `admin db-restore <src>` | Consistent online SQLite backup / verified restore. |
+| `admin workspace-backup <dest>` / `admin workspace-restore <src>` | Archive/restore data files **plus** a consistent DB snapshot. |
+| `admin runs` / `admin run-cancel <id>` / `admin run-retry <id>` | List runs; cancel a queued/running run; replay a failed one. |
+| `admin queue` | Inspect the durable job queue. |
+| `admin api-audit [--json]` | Inspect API audit-log events. |
+| `admin page-manifest <doc> [--json]` | Inspect a PDF's per-page OCR manifest (which pages were OCR'd, confidence, warnings). |
+
+### `librarian maintainer …` — quality & release harness *(source checkouts only)*
+| Command | What it does |
+| --- | --- |
+| `maintainer chunk <file>` | Extract + chunk a document without calling an LLM. |
+| `maintainer benchmark` | Benchmark chunking and the configured cleaning provider's throughput. |
+| `maintainer eval` / `maintainer corpus-eval` | Run a prompt/model evaluation suite, or evaluate over a corpus. |
+| `maintainer generate-corpus` | Generate a synthetic evaluation corpus. |
+
+---
+
+## ⚙️ Configuration
+
+Everything is configured by `LIBRARIAN_*` environment variables (or a `.env` file in the workspace).
+The essentials:
+
+| Variable | Default | What it controls |
+| --- | --- | --- |
+| `LIBRARIAN_DATA_DIR` | `.librarian` | Where the workspace + SQLite database live. |
+| `LIBRARIAN_LLM_PROVIDER` | `mock` | `mock` (offline, deterministic) or `openai-compatible`. |
+| `LIBRARIAN_LLM_MODEL` | `mock-cleaner` | Model name for cleaning + classification. |
+| `LIBRARIAN_LLM_BASE_URL` | – | Base URL for an OpenAI-compatible endpoint. |
+| `OPENAI_API_KEY` | – | API key (env-var name configurable via `LIBRARIAN_LLM_API_KEY_ENV`). |
+| `LIBRARIAN_LLM_MAX_CONCURRENCY` | `8` | Parallel chunk-cleaning requests. |
+| `LIBRARIAN_PDF_ENGINE` | `auto` | Extraction engine (see [the engine](#-the-extraction-engine)). |
+| `LIBRARIAN_FIGURE_VISION_ENABLED` | `false` | Vision pass that turns charts into data tables. |
+| `LIBRARIAN_IMPORT_CONCURRENCY` | `2` | Files converted/ingested in parallel. |
+| `LIBRARIAN_API_KEY` / `LIBRARIAN_API_KEYS` | – | Require an API key for protected endpoints. |
+
+### Optional dependency extras
+
+The base install is lean; opt into capabilities (or take `[all]`):
+
+| Extra | Enables |
+| --- | --- |
+| `pdf` | Built-in PDF text extraction (`pdfplumber`). |
+| `ocr` | Scanned/image-PDF OCR for the built-in engine (`pdf2image`, `pillow`, `pytesseract`). |
+| `liteparse` | High-fidelity engine — tables, headings, figures, selective OCR (bundles PDFium + Tesseract). |
+| `universal` | Broad conversion via `markitdown` (PPTX, XLSX, Outlook, …). |
+| `otel` | OpenTelemetry tracing/metrics export. |
+| `all` | Everything above. |
+
+---
+
+## 🔌 API
 
 ```bash
 uvicorn librarian.api.app:create_app --factory --host 127.0.0.1 --port 8080
+# or simply: librarian api
 ```
 
 Primary endpoints:
@@ -198,30 +255,79 @@ Primary endpoints:
 - `POST /runs`, `GET /runs`, `GET /runs/{id}`, `POST /runs/{id}/cancel`, `POST /runs/{id}/retry`
 - `GET /runs/{id}/events`, `GET /runs/{id}/events/stream`
 - `GET /documents/{id}/content`, `GET /documents/{id}/export?format=json|txt|md`
-- `GET /export/okf`, `GET /documents/{id}/okf` (Open Knowledge Format bundle / single concept)
+- `GET /export/okf`, `GET /documents/{id}/okf`
 - `POST /search`, `POST /search/results`, `POST /search/facets`
 - `GET /metrics`, `GET /metrics/prometheus`
 
-If `LIBRARIAN_API_KEY` or `LIBRARIAN_API_KEYS` is set, protected requests must include one configured value as `x-api-key` or `Authorization: Bearer ...`. Read-scoped keys can use document and search endpoints, while operational endpoints such as config, metrics, and page-manifest inspection require write scope.
+Set `LIBRARIAN_API_KEY` (or `LIBRARIAN_API_KEYS`) to require a key via `x-api-key` or
+`Authorization: Bearer …`. Read-scoped keys reach document/search endpoints; operational endpoints
+need write scope. Full details in [docs/API.md](docs/API.md).
 
-## Docker
+---
 
-Containerized deployment is optional and aimed at server installs; the Mac app and CLI need none of it. Images are published as `ghcr.io/nampara-ai/librarian`, and compose/run examples live in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+## 📂 Where your writing lives
 
-## Architecture And Operations
+A workspace is just a folder (`.librarian/` by default):
 
-Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). API details are in [docs/API.md](docs/API.md), deployment guidance is in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), production runbooks are in [docs/OPERATIONS.md](docs/OPERATIONS.md), and the Open Knowledge Format export is documented in [docs/OKF.md](docs/OKF.md).
+```
+.librarian/librarian.sqlite   ← the library: documents, cleaned text, classifications, search index
+.librarian/converted/         ← Markdown/text produced by `import` (originals are never touched)
+```
 
-## Privacy
+`librarian import` converts sources into the workspace by default; use `--output-mode` to place
+converted files `new-directory`, `original`, or `subdirectory` instead. Back the whole thing up with
+`librarian admin workspace-backup`.
 
-Librarian stores data locally by default. Text is sent to a configured model provider only when processing or OCR correction requires LLM work. API keys belong in environment variables or `.env`, never in Git. CI runs secret scanning, dependency audit, type checking, tests, package build, wheel smoke install, and Docker build checks for every pull request.
+---
 
-## Contributing And Security
+## 🔒 Private by default
 
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and the
-quality gate, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations. To report a
-vulnerability, follow [SECURITY.md](SECURITY.md). Release history is in [CHANGELOG.md](CHANGELOG.md).
+Librarian stores everything locally. Text is sent to a model provider **only** when cleaning,
+classification, or OCR-correction actually needs LLM work — and only to the provider you configure.
+With the default `mock` provider, nothing leaves your machine. Keep API keys in environment variables
+or `.env`, never in Git. CI runs secret scanning, dependency audit, type checking, the full test
+suite, a wheel smoke-install, and Docker build checks on every change.
 
-## License
+---
 
-Licensed under the MIT License — see [LICENSE](LICENSE).
+## 🐳 Docker
+
+Containerized deployment is optional and aimed at server installs — the Mac app and CLI need none of
+it. Images publish to `ghcr.io/nampara-ai/librarian`; compose/run examples live in
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
+---
+
+## 🗂️ What's in here
+
+```
+src/librarian/            The engine: ingest, pipeline, application, storage, api, cli, taxonomy
+src/librarian/ingest/     Extraction adapters (liteparse, pdfplumber/Tesseract, DOCX, markitdown, …)
+src/librarian/pipeline/   Chunking, cleaning, validation
+src/librarian/taxonomy/   Dewey classification
+apps/macos/               The native Mac app (Swift) + its build/bundle/sign scripts
+docs/                     ARCHITECTURE · API · DEPLOYMENT · OPERATIONS · OKF
+tests/                    The full test suite (unit + integration)
+examples/corpus/          Sample documents to try the pipeline on
+```
+
+---
+
+## 📚 Documentation
+
+Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Then: [API](docs/API.md) ·
+[deployment](docs/DEPLOYMENT.md) · [operations runbooks](docs/OPERATIONS.md) ·
+[Open Knowledge Format](docs/OKF.md) · [Mac app](apps/macos/README.md). Release history is in
+[CHANGELOG.md](CHANGELOG.md).
+
+---
+
+## 🤝 Contributing & 📜 License
+
+Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for setup and the quality gate, and
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations. To report a vulnerability, follow
+[SECURITY.md](SECURITY.md).
+
+Licensed under the **MIT License** — see [LICENSE](LICENSE). Librarian bundles or builds on
+third-party components under their own licenses (notably the Apache-2.0 `liteparse` engine); see
+[NOTICE](NOTICE).
