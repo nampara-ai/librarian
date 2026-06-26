@@ -53,6 +53,22 @@ class MockLLMProvider:
             )
         return _normalize_cleaned_text(user_prompt)
 
+    async def describe_image(
+        self,
+        *,
+        image_base64: str,
+        media_type: str,
+        system_prompt: str,
+        user_prompt: str,
+        model: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        del system_prompt, user_prompt, model, max_tokens, temperature
+        # Deterministic, no-network stand-in: report the image size so tests and
+        # dry runs get stable, inspectable output without a vision model.
+        return f"Figure ({media_type}, {len(image_base64)} b64 chars): mock description."
+
 
 def _normalize_cleaned_text(value: str) -> str:
     """Normalize intra-line whitespace while preserving document structure."""

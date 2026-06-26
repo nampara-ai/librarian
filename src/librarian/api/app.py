@@ -2457,6 +2457,17 @@ def _build_extractor(
         liteparse_ocr_server_url=settings.liteparse_ocr_server_url,
         liteparse_dpi=settings.liteparse_dpi,
         liteparse_image_mode=settings.liteparse_image_mode,
+        figure_vision_provider=(
+            LazyLLMProvider(settings, metrics=metrics)
+            if settings.figure_vision_enabled
+            else None
+        ),
+        figure_vision_model=settings.figure_vision_model or settings.llm_model,
+        figure_vision_max_figures=settings.figure_vision_max_figures,
+        figure_vision_min_bytes=settings.figure_vision_min_bytes,
+        figure_vision_max_bytes=settings.figure_vision_max_bytes,
+        figure_vision_max_concurrency=settings.figure_vision_max_concurrency,
+        figure_vision_max_response_chars=settings.figure_vision_max_response_chars,
         universal_max_input_bytes=settings.universal_max_input_bytes,
         universal_timeout_seconds=settings.universal_timeout_seconds,
         extraction_timeout_seconds=settings.extraction_timeout_seconds,

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import cast
 
 from librarian.application.ports import ApplicationMetrics, LLMProvider
 from librarian.config import Settings
@@ -33,6 +35,32 @@ class LazyLLMProvider:
     ) -> str:
         provider = self._get_provider()
         return await provider.complete(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
+    async def describe_image(
+        self,
+        *,
+        image_base64: str,
+        media_type: str,
+        system_prompt: str,
+        user_prompt: str,
+        model: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        provider = self._get_provider()
+        describe = getattr(provider, "describe_image", None)
+        if not callable(describe):
+            raise RuntimeError(f"LLM provider {provider.name!r} does not support vision input")
+        describe = cast("Callable[..., Awaitable[str]]", describe)
+        return await describe(
+            image_base64=image_base64,
+            media_type=media_type,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             model=model,
@@ -73,6 +101,37 @@ class PromptSizeGuardProvider:
                 f"({prompt_chars} > {self.max_prompt_chars})"
             )
         return await self.provider.complete(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
+    async def describe_image(
+        self,
+        *,
+        image_base64: str,
+        media_type: str,
+        system_prompt: str,
+        user_prompt: str,
+        model: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        prompt_chars = len(system_prompt) + len(user_prompt)
+        if prompt_chars > self.max_prompt_chars:
+            raise ValueError(
+                "LLM prompt exceeded configured character limit "
+                f"({prompt_chars} > {self.max_prompt_chars})"
+            )
+        describe = getattr(self.provider, "describe_image", None)
+        if not callable(describe):
+            raise RuntimeError(f"LLM provider {self.provider.name!r} does not support vision input")
+        describe = cast("Callable[..., Awaitable[str]]", describe)
+        return await describe(
+            image_base64=image_base64,
+            media_type=media_type,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             model=model,

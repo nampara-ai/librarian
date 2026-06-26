@@ -78,6 +78,19 @@ class Settings(BaseSettings):
     # pathological file cannot hang a batch (0 disables the ceiling).
     extraction_cache_enabled: bool = Field(default=True)
     extraction_timeout_seconds: int = Field(default=0, ge=0)
+    # Vision-LLM enrichment of embedded figures/charts. When enabled (and the
+    # liteparse engine is active), each embedded figure image is sent to a
+    # vision-capable model that returns a description and, for charts, a data
+    # table; the result is injected next to the figure's markdown placeholder so
+    # the otherwise-lost chart data becomes searchable text. Off by default
+    # because it requires a vision model and adds per-figure cost/latency.
+    figure_vision_enabled: bool = Field(default=False)
+    figure_vision_model: str | None = Field(default=None)
+    figure_vision_max_figures: int = Field(default=20, gt=0)
+    figure_vision_min_bytes: int = Field(default=2048, ge=0)
+    figure_vision_max_bytes: int = Field(default=8 * 1024 * 1024, gt=0)
+    figure_vision_max_concurrency: int = Field(default=2, gt=0)
+    figure_vision_max_response_chars: int = Field(default=16 * 1024, gt=0)
     # How many files a directory import converts/ingests concurrently. The
     # expensive extraction step runs in worker threads, so parallel files
     # overlap their parser/OCR work. For PROCESS/QUEUE imports this also overlaps

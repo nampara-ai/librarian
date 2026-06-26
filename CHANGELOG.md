@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Vision-LLM figure/chart enrichment (opt-in, `LIBRARIAN_FIGURE_VISION_ENABLED`). With the liteparse
+  engine active, each embedded figure image is sent to a vision-capable model that returns a
+  description and, for charts, a reconstructed Markdown data table; the result is injected next to the
+  figure's placeholder so otherwise-lost chart data becomes searchable, classifiable text. Bounded by
+  `LIBRARIAN_FIGURE_VISION_MAX_FIGURES`/`_MIN_BYTES`/`_MAX_BYTES`/`_MAX_CONCURRENCY`; uses
+  `LIBRARIAN_FIGURE_VISION_MODEL` (defaults to the cleaning model). Per-figure failures are swallowed
+  so one bad image never fails the document, and the vision settings fold into the extraction-cache
+  signature. Providers gained a `describe_image` capability (OpenAI-compatible vision content parts;
+  deterministic mock for tests/dry runs).
 - High-fidelity PDF/image extraction via the optional `liteparse` engine
   ([liteparse](https://github.com/run-llama/liteparse), Apache-2.0). When the `liteparse` extra is
   installed (included in `[all]`), PDFs and images are extracted to Markdown with reconstructed
