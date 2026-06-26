@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from importlib.resources import files
 from pathlib import Path
-from typing import LiteralString, cast
+from typing import TYPE_CHECKING, LiteralString, cast
 
 from librarian.application.clean_chunks import CleanedChunk
 from librarian.application.jobs import QueuedRun, QueueStatus
@@ -36,6 +36,9 @@ from librarian.domain.models import (
     TranscriptCitation,
     utc_now,
 )
+
+if TYPE_CHECKING:
+    from librarian.ingest.extractors import ExtractionCacheEntry
 
 _SQLITE_BUSY_TIMEOUT_MS = 5_000
 _MAX_SEARCH_QUERY_CHARS = 4_096
@@ -249,6 +252,10 @@ class SQLiteDatabase:
                 "api_audit_events": self._scalar_int(
                     connection,
                     "SELECT COUNT(*) FROM api_audit_events",
+                ),
+                "extraction_cache": self._scalar_int(
+                    connection,
+                    "SELECT COUNT(*) FROM extraction_cache",
                 ),
             }
             source_file_bytes = self._scalar_int(
@@ -502,6 +509,16 @@ class SQLiteRepository:
     async def get_text(self, key: str) -> str:
         """Read text content by key."""
         return await asyncio.to_thread(self._get_text_sync, key)
+
+    async def get_extraction(self, content_sha256: str, config_signature: str) -> str | None:
+        """Return cached extracted text for a content digest + config signature."""
+        return await asyncio.to_thread(
+            self._get_extraction_sync, content_sha256, config_signature
+        )
+
+    async def put_extraction(self, entry: ExtractionCacheEntry) -> None:
+        """Store extracted text in the content-hash extraction cache."""
+        await asyncio.to_thread(self._put_extraction_sync, entry)
 
     async def save_many(self, chunks: Sequence[Chunk]) -> None:
         """Save chunks."""
@@ -991,6 +1008,39 @@ class SQLiteRepository:
         if row is None:
             raise KeyError(key)
         return str(row["text"])
+
+    def _get_extraction_sync(self, content_sha256: str, config_signature: str) -> str | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT text FROM extraction_cache
+                WHERE content_sha256 = ? AND config_signature = ?
+                """,
+                (content_sha256, config_signature),
+            ).fetchone()
+        return None if row is None else str(row["text"])
+
+    def _put_extraction_sync(self, entry: ExtractionCacheEntry) -> None:
+        with self.database.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO extraction_cache (
+                  content_sha256, config_signature, source_extension, text, created_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(content_sha256, config_signature) DO UPDATE SET
+                  source_extension = excluded.source_extension,
+                  text = excluded.text,
+                  created_at = excluded.created_at
+                """,
+                (
+                    entry.content_sha256,
+                    entry.config_signature,
+                    entry.source_extension,
+                    entry.text,
+                    utc_now().isoformat(),
+                ),
+            )
 
     def _save_chunks_sync(self, chunks: Sequence[Chunk]) -> None:
         with self.database.connect() as connection:

@@ -2430,4 +2430,5 @@ def _build_extractor(settings: Settings) -> CompositeExtractor:
         liteparse_image_mode=settings.liteparse_image_mode,
         universal_max_input_bytes=settings.universal_max_input_bytes,
         universal_timeout_seconds=settings.universal_timeout_seconds,
+        extraction_timeout_seconds=settings.extraction_timeout_seconds,
     )

@@ -70,6 +70,21 @@ classification, and OKF pipeline. Set `LIBRARIAN_PDF_ENGINE` to `auto` (default 
 when installed, else built-in), `liteparse` (force), or `legacy` (always built-in). Point
 `LIBRARIAN_LITEPARSE_OCR_SERVER_URL` at a Surya/EasyOCR/PaddleOCR server for higher-accuracy OCR.
 
+### Extraction throughput
+
+Two controls keep bulk ingestion fast and bounded:
+
+- **Content-hash extraction cache** (on by default): extracted Markdown is cached by the source
+  file's SHA-256 plus a signature of the extraction configuration, so re-ingesting unchanged files —
+  or the same bytes across documents — skips the parser/OCR work. The cache is config-aware (changing
+  `LIBRARIAN_PDF_ENGINE` or OCR settings re-extracts instead of serving stale text) and never caches
+  failures, so a transient error (e.g. an unreachable OCR server) is retried on the next run. Disable
+  with `LIBRARIAN_EXTRACTION_CACHE_ENABLED=false`. `librarian admin db-stats` reports the
+  `extraction_cache` row count.
+- **Extraction timeout** (off by default): set `LIBRARIAN_EXTRACTION_TIMEOUT_SECONDS` to a positive
+  number to cap how long a single document may spend in extraction, so one pathological file cannot
+  hang a batch.
+
 ### OCR system dependencies (CLI/API only)
 
 OCR for scanned or image-based PDFs needs two **system** binaries that cannot be installed via

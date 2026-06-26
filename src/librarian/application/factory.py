@@ -12,7 +12,7 @@ from librarian.application.ports import ApplicationMetrics, LLMProvider
 from librarian.application.process_document import ProcessDocument
 from librarian.application.search_library import SearchLibrary
 from librarian.config import Settings
-from librarian.ingest.extractors import CompositeExtractor
+from librarian.ingest.extractors import CachingExtractor, CompositeExtractor
 from librarian.llm import LazyLLMProvider, build_provider
 from librarian.observability import NoOpMetricsRecorder
 from librarian.pipeline.chunking import ChunkingPolicy
@@ -76,12 +76,20 @@ async def build_ingest_container(
         liteparse_image_mode=resolved_settings.liteparse_image_mode,
         universal_max_input_bytes=resolved_settings.universal_max_input_bytes,
         universal_timeout_seconds=resolved_settings.universal_timeout_seconds,
+        extraction_timeout_seconds=resolved_settings.extraction_timeout_seconds,
         metrics=metrics,
     )
+    ingest_extractor: CachingExtractor | CompositeExtractor = extractor
+    if resolved_settings.extraction_cache_enabled:
+        ingest_extractor = CachingExtractor(
+            extractor,
+            repository,
+            config_signature=extractor.config_signature,
+        )
     ingest = IngestDocument(
         documents=repository,
         content=repository,
-        extractor=extractor,
+        extractor=ingest_extractor,
         max_source_bytes=resolved_settings.max_source_bytes,
     )
     return IngestContainer(
