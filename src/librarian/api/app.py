@@ -2737,10 +2737,19 @@ def _rate_limit_identity(request: Request, settings: Settings) -> str:
 def _client_host(request: Request, settings: Settings) -> str:
     client_host = request.client.host if request.client else "unknown"
     forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for and _trusted_proxy_client_host(client_host, settings):
-        forwarded_host = forwarded_for.split(",", maxsplit=1)[0].strip()
-        if _valid_forwarded_ip(forwarded_host):
-            client_host = forwarded_host
+    if not forwarded_for or not _trusted_proxy_client_host(client_host, settings):
+        return client_host
+    # Walk the chain from the right: the rightmost entry was appended by our own
+    # trusted proxy and is the hardest to spoof, whereas the leftmost is fully
+    # client-controlled. Skip successive trusted-proxy hops until the first
+    # address that is not a trusted proxy -- that is the real client.
+    hops = [hop.strip() for hop in forwarded_for.split(",") if hop.strip()]
+    for candidate in reversed(hops):
+        if not _valid_forwarded_ip(candidate):
+            continue
+        if _trusted_proxy_client_host(candidate, settings):
+            continue
+        return candidate
     return client_host
 
 

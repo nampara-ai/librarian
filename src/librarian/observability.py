@@ -23,8 +23,22 @@ _SECRET_REPLACEMENTS = (
         re.compile(r"(?i)\b(api[_-]?key|token|secret|password)(\s*[:=]\s*)([^\s,;]+)"),
         r"\1\2[REDACTED]",
     ),
-    (re.compile(r"(?i)\b(authorization:\s*bearer\s+)([^\s,;]+)"), r"\1[REDACTED]"),
+    # Credentials embedded in a URL: scheme://user:password@host -> mask the password.
+    (
+        re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://[^/\s:@]+):([^/\s@]+)@"),
+        r"\1:[REDACTED]@",
+    ),
+    # Bearer tokens, whether or not preceded by an Authorization header name.
+    (re.compile(r"(?i)\b(bearer\s+)([A-Za-z0-9._~+/=-]{8,})"), r"\1[REDACTED]"),
     (re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b"), "[REDACTED]"),
+    # GitHub personal/OAuth/app/refresh tokens (ghp_, gho_, ghu_, ghs_, ghr_).
+    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"), "[REDACTED]"),
+    # Slack bot/user/app/refresh tokens.
+    (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"), "[REDACTED]"),
+    # AWS access key IDs.
+    (re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), "[REDACTED]"),
+    # Google API keys.
+    (re.compile(r"\bAIza[0-9A-Za-z._-]{35,}\b"), "[REDACTED]"),
 )
 _MAX_STORED_ERROR_CHARS = 1_000
 

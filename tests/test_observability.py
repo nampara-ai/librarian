@@ -180,6 +180,37 @@ def test_redact_secrets_handles_single_quoted_secret_fields() -> None:
     assert "'pass'" not in message
 
 
+def test_redact_secrets_masks_url_credentials() -> None:
+    message = redact_secrets("connect postgres://admin:hunter2@db.internal:5432/lib failed")
+
+    assert "hunter2" not in message
+    assert "postgres://admin:[REDACTED]@db.internal:5432/lib" in message
+
+
+def test_redact_secrets_leaves_credential_free_urls_untouched() -> None:
+    assert redact_secrets("GET https://example.com/api/v1") == "GET https://example.com/api/v1"
+
+
+def test_redact_secrets_masks_bearer_tokens_without_header_name() -> None:
+    message = redact_secrets("retry with Bearer abcDEF1234567890tokenvalue")
+
+    assert "abcDEF1234567890tokenvalue" not in message
+    assert "Bearer [REDACTED]" in message
+
+
+def test_redact_secrets_masks_provider_specific_tokens() -> None:
+    secrets = [
+        "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+        "xoxb-1234567890-ABCDEFghij",
+        "AKIAIOSFODNN7EXAMPLE",
+        "AIzaSyA1234567890abcdefghijklmnopqrstuvw",
+    ]
+    for secret in secrets:
+        message = redact_secrets(f"leaked {secret} in logs")
+        assert secret not in message, secret
+        assert "[REDACTED]" in message
+
+
 def test_sanitize_error_message_redacts_and_truncates() -> None:
     message = sanitize_error_message(
         "provider failed api_key=abc123 " + ("private transcript text " * 20),
