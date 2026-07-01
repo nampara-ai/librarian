@@ -70,7 +70,7 @@ dev = [
   "pytest>=8.3.0",
   "pytest-asyncio>=0.24.0",
   "ruff>=0.6.9",
-  "pyright==1.1.410",
+  "pyright==1.1.411",
   "build>=1.2.2",
   "cyclonedx-bom>=6.1.0",
   # starlette>=1.2 TestClient imports httpx2 when installed; its httpx 1.x
