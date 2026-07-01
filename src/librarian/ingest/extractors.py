@@ -9,6 +9,7 @@ import importlib
 import importlib.util
 import json
 import logging
+import math
 import multiprocessing
 import queue
 import re
@@ -17,7 +18,7 @@ import subprocess
 import tempfile
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
@@ -198,10 +199,10 @@ class DocxExtractor:
         from docx import Document
 
         doc = Document(str(path))
-        parts = [
-            *(_paragraph_text(paragraph) for paragraph in doc.paragraphs),
-            *(_table_text(table) for table in doc.tables),
-        ]
+        # Iterate the body in true document order so a table that sits between
+        # two paragraphs stays between them, instead of hoisting every table to
+        # the end (which scrambled the reading order of mixed documents).
+        parts = list(_iter_docx_body_text(doc))
         for section in doc.sections:
             parts.extend(_paragraph_text(paragraph) for paragraph in section.header.paragraphs)
             parts.extend(_table_text(table) for table in section.header.tables)
@@ -513,6 +514,7 @@ class PdfExtractor:
             "ocr_threshold": self.ocr_threshold,
             "ocr_preserve_page_images": self.ocr_preserve_page_images,
             "ocr_rotation_retry": self.ocr_rotation_retry,
+            "ocr_auto_orient": self.ocr_auto_orient,
             "ocr_correction_mode": self.ocr_correction_mode,
             "ocr_correction_model": self.ocr_correction_model,
             "ocr_low_confidence_threshold": self.ocr_low_confidence_threshold,
@@ -883,6 +885,11 @@ async def enrich_markdown_figures(
     if not eligible:
         return markdown, 0
 
+    # Derive the token ceiling from the character budget rather than hardcoding
+    # it: a description is truncated to max_response_chars anyway, so asking for
+    # far more tokens just wastes latency and cost, while a tiny fixed cap would
+    # clip a large configured budget. ~4 chars/token with headroom and a floor.
+    vision_max_tokens = max(256, math.ceil(max_response_chars / 3))
     semaphore = asyncio.Semaphore(max(1, max_concurrency))
 
     async def describe(figure: FigureImage) -> tuple[FigureImage, str | None]:
@@ -894,7 +901,7 @@ async def enrich_markdown_figures(
                     system_prompt=FIGURE_VISION_SYSTEM_PROMPT,
                     user_prompt=FIGURE_VISION_USER_PROMPT,
                     model=model,
-                    max_tokens=2048,
+                    max_tokens=vision_max_tokens,
                     temperature=temperature,
                 )
             except Exception:  # noqa: BLE001 - one figure must not fail the document
@@ -1025,6 +1032,7 @@ class LiteParseExtractor:
                     output_dir=Path(tmp_dir),
                     auto_orient=self.auto_orient,
                     ocr_timeout_seconds=self.ocr_timeout_seconds,
+                    fallback_dpi=self.dpi,
                 )
                 return self._collect_result(parser.parse(str(pdf_path)))
         return self._collect_result(parser.parse(str(path)))
@@ -1343,6 +1351,11 @@ class CompositeExtractor:
                 "liteparse_ocr_server_url": liteparse_ocr_server_url,
                 "liteparse_dpi": liteparse_dpi,
                 "liteparse_image_mode": liteparse_image_mode,
+                # The bundled tessdata models change OCR output, so a different
+                # path must invalidate cached liteparse extractions.
+                "liteparse_tessdata_path": (
+                    liteparse_tessdata_path if self.liteparse_active else None
+                ),
                 # Every vision knob that changes which figures are described, or
                 # how much text each yields, must invalidate the cache when the
                 # vision pass is active (gated so toggling unrelated knobs while
@@ -1604,6 +1617,7 @@ def _image_to_single_page_pdf(
     output_dir: Path,
     auto_orient: bool,
     ocr_timeout_seconds: int,
+    fallback_dpi: int = 150,
 ) -> Path:
     """Render a loose image as a one-page PDF so liteparse can parse it.
 
@@ -1613,6 +1627,10 @@ def _image_to_single_page_pdf(
     full liteparse pipeline -- tables, headings, figures -- without that
     heavyweight dependency. The image is oriented upright first so rotated
     photos and scans extract correctly.
+
+    The PDF resolution is taken from the image's embedded DPI when present so
+    the page keeps its true physical size; otherwise ``fallback_dpi`` is used.
+    A hardcoded resolution would stretch or shrink pages whose real DPI differs.
     """
     try:
         image_module = importlib.import_module("PIL.Image")
@@ -1640,17 +1658,47 @@ def _image_to_single_page_pdf(
 
     pdf_path = output_dir / f"{image_path.stem}.liteparse.pdf"
     with image_module.open(source) as image:
+        resolution = _image_resolution(image, fallback_dpi=fallback_dpi)
         pages = [_flatten_to_white(frame, image_module) for frame in image_sequence.Iterator(image)]
     if not pages:  # pragma: no cover - Pillow always yields at least one frame
         raise ValueError(f"No image frames found: {image_path}")
     pages[0].save(
         pdf_path,
         "PDF",
-        resolution=200.0,
+        resolution=resolution,
         save_all=len(pages) > 1,
         append_images=pages[1:],
     )
     return pdf_path
+
+
+def _image_resolution(image: Any, *, fallback_dpi: int) -> float:
+    """Return the image's embedded horizontal DPI, or the fallback if absent."""
+    info = getattr(image, "info", None)
+    if not isinstance(info, dict):
+        return float(fallback_dpi)
+    dpi_value = cast("Any", info).get("dpi")
+    try:
+        horizontal = float(dpi_value[0])
+    except (TypeError, ValueError, IndexError):
+        return float(fallback_dpi)
+    return horizontal if horizontal > 0 else float(fallback_dpi)
+
+
+def _apply_exif_orientation(image: Any) -> Any:
+    """Bake in an image's EXIF orientation tag (best effort).
+
+    Phone cameras and scanners often store pixels in the sensor's native
+    orientation plus an EXIF tag telling viewers how to rotate them. Pillow
+    does not apply that tag on open, so a "portrait" photo would otherwise be
+    OCR'd sideways. ``exif_transpose`` rewrites the pixels to match the tag and
+    is a no-op when no orientation tag is present.
+    """
+    try:
+        image_ops = importlib.import_module("PIL.ImageOps")
+        return image_ops.exif_transpose(image)
+    except Exception:  # noqa: BLE001 - orientation is best-effort
+        return image
 
 
 def _flatten_to_white(image: Any, image_module: Any) -> Any:
@@ -1658,8 +1706,10 @@ def _flatten_to_white(image: Any, image_module: Any) -> Any:
 
     ``Image.convert("RGB")`` merely drops the alpha channel, so transparent
     pixels become black (unreadable OCR that still looks like a valid page).
-    Alpha-compositing onto white preserves the intended appearance.
+    Alpha-compositing onto white preserves the intended appearance. The frame's
+    EXIF orientation is applied first so rotated photos land upright.
     """
+    image = _apply_exif_orientation(image)
     if image.mode in ("RGBA", "LA", "PA") or (image.mode == "P" and "transparency" in image.info):
         rgba = image.convert("RGBA")
         background = image_module.new("RGBA", rgba.size, (255, 255, 255, 255))
@@ -1682,7 +1732,7 @@ def _prepare_ocr_image(
     except ImportError as exc:
         raise RuntimeError("OCR preprocessing requires installing the 'ocr' extra") from exc
 
-    image = image_module.open(path)
+    image = _apply_exif_orientation(image_module.open(path))
     grayscale = image.convert("L")
     if preprocess_mode == "grayscale":
         prepared = grayscale
@@ -2400,6 +2450,26 @@ def _reject_disallowed_archive_signature(path: Path, payload: bytes) -> None:
     if label == "zip" and path.suffix.lower() in ZIP_CONTAINER_EXTENSIONS:
         return
     raise ValueError(f"Archive inputs are not supported by default: {label} signature detected")
+
+
+def _iter_docx_body_text(doc: Any) -> Iterator[str]:
+    """Yield DOCX body paragraphs and tables in document order.
+
+    ``doc.paragraphs`` and ``doc.tables`` are separate flat lists, so emitting
+    one after the other loses the interleaving of the original document. Walking
+    the body's child elements preserves the real reading order.
+    """
+    from docx.oxml.ns import qn
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    paragraph_tag = qn("w:p")
+    table_tag = qn("w:tbl")
+    for child in doc.element.body.iterchildren():
+        if child.tag == paragraph_tag:
+            yield _paragraph_text(Paragraph(child, doc))
+        elif child.tag == table_tag:
+            yield _table_text(Table(child, doc))
 
 
 def _paragraph_text(paragraph: Any) -> str:
