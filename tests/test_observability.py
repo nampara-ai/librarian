@@ -187,8 +187,18 @@ def test_redact_secrets_masks_url_credentials() -> None:
     assert "postgres://admin:[REDACTED]@db.internal:5432/lib" in message
 
 
+def test_redact_secrets_masks_url_password_without_username() -> None:
+    # DSNs commonly omit the username: redis://:password@host.
+    message = redact_secrets("connect redis://:s3cr3tpass@localhost:6379/0")
+
+    assert "s3cr3tpass" not in message
+    assert "redis://:[REDACTED]@localhost:6379/0" in message
+
+
 def test_redact_secrets_leaves_credential_free_urls_untouched() -> None:
     assert redact_secrets("GET https://example.com/api/v1") == "GET https://example.com/api/v1"
+    # A colon in the path (not credentials) must not trigger redaction.
+    assert redact_secrets("see http://example.com/a:b") == "see http://example.com/a:b"
 
 
 def test_redact_secrets_masks_bearer_tokens_without_header_name() -> None:

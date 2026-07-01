@@ -23,9 +23,11 @@ _SECRET_REPLACEMENTS = (
         re.compile(r"(?i)\b(api[_-]?key|token|secret|password)(\s*[:=]\s*)([^\s,;]+)"),
         r"\1\2[REDACTED]",
     ),
-    # Credentials embedded in a URL: scheme://user:password@host -> mask the password.
+    # Credentials embedded in a URL: scheme://[user]:password@host -> mask the
+    # password. The username is optional so DSNs like redis://:secret@host also
+    # redact.
     (
-        re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://[^/\s:@]+):([^/\s@]+)@"),
+        re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://[^/\s:@]*):([^/\s@]+)@"),
         r"\1:[REDACTED]@",
     ),
     # Bearer tokens, whether or not preceded by an Authorization header name.

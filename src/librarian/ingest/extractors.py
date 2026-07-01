@@ -841,6 +841,10 @@ _FIGURE_MEDIA_TYPES = {
     "webp": "image/webp",
 }
 
+# Upper bound on the tokens requested per figure description, so a very large
+# configured character budget can't derive an output-token count providers reject.
+_MAX_FIGURE_VISION_TOKENS = 8_192
+
 
 def figure_media_type(image_format: str) -> str:
     """Map a liteparse image format to an IANA media type (default PNG)."""
@@ -888,8 +892,10 @@ async def enrich_markdown_figures(
     # Derive the token ceiling from the character budget rather than hardcoding
     # it: a description is truncated to max_response_chars anyway, so asking for
     # far more tokens just wastes latency and cost, while a tiny fixed cap would
-    # clip a large configured budget. ~4 chars/token with headroom and a floor.
-    vision_max_tokens = max(256, math.ceil(max_response_chars / 3))
+    # clip a large configured budget. ~4 chars/token with headroom and a floor,
+    # and an upper bound so an unusually large char budget can't request an
+    # absurd token count that providers reject.
+    vision_max_tokens = min(_MAX_FIGURE_VISION_TOKENS, max(256, math.ceil(max_response_chars / 3)))
     semaphore = asyncio.Semaphore(max(1, max_concurrency))
 
     async def describe(figure: FigureImage) -> tuple[FigureImage, str | None]:
