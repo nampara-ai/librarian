@@ -187,6 +187,25 @@ def db_maintain(
     asyncio.run(run())
 
 
+@admin_app.command("config")
+def admin_config(
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Show the effective runtime configuration (secrets redacted)."""
+    settings = Settings()
+    payload = settings.redacted_config()
+    if json_output:
+        console.out(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    table = Table("Setting", "Value")
+    for name, value in sorted(payload.items()):
+        table.add_row(name, "" if value is None else str(value))
+    console.print(table)
+
+
 @admin_app.command("db-check")
 def db_check() -> None:
     """Verify SQLite integrity, foreign keys, and migrations."""

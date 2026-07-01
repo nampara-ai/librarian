@@ -49,11 +49,31 @@ from librarian.config import Settings
         {"llm_completion_cost_per_1k_tokens_usd": -0.01},
         {"llm_max_prompt_chars": 0},
         {"llm_max_response_chars": 0},
+        {"figure_vision_min_bytes": 9000, "figure_vision_max_bytes": 8000},
     ],
 )
 def test_settings_reject_invalid_runtime_controls(kwargs: dict[str, Any]) -> None:
     with pytest.raises(ValidationError):
         Settings(**kwargs)
+
+
+def test_redacted_config_masks_secrets_and_exposes_settings() -> None:
+    settings = Settings(
+        api_key="raw-secret",
+        api_key_hashes="hash-secret",
+        otel_headers="authorization=Bearer tok",
+    )
+
+    payload = settings.redacted_config()
+
+    assert payload["api_key"] == "***redacted***"
+    assert payload["api_key_hashes"] == "***redacted***"
+    assert payload["otel_headers"] == "***redacted***"
+    # Non-secret operational settings remain visible.
+    assert payload["pdf_engine"] == "auto"
+    assert payload["figure_vision_enabled"] is False
+    # A secret left unset stays null rather than being masked.
+    assert payload["api_keys"] is None
 
 
 def test_settings_default_prompt_stack() -> None:

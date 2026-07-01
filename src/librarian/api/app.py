@@ -461,6 +461,31 @@ class ConfigResponse(BaseModel):
     ocr_fail_on_page_error: bool
     universal_max_input_bytes: int
     universal_timeout_seconds: int
+    # Extraction engine / cache.
+    pdf_engine: str
+    liteparse_dpi: int
+    liteparse_image_mode: str
+    liteparse_ocr_server_url: str | None
+    liteparse_tessdata_path: str | None
+    ocr_auto_orient: bool
+    extraction_cache_enabled: bool
+    extraction_timeout_seconds: int
+    import_concurrency: int
+    # Token ceilings.
+    llm_max_output_tokens: int
+    classification_max_output_tokens: int
+    # Figure vision.
+    figure_vision_enabled: bool
+    figure_vision_model: str | None
+    figure_vision_max_figures: int
+    figure_vision_min_bytes: int
+    figure_vision_max_bytes: int
+    figure_vision_max_concurrency: int
+    figure_vision_max_response_chars: int
+    # Server bind + storage.
+    api_host: str
+    api_port: int
+    database_path: str
     log_level: str
     log_format: str
     metrics_enabled: bool
@@ -1787,6 +1812,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ocr_fail_on_page_error=settings.ocr_fail_on_page_error,
             universal_max_input_bytes=settings.universal_max_input_bytes,
             universal_timeout_seconds=settings.universal_timeout_seconds,
+            pdf_engine=settings.pdf_engine,
+            liteparse_dpi=settings.liteparse_dpi,
+            liteparse_image_mode=settings.liteparse_image_mode,
+            liteparse_ocr_server_url=settings.liteparse_ocr_server_url,
+            liteparse_tessdata_path=settings.liteparse_tessdata_path,
+            ocr_auto_orient=settings.ocr_auto_orient,
+            extraction_cache_enabled=settings.extraction_cache_enabled,
+            extraction_timeout_seconds=settings.extraction_timeout_seconds,
+            import_concurrency=settings.import_concurrency,
+            llm_max_output_tokens=settings.llm_max_output_tokens,
+            classification_max_output_tokens=settings.classification_max_output_tokens,
+            figure_vision_enabled=settings.figure_vision_enabled,
+            figure_vision_model=settings.figure_vision_model,
+            figure_vision_max_figures=settings.figure_vision_max_figures,
+            figure_vision_min_bytes=settings.figure_vision_min_bytes,
+            figure_vision_max_bytes=settings.figure_vision_max_bytes,
+            figure_vision_max_concurrency=settings.figure_vision_max_concurrency,
+            figure_vision_max_response_chars=settings.figure_vision_max_response_chars,
+            api_host=settings.api_host,
+            api_port=settings.api_port,
+            database_path=str(settings.database_path),
             log_level=settings.log_level,
             log_format=settings.log_format,
             metrics_enabled=settings.metrics_enabled,

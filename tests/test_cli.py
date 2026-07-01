@@ -50,6 +50,24 @@ def test_cli_read_only_commands_do_not_require_llm_credentials(tmp_path: Path) -
     assert "Missing API key" not in show.output + status.output + export.output
 
 
+def test_cli_admin_config_prints_redacted_settings(tmp_path: Path) -> None:
+    runner = CliRunner()
+    env = {
+        "LIBRARIAN_DATA_DIR": str(tmp_path / ".librarian"),
+        "LIBRARIAN_DATABASE_PATH": str(tmp_path / ".librarian" / "librarian.sqlite"),
+        "LIBRARIAN_API_KEY": "top-secret-key",
+    }
+
+    result = runner.invoke(app, ["admin", "config", "--json"], env=env)
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["api_key"] == "***redacted***"
+    assert "top-secret-key" not in result.stdout
+    assert payload["pdf_engine"] == "auto"
+    assert payload["figure_vision_enabled"] is False
+
+
 def test_cli_doctor_reports_optional_dependency_status(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

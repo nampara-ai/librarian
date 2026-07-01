@@ -9,6 +9,17 @@ from typing import Literal, Self
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Settings fields that hold secrets and must never be printed or returned.
+_SECRET_SETTING_FIELDS = frozenset(
+    {
+        "api_key",
+        "api_keys",
+        "api_key_sha256",
+        "api_key_hashes",
+        "otel_headers",
+    }
+)
+
 CoherenceModeSetting = Literal["fast", "balanced", "max-coherence"]
 OcrLlmCorrectionMode = Literal["always", "never", "low-confidence"]
 OcrPreprocessMode = Literal["none", "grayscale", "threshold", "deskew"]
@@ -190,4 +201,21 @@ class Settings(BaseSettings):
                 "llm_retry_max_delay_seconds must be greater than or equal to "
                 "llm_retry_base_delay_seconds"
             )
+        if self.figure_vision_min_bytes > self.figure_vision_max_bytes:
+            raise ValueError(
+                "figure_vision_min_bytes must be less than or equal to figure_vision_max_bytes"
+            )
         return self
+
+    def redacted_config(self) -> dict[str, object]:
+        """Return the effective configuration with secret values redacted.
+
+        Field values that hold credentials (raw and hashed API keys, OTLP
+        headers) are replaced with a marker so the result is safe to log,
+        print, or return from an endpoint.
+        """
+        payload = self.model_dump(mode="json")
+        for name in _SECRET_SETTING_FIELDS:
+            if payload.get(name) is not None:
+                payload[name] = "***redacted***"
+        return payload
