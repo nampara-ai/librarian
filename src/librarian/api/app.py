@@ -12,7 +12,7 @@ import sqlite3
 import tempfile
 import time
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -2824,35 +2824,85 @@ def _job_runner(request: Request) -> InProcessJobRunner:
     return runner
 
 
-async def _event_stream(settings: Settings, run_id: RunId) -> AsyncIterator[str]:
+_TERMINAL_RUN_STATUSES = frozenset(
+    {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELED}
+)
+_EVENT_STREAM_PAGE = 500
+
+
+def _sse_data_frame(text: str) -> str:
+    """Render an SSE ``data:`` frame, splitting embedded newlines.
+
+    A raw newline inside a ``data:`` payload terminates the SSE event early,
+    so each line is emitted as its own ``data:`` field per the spec.
+    """
+    body = "\n".join(f"data: {line}" for line in text.split("\n"))
+    return f"{body}\n\n"
+
+
+async def _stream_run_events(
+    settings: Settings,
+    run_id: RunId,
+    fetch_frames: Callable[[Any, int], Awaitable[list[str]]],
+) -> AsyncIterator[str]:
+    """Poll and stream a run's events as SSE frames until the run is terminal.
+
+    The container is built once (not per poll), a full page triggers an
+    immediate re-read (no artificial 200ms delay while backlogged), and when
+    the run reaches a terminal status the loop drains any remaining events
+    before signaling ``done``. The final "processing failed/complete" event is
+    emitted *after* the terminal status is written, so the drain is what keeps
+    it from being lost.
+    """
+    container = await build_ingest_container(settings)
     seen = 0
     while True:
-        container = await build_ingest_container(settings)
-        events = list(await container.repository.list_events(run_id, limit=500, offset=seen))
-        for event in events:
-            yield f"data: {event}\n\n"
-        seen += len(events)
+        frames = await fetch_frames(container, seen)
+        for frame in frames:
+            yield frame
+        seen += len(frames)
+        if len(frames) == _EVENT_STREAM_PAGE:
+            continue
         run = await container.repository.get_run(run_id)
-        if run is None or run.status in {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELED}:
+        if run is None or run.status in _TERMINAL_RUN_STATUSES:
+            while True:
+                tail = await fetch_frames(container, seen)
+                if not tail:
+                    break
+                for frame in tail:
+                    yield frame
+                seen += len(tail)
             yield "event: done\ndata: done\n\n"
-            break
+            return
         await asyncio.sleep(0.2)
+
+
+async def _event_stream(settings: Settings, run_id: RunId) -> AsyncIterator[str]:
+    async def fetch_frames(container: Any, offset: int) -> list[str]:
+        events = await container.repository.list_events(
+            run_id, limit=_EVENT_STREAM_PAGE, offset=offset
+        )
+        return [_sse_data_frame(event) for event in events]
+
+    async for frame in _stream_run_events(settings, run_id, fetch_frames):
+        yield frame
 
 
 async def _event_record_stream(settings: Settings, run_id: RunId) -> AsyncIterator[str]:
-    seen = 0
-    while True:
-        container = await build_ingest_container(settings)
-        events = list(await container.repository.list_event_records(run_id, limit=500, offset=seen))
+    async def fetch_frames(container: Any, offset: int) -> list[str]:
+        events = await container.repository.list_event_records(
+            run_id, limit=_EVENT_STREAM_PAGE, offset=offset
+        )
+        frames: list[str] = []
         for event in events:
             payload = _run_event_response(event).model_dump()
-            yield f"event: run-event\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
-        seen += len(events)
-        run = await container.repository.get_run(run_id)
-        if run is None or run.status in {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELED}:
-            yield "event: done\ndata: done\n\n"
-            break
-        await asyncio.sleep(0.2)
+            frames.append(
+                f"event: run-event\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
+            )
+        return frames
+
+    async for frame in _stream_run_events(settings, run_id, fetch_frames):
+        yield frame
 
 
 def _normalize_export_format(format: str) -> ExportFormat:

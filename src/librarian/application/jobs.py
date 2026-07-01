@@ -203,9 +203,22 @@ class QueueWorker:
         return True
 
     async def run_forever(self) -> None:
-        """Poll the queue until stopped."""
+        """Poll the queue until stopped.
+
+        A transient failure in claim/process/fail must not tear the worker
+        loop down permanently: log it, back off, and keep polling. Only an
+        explicit cancellation stops the loop.
+        """
         while not self._stopping:
-            did_work = await self.run_once()
+            try:
+                did_work = await self.run_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - keep the worker alive across transient errors
+                self.metrics.record_queue_failure()
+                logging.getLogger("librarian.jobs").exception("queue_worker_run_once_failed")
+                await asyncio.sleep(self.poll_interval_seconds)
+                continue
             if not did_work:
                 await asyncio.sleep(self.poll_interval_seconds)
 

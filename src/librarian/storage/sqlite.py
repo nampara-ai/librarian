@@ -1021,7 +1021,7 @@ class SQLiteRepository:
                 UPDATE runs
                 SET status = ?, stage = ?, completed_chunks = ?, failed_chunks = ?, updated_at = ?
                 WHERE id = ?
-                  AND status != 'canceled'
+                  AND status NOT IN ('canceled', 'succeeded', 'failed')
                 """,
                 (
                     status.value,
