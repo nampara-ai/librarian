@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     llm_completion_cost_per_1k_tokens_usd: float = Field(default=0.0, ge=0)
     llm_max_prompt_chars: int = Field(default=2 * 1024 * 1024, gt=0)
     llm_max_response_chars: int = Field(default=2 * 1024 * 1024, gt=0)
+    # Output token budget for chunk cleaning. Must exceed the tokens needed to
+    # return a fully-cleaned chunk (~chunk_target_chars); token-dense text
+    # (CJK, tables, dense OCR) needs headroom or the provider truncates.
+    llm_max_output_tokens: int = Field(default=16_384, gt=0)
+    # Output token budget for classification JSON (summary + description +
+    # title + tags + series fields). 500 was too small for dewey_v5's schema.
+    classification_max_output_tokens: int = Field(default=2_048, gt=0)
 
     cleaning_prompt_version: CleaningPromptVersionSetting = Field(default="cmos_v2")
     classification_prompt_version: ClassificationPromptVersionSetting = Field(default="dewey_v5")

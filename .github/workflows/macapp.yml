@@ -13,9 +13,15 @@ on:
     paths:
       - "apps/macos/**"
       - ".github/workflows/macapp.yml"
+      # Backend changes must exercise the bundled-runtime OCR e2e test on PRs,
+      # not meet the bundler for the first time on an immutable release tag.
+      - "src/librarian/**"
+      - "pyproject.toml"
 
 permissions:
-  contents: write
+  # This workflow only builds and uploads artifacts (actions/upload-artifact);
+  # it never writes to repo contents. Least privilege: read only.
+  contents: read
 
 jobs:
   dmg:
@@ -49,6 +55,12 @@ jobs:
           python -m pip install --upgrade build
           python -m build --wheel
 
+      - name: Export dependency constraints
+        # Exact third-party pins from uv.lock, same as the Release workflow.
+        # Passed to bundle_backend.sh so the bundled runtime's dependencies are
+        # pinned/reproducible rather than resolved to latest at build time.
+        run: python .github/scripts/export_constraints.py --output constraints.txt
+
       - name: Ensure Rosetta 2 (x86_64 build on Apple Silicon)
         if: matrix.arch == 'x86_64'
         run: sudo softwareupdate --install-rosetta --agree-to-license
@@ -63,7 +75,8 @@ jobs:
           scripts/bundle_backend.sh \
             --app dist/Librarian.app \
             --wheel "$(ls ../../dist/nampara_librarian-*.whl)" \
-            --arch ${{ matrix.arch }}
+            --arch ${{ matrix.arch }} \
+            --constraints ../../constraints.txt
 
       - name: Install OCR tools (arm64 native Homebrew)
         if: matrix.arch == 'arm64'
@@ -75,9 +88,19 @@ jobs:
           # Bootstrap an x86_64 Homebrew at /usr/local (the installer picks the
           # prefix from the running architecture, so run it under Rosetta), then
           # install the Intel OCR binaries there.
+          # Pin the Homebrew installer to an immutable commit SHA instead of the
+          # moving HEAD ref, so a compromised or changed upstream install.sh
+          # cannot be pulled into the build.
+          # TODO(security): replace this placeholder with the real 40-char SHA of
+          # the desired Homebrew/install commit. Obtain it with:
+          #   gh api 'repos/Homebrew/install/commits?path=install.sh&per_page=1' --jq '.[0].sha'
+          # (could not be resolved in the offline audit environment). Until a real
+          # SHA is set, the raw.githubusercontent.com fetch 404s and the build
+          # fails fast rather than silently running an unpinned installer.
+          HOMEBREW_INSTALL_SHA="REPLACE_WITH_PINNED_HOMEBREW_INSTALL_COMMIT_SHA"
           if [ ! -x /usr/local/bin/brew ]; then
             NONINTERACTIVE=1 arch -x86_64 /bin/bash -c \
-              "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" </dev/null
+              "$(curl -fsSL "https://raw.githubusercontent.com/Homebrew/install/${HOMEBREW_INSTALL_SHA}/install.sh")" </dev/null
           fi
           arch -x86_64 /usr/local/bin/brew install tesseract poppler dylibbundler
 

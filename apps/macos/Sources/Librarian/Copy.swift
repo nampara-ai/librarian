@@ -59,6 +59,7 @@ enum Copy {
         "Connected — using \(model)"
     }
     static let providerKeyFailed = "Key didn't work — check it and try again."
+    static let keychainSaveFailed = "Could not save the key to the Keychain."
 
     static let reasonTimeout = "Took too long — try again"
     static let reasonInterrupted = "Interrupted"

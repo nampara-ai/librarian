@@ -115,9 +115,20 @@ ${RUN[@]+"${RUN[@]}"} "$DYLIBBUNDLER" -of -b -cd \
 echo "Verifying no Homebrew paths leak into the bundled OCR tools"
 leaked=0
 while IFS= read -r -d '' macho; do
+  # (1) Dependent library load paths (LC_LOAD_DYLIB): must not point at Homebrew.
   if otool -L "$macho" | tail -n +2 | grep -E "/opt/homebrew/|/usr/local/(Cellar|opt|lib)" >/dev/null; then
     echo "Leaked Homebrew path in: $macho" >&2
     otool -L "$macho" | grep -E "/opt/homebrew/|/usr/local/" >&2 || true
+    leaked=1
+  fi
+  # (2) Runtime search paths (LC_RPATH): dylibbundler rewrites @rpath deps to
+  # @executable_path/../lib, but a leftover LC_RPATH pointing at Homebrew would
+  # still let @rpath-based lookups resolve against a developer's machine (and
+  # fail — or worse, load an unexpected dylib — on end-user machines). Fail hard
+  # if any Homebrew rpath survives.
+  if otool -l "$macho" | grep -A2 LC_RPATH | grep -E "/opt/homebrew|/usr/local" >/dev/null; then
+    echo "Leaked Homebrew LC_RPATH in: $macho" >&2
+    otool -l "$macho" | grep -A2 LC_RPATH | grep -E "/opt/homebrew|/usr/local" >&2 || true
     leaked=1
   fi
 done < <(find "$BIN_DIR" "$LIB_DIR" -type f -print0)

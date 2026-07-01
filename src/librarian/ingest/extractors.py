@@ -718,15 +718,23 @@ class MarkItDownExtractor:
             daemon=True,
         )
         process.start()
-        process.join(self.timeout_seconds)
+        # Read the result BEFORE joining. A multiprocessing.Queue payload larger
+        # than the OS pipe buffer (~64 KiB) blocks the child's feeder thread
+        # until the parent drains it, so join()-before-get() deadlocks on any
+        # sizeable conversion and surfaces a false TimeoutError. Draining first
+        # lets the child flush and exit.
+        try:
+            status, payload = result_queue.get(timeout=self.timeout_seconds)
+        except queue.Empty:
+            process.terminate()
+            process.join(5)
+            raise TimeoutError(
+                f"Broad format conversion timed out after {self.timeout_seconds}s"
+            ) from None
+        process.join(5)
         if process.is_alive():
             process.terminate()
             process.join()
-            raise TimeoutError(f"Broad format conversion timed out after {self.timeout_seconds}s")
-        try:
-            status, payload = result_queue.get_nowait()
-        except queue.Empty as exc:
-            raise RuntimeError("Broad format conversion failed without returning a result") from exc
         if status == "ok":
             return payload
         raise RuntimeError(payload)
@@ -1574,12 +1582,19 @@ def _image_to_single_page_pdf(
     """
     try:
         image_module = importlib.import_module("PIL.Image")
+        image_sequence = importlib.import_module("PIL.ImageSequence")
     except ImportError as exc:
         raise RuntimeError(
             "liteparse image extraction requires Pillow (install the 'ocr' extra)"
         ) from exc
+
+    with image_module.open(image_path) as probe:
+        multi_frame = getattr(probe, "n_frames", 1) > 1
+
+    # Auto-orient only single-frame images: it re-saves one frame and would drop
+    # the rest of a multi-page TIFF. Multi-frame scans are handled page-by-page.
     source = image_path
-    if auto_orient:
+    if auto_orient and not multi_frame:
         tesseract_path = shutil.which("tesseract")
         if tesseract_path is not None:
             source = auto_orient_image(
@@ -1588,12 +1603,34 @@ def _image_to_single_page_pdf(
                 timeout_seconds=ocr_timeout_seconds,
                 output_dir=output_dir,
             )
+
     pdf_path = output_dir / f"{image_path.stem}.liteparse.pdf"
     with image_module.open(source) as image:
-        # Flatten onto white so transparency does not become a black page.
-        rgb = image.convert("RGB")
-        rgb.save(pdf_path, "PDF", resolution=200.0)
+        pages = [_flatten_to_white(frame, image_module) for frame in image_sequence.Iterator(image)]
+    if not pages:  # pragma: no cover - Pillow always yields at least one frame
+        raise ValueError(f"No image frames found: {image_path}")
+    pages[0].save(
+        pdf_path,
+        "PDF",
+        resolution=200.0,
+        save_all=len(pages) > 1,
+        append_images=pages[1:],
+    )
     return pdf_path
+
+
+def _flatten_to_white(image: Any, image_module: Any) -> Any:
+    """Composite a possibly-transparent frame onto a white RGB background.
+
+    ``Image.convert("RGB")`` merely drops the alpha channel, so transparent
+    pixels become black (unreadable OCR that still looks like a valid page).
+    Alpha-compositing onto white preserves the intended appearance.
+    """
+    if image.mode in ("RGBA", "LA", "PA") or (image.mode == "P" and "transparency" in image.info):
+        rgba = image.convert("RGBA")
+        background = image_module.new("RGBA", rgba.size, (255, 255, 255, 255))
+        return image_module.alpha_composite(background, rgba).convert("RGB")
+    return image.convert("RGB")
 
 
 def _prepare_ocr_image(

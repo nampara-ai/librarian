@@ -1043,7 +1043,20 @@ class SQLiteRepository:
             )
 
     def _save_chunks_sync(self, chunks: Sequence[Chunk]) -> None:
+        if not chunks:
+            return
+        document_ids = {str(chunk.document_id) for chunk in chunks}
         with self.database.connect() as connection:
+            # Replace the document's chunk set wholesale. Chunk ids hash the
+            # chunk text, so re-chunking (policy/engine change) produces new ids
+            # for the same (document_id, ordinal); a plain upsert on id then
+            # violates UNIQUE(document_id, ordinal). Deleting first also clears
+            # now-stale higher-ordinal chunks from a previously longer document.
+            placeholders = ",".join("?" for _ in document_ids)
+            connection.execute(
+                f"DELETE FROM chunks WHERE document_id IN ({placeholders})",  # noqa: S608
+                tuple(document_ids),
+            )
             connection.executemany(
                 """
                 INSERT INTO chunks (

@@ -133,9 +133,11 @@ async def build_container(
         prompt_catalog=PromptCatalog(),
         prompt_version=resolved_settings.cleaning_prompt_version,
         model=resolved_settings.llm_model,
+        max_tokens=resolved_settings.llm_max_output_tokens,
         coherence_mode=resolved_settings.coherence_mode,
         max_parallel_chunks=resolved_settings.llm_max_concurrency,
         max_response_chars=resolved_settings.llm_max_response_chars,
+        context_chars=resolved_settings.chunk_overlap_chars,
     )
     taxonomy = ingest_container.taxonomy
     classifier = ClassifyDocument(
@@ -144,6 +146,7 @@ async def build_container(
         prompt_version=resolved_settings.classification_prompt_version,
         model=resolved_settings.llm_model,
         taxonomy=taxonomy,
+        max_tokens=resolved_settings.classification_max_output_tokens,
         max_response_chars=resolved_settings.llm_max_response_chars,
     )
     policy = ChunkingPolicy(

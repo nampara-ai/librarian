@@ -38,6 +38,17 @@ struct ContentView: View {
                 DropOverlayView()
             }
         }
+        .alert(
+            "Some files were skipped",
+            isPresented: Binding(
+                get: { model.skippedFilesNotice != nil },
+                set: { if !$0 { model.skippedFilesNotice = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { model.skippedFilesNotice = nil }
+        } message: {
+            Text(model.skippedFilesNotice ?? "")
+        }
         .task {
             model.startPolling()
         }

@@ -59,24 +59,65 @@ struct APIClient {
         return try Self.decoder.decode(RunsPage.self, from: data)
     }
 
-    func uploadDocument(filename: String, contents: Data) async throws -> Document {
+    /// Upload a file by streaming it from disk. The multipart envelope is
+    /// assembled into a temporary file (header + the source file's bytes +
+    /// footer) and handed to `URLSession.upload(fromFile:)`, so the file is
+    /// never fully resident in memory — and never copied a second time as a
+    /// multipart `Data` blob.
+    func uploadDocument(filename: String, fileURL: URL) async throws -> Document {
         let boundary = "librarian-\(UUID().uuidString)"
         let safeName = filename
             .replacingOccurrences(of: "\"", with: "_")
             .replacingOccurrences(of: "\r", with: "_")
             .replacingOccurrences(of: "\n", with: "_")
-        var body = Data()
-        body.appendString("--\(boundary)\r\n")
-        body.appendString("Content-Disposition: form-data; name=\"file\"; filename=\"\(safeName)\"\r\n")
-        body.appendString("Content-Type: application/octet-stream\r\n\r\n")
-        body.append(contents)
-        body.appendString("\r\n--\(boundary)--\r\n")
-        let (data, _) = try await send(
+
+        var header = Data()
+        header.appendString("--\(boundary)\r\n")
+        header.appendString(
+            "Content-Disposition: form-data; name=\"file\"; filename=\"\(safeName)\"\r\n"
+        )
+        header.appendString("Content-Type: application/octet-stream\r\n\r\n")
+        let footer = Data("\r\n--\(boundary)--\r\n".utf8)
+
+        let bodyFileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("librarian-upload-\(UUID().uuidString)")
+        // Best-effort cleanup of the temporary envelope regardless of outcome.
+        defer { try? FileManager.default.removeItem(at: bodyFileURL) }
+        try Self.assembleMultipartFile(
+            at: bodyFileURL,
+            header: header,
+            source: fileURL,
+            footer: footer
+        )
+
+        let (data, _) = try await upload(
             "POST", "/documents",
-            body: body,
+            fromFile: bodyFileURL,
             contentType: "multipart/form-data; boundary=\(boundary)"
         )
         return try Self.decoder.decode(Document.self, from: data)
+    }
+
+    /// Stream the multipart envelope to disk: write the header, copy the source
+    /// file in chunks, then the footer — bounding memory to one chunk.
+    private static func assembleMultipartFile(
+        at destination: URL,
+        header: Data,
+        source: URL,
+        footer: Data
+    ) throws {
+        FileManager.default.createFile(atPath: destination.path, contents: nil)
+        let out = try FileHandle(forWritingTo: destination)
+        defer { try? out.close() }
+        let input = try FileHandle(forReadingFrom: source)
+        defer { try? input.close() }
+        try out.write(contentsOf: header)
+        while true {
+            let chunk = try input.read(upToCount: 1024 * 1024) ?? Data()
+            if chunk.isEmpty { break }
+            try out.write(contentsOf: chunk)
+        }
+        try out.write(contentsOf: footer)
     }
 
     func createRun(documentId: String) async throws -> Run {
@@ -175,6 +216,41 @@ struct APIClient {
         body: Data? = nil,
         contentType: String? = nil
     ) async throws -> (Data, HTTPURLResponse) {
+        var request = try makeRequest(method, path, query: query, contentType: contentType)
+        request.httpBody = body
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await Self.session.data(for: request)
+        } catch {
+            throw APIClientError(message: "Cannot reach server: \(error.localizedDescription)")
+        }
+        return try Self.validate(data: data, response: response)
+    }
+
+    /// Like `send`, but streams the request body from a file on disk instead of
+    /// holding it in memory, for large multipart uploads.
+    private func upload(
+        _ method: String,
+        _ path: String,
+        fromFile fileURL: URL,
+        contentType: String?
+    ) async throws -> (Data, HTTPURLResponse) {
+        let request = try makeRequest(method, path, contentType: contentType)
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await Self.session.upload(for: request, fromFile: fileURL)
+        } catch {
+            throw APIClientError(message: "Cannot reach server: \(error.localizedDescription)")
+        }
+        return try Self.validate(data: data, response: response)
+    }
+
+    private func makeRequest(
+        _ method: String,
+        _ path: String,
+        query: [URLQueryItem] = [],
+        contentType: String? = nil
+    ) throws -> URLRequest {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             throw APIClientError(message: "Invalid server URL")
         }
@@ -190,19 +266,19 @@ struct APIClient {
         }
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.httpBody = body
         if let contentType {
             request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         }
         if !apiKey.isEmpty {
             request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         }
-        let (data, response): (Data, URLResponse)
-        do {
-            (data, response) = try await Self.session.data(for: request)
-        } catch {
-            throw APIClientError(message: "Cannot reach server: \(error.localizedDescription)")
-        }
+        return request
+    }
+
+    private static func validate(
+        data: Data,
+        response: URLResponse
+    ) throws -> (Data, HTTPURLResponse) {
         guard let http = response as? HTTPURLResponse else {
             throw APIClientError(message: "Unexpected response from server")
         }

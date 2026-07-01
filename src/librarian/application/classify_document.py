@@ -174,8 +174,11 @@ def _series_key(
     falls back to a period-stripped filename stem, but only when that stem is
     distinctive enough to be a real series rather than a generic name.
     """
-    primary = " ".join(part for part in (issuer, series_title) if part and part.strip())
-    if primary.strip():
+    # A series identity requires an actual recurring-publication *title*. An
+    # issuer alone is not a series (otherwise every one-off document from the
+    # same publisher would be falsely linked as editions of one series).
+    if series_title and series_title.strip():
+        primary = " ".join(part for part in (issuer, series_title) if part and part.strip())
         return _series_slug(primary) or None
     if fallback_filename:
         stem = (
@@ -226,7 +229,7 @@ class ClassifyDocument:
     prompt_version: str
     model: str
     taxonomy: TaxonomyProvider
-    max_tokens: int = 500
+    max_tokens: int = 2_048
     temperature: float = 0.0
     max_response_chars: int = 2 * 1024 * 1024
 

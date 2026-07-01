@@ -15,6 +15,11 @@ final class AppModel: ObservableObject {
     /// Items stuck in a non-terminal stage longer than this are failed.
     static let stageTimeout: TimeInterval = 15 * 60
 
+    /// Client-side upload ceiling, mirroring the backend's 100 MiB limit so an
+    /// oversize file is rejected instantly instead of being read into RAM and
+    /// streamed only to be refused by the server.
+    static let maxUploadBytes = 100 * 1024 * 1024
+
     let backend = BackendController()
 
     @Published var queue: [QueueItem] = []
@@ -29,6 +34,18 @@ final class AppModel: ObservableObject {
     private var okfSyncTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
     private var backendObservation: AnyCancellable?
+
+    /// Bounded upload scheduling: a large drop must not launch one upload (each
+    /// with its own health-poll wait) per file. Uploads beyond
+    /// `maxConcurrentUploads` wait in `pendingUploads` until a slot frees up.
+    static let maxConcurrentUploads = 4
+    private var pendingUploads: [UUID] = []
+    private var activeUploadCount = 0
+
+    /// Set when a folder drop was truncated at the expansion limit, so the UI
+    /// can tell the user that some files were skipped rather than silently
+    /// dropping them.
+    @Published var skippedFilesNotice: String?
 
     init() {
         backendObservation = backend.objectWillChange.sink { [weak self] _ in
@@ -89,20 +106,26 @@ final class AppModel: ObservableObject {
         EnvFile.read()["LIBRARIAN_LLM_PROVIDER"] == "openai-compatible"
     }
 
+    /// A base URL that resolves to nowhere, used while the embedded engine is
+    /// still starting so the client fails fast instead of sending files and the
+    /// per-launch API key to whatever stranger happens to answer on a guessed
+    /// candidate port (e.g. 8765).
+    private static let unresolvedEmbeddedURL = URL(string: "http://127.0.0.1:1")!
+
     var client: APIClient {
         if useEmbeddedBackend && BackendController.isEmbeddedAvailable {
-            // Embedded mode must never silently fall through to the external
-            // URL while the engine is starting or restarting — that points
-            // uploads at a dead address. Target the embedded engine's port,
-            // or its default port while it boots; callers wait for health.
+            // Embedded mode must never send real traffic to a *guessed* port:
+            // the engine might launch on a different candidate port, and a
+            // stranger already listening on the guess would receive our files
+            // and per-launch key. Only target the port the controller actually
+            // confirmed healthy (embeddedBaseURL). Until then, return a client
+            // pointed at a dead address that fails fast — and withhold the
+            // per-launch key entirely; callers wait for the engine via
+            // waitForEngine() and retry once it is confirmed.
             if let embeddedURL = backend.embeddedBaseURL {
                 return APIClient(baseURL: embeddedURL, apiKey: backend.embeddedAPIKey ?? "")
             }
-            let port = BackendController.candidatePorts[0]
-            return APIClient(
-                baseURL: URL(string: "http://127.0.0.1:\(port)")!,
-                apiKey: backend.embeddedAPIKey ?? ""
-            )
+            return APIClient(baseURL: Self.unresolvedEmbeddedURL, apiKey: "")
         }
         let raw = UserDefaults.standard.string(forKey: Self.baseURLKey) ?? Self.defaultBaseURL
         let url = URL(string: raw) ?? URL(string: Self.defaultBaseURL)!
@@ -182,7 +205,8 @@ final class AppModel: ObservableObject {
     // MARK: - Adding files
 
     func handleDrop(of urls: [URL]) {
-        for url in expandDroppedURLs(urls) {
+        let (files, skipped) = expandDroppedURLs(urls)
+        for url in files {
             let item = QueueItem(
                 id: UUID(),
                 sourceURL: url,
@@ -192,7 +216,13 @@ final class AppModel: ObservableObject {
                 startedAt: Date()
             )
             queue.append(item)
-            Task { await self.upload(itemID: item.id) }
+            enqueueUpload(item.id)
+        }
+        if skipped > 0 {
+            // Surface the truncation instead of silently dropping files.
+            skippedFilesNotice =
+                "Added the first \(files.count) files; \(skipped) more were skipped. "
+                + "Drop them in a smaller batch to process the rest."
         }
     }
 
@@ -211,8 +241,13 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func expandDroppedURLs(_ urls: [URL], limit: Int = 200) -> [URL] {
+    /// Expand dropped URLs (recursing into folders) into a flat file list,
+    /// capped at `limit`. Returns the accepted files plus a count of how many
+    /// additional files were skipped because the cap was hit, so the caller can
+    /// tell the user instead of silently truncating.
+    private func expandDroppedURLs(_ urls: [URL], limit: Int = 200) -> (files: [URL], skipped: Int) {
         var files: [URL] = []
+        var skipped = 0
         for url in urls {
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
@@ -224,38 +259,74 @@ final class AppModel: ObservableObject {
                     options: [.skipsHiddenFiles, .skipsPackageDescendants]
                 )
                 while let child = enumerator?.nextObject() as? URL {
-                    guard files.count < limit else { break }
                     let isFile = (try? child.resourceValues(forKeys: [.isRegularFileKey]))?
                         .isRegularFile
-                    if isFile == true {
+                    guard isFile == true else { continue }
+                    if files.count < limit {
                         files.append(child)
+                    } else {
+                        // Keep counting so the "N skipped" message is accurate.
+                        skipped += 1
                     }
                 }
-            } else {
+            } else if files.count < limit {
                 files.append(url)
+            } else {
+                skipped += 1
             }
-            if files.count >= limit { break }
         }
-        return files
+        return (files, skipped)
     }
 
     // MARK: - Pipeline
+
+    /// Schedule an upload through the bounded runner: start immediately if a
+    /// slot is free, otherwise queue it. This prevents a large drop from
+    /// launching hundreds of simultaneous uploads and health polls.
+    private func enqueueUpload(_ itemID: UUID) {
+        pendingUploads.append(itemID)
+        startNextUploadsIfPossible()
+    }
+
+    /// Fill any free upload slots from the pending queue.
+    private func startNextUploadsIfPossible() {
+        while activeUploadCount < Self.maxConcurrentUploads, !pendingUploads.isEmpty {
+            let itemID = pendingUploads.removeFirst()
+            activeUploadCount += 1
+            Task { [weak self] in
+                guard let self else { return }
+                await self.upload(itemID: itemID)
+                self.activeUploadCount -= 1
+                // A slot freed up; pull in the next waiting upload.
+                self.startNextUploadsIfPossible()
+            }
+        }
+    }
 
     private func upload(itemID: UUID) async {
         guard let index = queue.firstIndex(where: { $0.id == itemID }) else { return }
         let sourceURL = queue[index].sourceURL
         setStage(itemID, .uploading(progress: nil))
+        // Reject oversize files locally before reading a byte, so we neither
+        // buffer a huge file in RAM nor waste an upload the server will refuse.
+        if let size = try? FileManager.default.attributesOfItem(atPath: sourceURL.path)[.size]
+            as? Int, size > Self.maxUploadBytes {
+            setStage(
+                itemID,
+                .failed(reason: "File is too large", retryable: false)
+            )
+            return
+        }
         // The engine restarts briefly when settings change; wait for it
         // instead of failing files dropped during the gap.
         await waitForEngine(seconds: 15)
         let client = self.client
         do {
-            let contents = try await Task.detached(priority: .userInitiated) {
-                try Data(contentsOf: sourceURL)
-            }.value
+            // Stream from disk rather than buffering the whole file (and again
+            // as a multipart Data) in memory.
             let document = try await client.uploadDocument(
                 filename: sourceURL.lastPathComponent,
-                contents: contents
+                fileURL: sourceURL
             )
             update(itemID) { item in
                 item.documentID = document.id
@@ -302,7 +373,12 @@ final class AppModel: ObservableObject {
                 continue
             }
             guard let documentID = item.documentID else { continue }
-            let run = runs.first { $0.documentId == documentID }
+            // Prefer the exact run we started for this item (item.runID); a
+            // document can accumulate several runs across retries, and matching
+            // only by document could pick a stale one. Fall back to the latest
+            // run for the document when we don't yet know the run id.
+            let run = item.runID.flatMap { id in runs.first { $0.id == id } }
+                ?? runs.first { $0.documentId == documentID }
             let document = documents.first { $0.id == documentID }
 
             if let run, run.status == "failed" {

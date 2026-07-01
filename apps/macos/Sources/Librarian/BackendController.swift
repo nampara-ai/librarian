@@ -22,6 +22,13 @@ final class BackendController: ObservableObject {
     private var process: Process?
     private var logHandle: FileHandle?
 
+    /// Timestamps of recent automatic relaunches after an unexpected exit,
+    /// used to detect a crash loop and stop hammering a backend that cannot
+    /// stay up instead of restarting it forever.
+    private var recentRelaunches: [Date] = []
+    private static let relaunchWindow: TimeInterval = 60
+    private static let maxRelaunchesInWindow = 3
+
     private static func generateAPIKey() -> String {
         let raw = UUID().uuidString + UUID().uuidString
         return raw.replacingOccurrences(of: "-", with: "").lowercased()
@@ -51,6 +58,23 @@ final class BackendController: ObservableObject {
 
     nonisolated static var logFileURL: URL {
         dataDirectory.appendingPathComponent("backend.log")
+    }
+
+    /// backend.log is opened for append on every launch, so without rotation it
+    /// grows forever. Cap it at a few MB.
+    private static let maxLogBytes: UInt64 = 5 * 1024 * 1024
+
+    /// If the log has exceeded the cap, move it aside to a single `.1` backup
+    /// (overwriting any earlier backup) so the active file starts empty.
+    nonisolated private static func rotateLogIfNeeded(at logURL: URL) {
+        let manager = FileManager.default
+        guard let attributes = try? manager.attributesOfItem(atPath: logURL.path),
+              let size = attributes[.size] as? UInt64, size > maxLogBytes else {
+            return
+        }
+        let rotated = logURL.appendingPathExtension("1")
+        try? manager.removeItem(at: rotated)
+        try? manager.moveItem(at: logURL, to: rotated)
     }
 
     /// Directory of the bundled OCR command-line tools (tesseract, pdftoppm,
@@ -122,8 +146,19 @@ final class BackendController: ObservableObject {
     }
 
     func stop() {
-        process?.terminationHandler = nil
-        process?.terminate()
+        if let running = process {
+            running.terminationHandler = nil
+            running.terminate()
+            // Bounded wait for a graceful exit; escalate so no orphaned
+            // engine survives the app.
+            let deadline = Date().addingTimeInterval(3)
+            while running.isRunning && Date() < deadline {
+                usleep(100_000)
+            }
+            if running.isRunning {
+                kill(running.processIdentifier, SIGKILL)
+            }
+        }
         process = nil
         try? logHandle?.close()
         logHandle = nil
@@ -137,10 +172,30 @@ final class BackendController: ObservableObject {
     /// Stop the embedded backend and start a fresh instance, picking up any
     /// configuration changes from the data directory's .env file.
     func restart() async {
+        let previous = process
         stop()
-        // Give uvicorn a moment to release its port before relaunching.
-        try? await Task.sleep(for: .milliseconds(750))
+        // Wait until the old instance has actually exited (and uvicorn has
+        // released its port) before relaunching, up to 3 seconds.
+        if let previous {
+            var waited = 0
+            while previous.isRunning && waited < 30 {
+                try? await Task.sleep(for: .milliseconds(100))
+                waited += 1
+            }
+        }
         await startEmbeddedIfNeeded()
+    }
+
+    /// Whether the termination handler may auto-relaunch after an unexpected
+    /// exit. Records the attempt and refuses once more than
+    /// `maxRelaunchesInWindow` have occurred inside `relaunchWindow`, so a
+    /// backend that crashes on boot surrenders to `.failed` instead of looping.
+    private func shouldAttemptRelaunch() -> Bool {
+        let now = Date()
+        recentRelaunches.removeAll { now.timeIntervalSince($0) > Self.relaunchWindow }
+        guard recentRelaunches.count < Self.maxRelaunchesInWindow else { return false }
+        recentRelaunches.append(now)
+        return true
     }
 
     func revealDataFolder() {
@@ -168,6 +223,13 @@ final class BackendController: ObservableObject {
         // Environment variables take precedence over a user .env in the data
         // directory, so the per-launch key always applies.
         environment["LIBRARIAN_API_KEY"] = apiKey
+        // Explicitly blank the multi-key variants so a user-writable .env
+        // cannot mint additional API credentials for the embedded engine.
+        environment["LIBRARIAN_API_KEYS"] = ""
+        environment["LIBRARIAN_API_KEY_SHA256"] = ""
+        environment["LIBRARIAN_API_KEY_HASHES"] = ""
+        // Lets the backend detect an orphaned launch (app gone) and exit.
+        environment["LIBRARIAN_PARENT_PID"] = String(ProcessInfo.processInfo.processIdentifier)
         environment["PYTHONUNBUFFERED"] = "1"
         // Provider API keys live in the Keychain, not on disk; hand them to
         // the backend through its environment.
@@ -208,6 +270,11 @@ final class BackendController: ObservableObject {
         launched.currentDirectoryURL = dataDir
 
         let logURL = Self.logFileURL
+        // Keep backend.log from growing without bound: if it has passed the
+        // cap, rotate it to backend.log.1 (replacing any previous rotation)
+        // and start fresh. Every launch appends, so this bounds it to roughly
+        // twice the cap on disk.
+        Self.rotateLogIfNeeded(at: logURL)
         if !FileManager.default.fileExists(atPath: logURL.path) {
             FileManager.default.createFile(atPath: logURL.path, contents: nil)
         }
@@ -225,7 +292,17 @@ final class BackendController: ObservableObject {
                 self.process = nil
                 try? self.logHandle?.close()
                 self.logHandle = nil
-                if case .embedded = self.mode {
+                // Only an *unexpected* exit while we believed the engine was
+                // healthy triggers recovery; a deliberate stop() clears the
+                // termination handler and never reaches here.
+                guard case .embedded = self.mode else { return }
+                if self.shouldAttemptRelaunch() {
+                    // One automatic relaunch attempt: reset to a restartable
+                    // state and boot again. The crash-loop guard prevents this
+                    // from spinning forever.
+                    self.mode = .external
+                    await self.startEmbeddedIfNeeded()
+                } else {
                     self.mode = .failed(
                         "The backend stopped unexpectedly. See backend.log in the data folder."
                     )

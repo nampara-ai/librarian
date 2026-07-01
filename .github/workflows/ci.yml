@@ -52,3 +52,28 @@ jobs:
           "$RUNNER_TEMP/librarian-wheel-smoke/bin/librarian" version
       - name: Docker build
         run: docker build -t librarian-ci .
+
+  # The product ships on macOS with Darwin liteparse wheels, so the suite must
+  # also pass natively on macOS — not just Linux. Reduced job: install + pytest
+  # (with the OCR system tools from Homebrew). Kept required; flip to
+  # `continue-on-error: true` if it proves flaky on GitHub's macOS runners.
+  test-macos:
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install system OCR tools
+        # tesseract provides the OCR engine; poppler provides pdftoppm/pdfinfo.
+        run: brew install tesseract poppler
+      - name: Install
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/pip install -e ".[dev,all]"
+      - name: Pytest
+        run: .venv/bin/pytest

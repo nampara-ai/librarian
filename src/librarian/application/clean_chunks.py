@@ -38,6 +38,10 @@ class CleanChunks:
     max_parallel_chunks: int = 8
     balanced_group_size: int = 4
     max_response_chars: int = 2 * 1024 * 1024
+    # Trailing characters of the preceding chunk handed to the cleaner as
+    # read-only continuity context. Chunks no longer overlap in the source, so
+    # this replaces the (previously duplicated) overlap for boundary coherence.
+    context_chars: int = 800
 
     async def execute(
         self,
@@ -75,9 +79,16 @@ class CleanChunks:
                 except asyncio.QueueEmpty:
                     return
                 try:
-                    results[positions[chunk.id]] = await self._clean_one(
+                    # Unordered mode: give each chunk the raw tail of its
+                    # predecessor as context so a boundary-split fragment still
+                    # cleans coherently (context is read-only, never re-emitted).
+                    index = positions[chunk.id]
+                    previous_context = (
+                        chunks[index - 1].text[-self.context_chars :] if index > 0 else ""
+                    )
+                    results[index] = await self._clean_one(
                         chunk,
-                        previous_context="",
+                        previous_context=previous_context,
                     )
                     if on_chunk_cleaned is not None:
                         await on_chunk_cleaned()
@@ -132,7 +143,7 @@ class CleanChunks:
         for chunk in chunks:
             result = await self._clean_one(chunk, previous_context=previous_context)
             results.append(result)
-            previous_context = result.text[-500:]
+            previous_context = result.text[-self.context_chars :]
             if on_chunk_cleaned is not None:
                 await on_chunk_cleaned()
         return results

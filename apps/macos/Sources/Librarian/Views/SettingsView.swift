@@ -287,7 +287,10 @@ struct SettingsView: View {
         selectedModel = ""
         manualModel = ""
         customAddress = preset.isLocal ? (preset.configuredBaseURL ?? "") : ""
-        apiKey = KeychainStore.get(preset.keyAccount) ?? ""
+        // Never pre-fill the Custom preset from the shared OPENAI_API_KEY: its
+        // address is user-typed, so a prefilled real key would be sent to an
+        // arbitrary (possibly hostile or mistyped) URL. Require an explicit paste.
+        apiKey = preset == .custom ? "" : (KeychainStore.get(preset.keyAccount) ?? "")
     }
 
     private func loadCurrent() {
@@ -310,7 +313,9 @@ struct SettingsView: View {
         } else {
             preset = .custom
         }
-        apiKey = KeychainStore.get(preset.keyAccount) ?? ""
+        // See resetForPresetChange: the Custom preset must not inherit the
+        // shared OpenAI key, since it would be sent to the user-typed address.
+        apiKey = preset == .custom ? "" : (KeychainStore.get(preset.keyAccount) ?? "")
         customAddress = (preset.isLocal || preset == .custom) ? base : ""
         let current = values["LIBRARIAN_LLM_MODEL"] ?? ""
         if !current.isEmpty {
@@ -355,7 +360,15 @@ struct SettingsView: View {
         guard !chosen.isEmpty else { return }
         phase = .applying
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        KeychainStore.set(key.isEmpty ? "local" : key, account: preset.keyAccount)
+        // Only store a key the user actually entered. Local servers (Ollama,
+        // LM Studio, keyless custom) write nothing to the Keychain; the
+        // engine gets a transient placeholder in its environment instead.
+        if !key.isEmpty {
+            guard KeychainStore.set(key, account: preset.keyAccount) else {
+                phase = .failed(Copy.keychainSaveFailed)
+                return
+            }
+        }
 
         var updates: [String: String?] = [:]
         for account in ProviderCredentials.knownKeyAccounts {
