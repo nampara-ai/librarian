@@ -183,7 +183,11 @@ def test_fallback_extractor_uses_legacy_on_primary_failure(tmp_path: Path) -> No
     result = asyncio.run(fallback.extract(tmp_path / "x.pdf"))
 
     assert result == "legacy extracted text"
-    assert fallback.last_metadata == {"engine": "legacy"}
+    # The downgrade is recorded so a permanently broken primary is diagnosable.
+    assert fallback.last_metadata is not None
+    assert fallback.last_metadata["engine"] == "legacy"
+    assert fallback.last_metadata["fallback_from_primary"] is True
+    assert "engine unavailable" in str(fallback.last_metadata["primary_error"])
 
 
 def _text_image_png(tmp_path: Path, *, rotate: int = 0) -> Path:

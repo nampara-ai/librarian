@@ -32,7 +32,11 @@ from librarian.application.export_document import (
     transcript_citation_for_document,
 )
 from librarian.application.export_okf import OKF_VERSION, build_bundle, collect_sources
-from librarian.application.factory import build_container, build_ingest_container
+from librarian.application.factory import (
+    build_container,
+    build_ingest_container,
+    cache_wrap_extractor,
+)
 from librarian.application.import_library import (
     ImportLibrary,
     ImportProcessingMode,
@@ -755,7 +759,13 @@ def import_directory(
             else await build_container()
         )
         importer = ImportLibrary(
-            converter=DocumentConverter(_build_extractor(container.settings)),
+            converter=DocumentConverter(
+                cache_wrap_extractor(
+                    _build_extractor(container.settings),
+                    settings=container.settings,
+                    cache_store=container.repository,
+                )
+            ),
             ingest=container.ingest_document,
             process=getattr(container, "process_document", None),
             queue_factory=lambda: SQLiteRunQueue(container.database),

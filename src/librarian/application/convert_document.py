@@ -183,6 +183,10 @@ class DocumentConverter:
         page_manifest_path = output_path.with_suffix(f"{output_path.suffix}.pages.json")
         set_page_manifest_path = getattr(self.extractor, "set_page_manifest_path", None)
         if callable(set_page_manifest_path):
+            # Every convert_file call sets this explicitly (path or None), so the
+            # value never leaks in from a prior extraction. Concurrent conversions
+            # run in separate asyncio task contexts, so the underlying ContextVar
+            # stays isolated per-conversion.
             set_page_manifest_path(page_manifest_path if write_sidecar else None)
         text = await self.extractor.extract(source_path)
         # Capture the extractor's per-run metadata immediately, before any further

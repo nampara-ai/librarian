@@ -12,7 +12,11 @@ from librarian.application.ports import ApplicationMetrics, LLMProvider
 from librarian.application.process_document import ProcessDocument
 from librarian.application.search_library import SearchLibrary
 from librarian.config import Settings
-from librarian.ingest.extractors import CachingExtractor, CompositeExtractor
+from librarian.ingest.extractors import (
+    CachingExtractor,
+    CompositeExtractor,
+    ExtractionCacheStore,
+)
 from librarian.llm import LazyLLMProvider, build_provider
 from librarian.observability import NoOpMetricsRecorder
 from librarian.pipeline.chunking import ChunkingPolicy
@@ -175,6 +179,24 @@ async def build_container(
         taxonomy=ingest_container.taxonomy,
         process_document=process,
     )
+
+
+def cache_wrap_extractor(
+    extractor: CompositeExtractor,
+    *,
+    settings: Settings,
+    cache_store: ExtractionCacheStore,
+) -> CompositeExtractor | CachingExtractor:
+    """Wrap an extractor with the content-hash cache when enabled.
+
+    Used so the convert/import paths (not just direct ingest) benefit from the
+    extraction cache — re-importing unchanged files then skips re-extraction.
+    """
+    if settings.extraction_cache_enabled:
+        return CachingExtractor(
+            extractor, cache_store, config_signature=extractor.config_signature
+        )
+    return extractor
 
 
 def _build_provider(

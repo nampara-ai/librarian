@@ -179,11 +179,27 @@ class SQLiteDatabase:
             for migration in sorted(migration_root.iterdir(), key=lambda item: item.name):
                 if not migration.name.endswith(".sql") or migration.name in applied:
                     continue
-                connection.executescript(migration.read_text(encoding="utf-8"))
-                connection.execute(
-                    "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-                    (migration.name, utc_now().isoformat()),
-                )
+                sql = migration.read_text(encoding="utf-8")
+                applied_at = utc_now().isoformat()
+                if "PRAGMA" in sql.upper():
+                    # Contains a PRAGMA (journal_mode / foreign_keys) that must
+                    # run outside a transaction (e.g. the 0003 table rebuild), so
+                    # it can't be wrapped; record the version right after.
+                    connection.executescript(sql)
+                    connection.execute(
+                        "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                        (migration.name, applied_at),
+                    )
+                else:
+                    # Apply the migration DDL and record its version in one
+                    # transaction so a crash can't leave a half-applied schema
+                    # with no version row (which would fail the next startup,
+                    # e.g. "duplicate column" on the ALTER TABLE migrations).
+                    # Trusted inputs: package filename + ISO timestamp (no quotes
+                    # possible), executed inside the migration's own transaction.
+                    insert = "INSERT INTO schema_migrations (version, applied_at) VALUES "
+                    version_row = f"{insert}('{migration.name}', '{applied_at}');"  # noqa: S608
+                    connection.executescript(f"BEGIN;\n{sql}\n{version_row}\nCOMMIT;")  # noqa: S608
 
     def connect(self) -> sqlite3.Connection:
         """Open a configured SQLite connection."""
@@ -421,6 +437,14 @@ class SQLiteRepository:
     async def save_document(self, document: Document) -> None:
         """Save a document."""
         await asyncio.to_thread(self._save_document_sync, document)
+
+    async def save_document_with_content(
+        self, document: Document, content_key: str, content_text: str
+    ) -> None:
+        """Persist a document and its raw text atomically (single transaction)."""
+        await asyncio.to_thread(
+            self._save_document_with_content_sync, document, content_key, content_text
+        )
 
     async def save_run(self, run: ProcessingRun) -> None:
         """Save a processing run."""
@@ -756,36 +780,70 @@ class SQLiteRepository:
                 yield message
             offset += len(messages)
 
+    @staticmethod
+    def _upsert_document(connection: sqlite3.Connection, document: Document) -> None:
+        connection.execute(
+            """
+            INSERT INTO documents (
+              id, source_path, filename, media_type, byte_size, sha256,
+              status, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              source_path = excluded.source_path,
+              filename = excluded.filename,
+              media_type = excluded.media_type,
+              byte_size = excluded.byte_size,
+              sha256 = excluded.sha256,
+              status = excluded.status,
+              updated_at = excluded.updated_at
+            """,
+            (
+                str(document.id),
+                str(document.source.path),
+                document.source.filename,
+                document.source.media_type,
+                document.source.byte_size,
+                document.source.sha256,
+                document.status.value,
+                document.created_at.isoformat(),
+                document.updated_at.isoformat(),
+            ),
+        )
+
+    @staticmethod
+    def _upsert_text(connection: sqlite3.Connection, key: str, text: str) -> None:
+        connection.execute(
+            """
+            INSERT INTO content_blobs (key, text, created_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET text = excluded.text
+            """,
+            (key, text, utc_now().isoformat()),
+        )
+        if key.startswith("raw:"):
+            document_id = key.removeprefix("raw:")
+            connection.execute(
+                "DELETE FROM raw_content_fts WHERE document_id = ?",
+                (document_id,),
+            )
+            connection.execute(
+                "INSERT INTO raw_content_fts (document_id, text) VALUES (?, ?)",
+                (document_id, text),
+            )
+
     def _save_document_sync(self, document: Document) -> None:
         with self.database.connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO documents (
-                  id, source_path, filename, media_type, byte_size, sha256,
-                  status, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                  source_path = excluded.source_path,
-                  filename = excluded.filename,
-                  media_type = excluded.media_type,
-                  byte_size = excluded.byte_size,
-                  sha256 = excluded.sha256,
-                  status = excluded.status,
-                  updated_at = excluded.updated_at
-                """,
-                (
-                    str(document.id),
-                    str(document.source.path),
-                    document.source.filename,
-                    document.source.media_type,
-                    document.source.byte_size,
-                    document.source.sha256,
-                    document.status.value,
-                    document.created_at.isoformat(),
-                    document.updated_at.isoformat(),
-                ),
-            )
+            self._upsert_document(connection, document)
+
+    def _save_document_with_content_sync(
+        self, document: Document, content_key: str, content_text: str
+    ) -> None:
+        # One transaction: a crash must not leave a document row without its raw
+        # text (which breaks processing with a KeyError) or vice versa.
+        with self.database.connect() as connection:
+            self._upsert_document(connection, document)
+            self._upsert_text(connection, content_key, content_text)
 
     def _get_document_sync(self, document_id: DocumentId) -> Document | None:
         with self.database.connect() as connection:
@@ -977,27 +1035,7 @@ class SQLiteRepository:
 
     def _put_text_sync(self, key: str, text: str) -> None:
         with self.database.connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO content_blobs (key, text, created_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(key) DO UPDATE SET text = excluded.text
-                """,
-                (key, text, utc_now().isoformat()),
-            )
-            if key.startswith("raw:"):
-                document_id = key.removeprefix("raw:")
-                connection.execute(
-                    "DELETE FROM raw_content_fts WHERE document_id = ?",
-                    (document_id,),
-                )
-                connection.execute(
-                    """
-                    INSERT INTO raw_content_fts (document_id, text)
-                    VALUES (?, ?)
-                    """,
-                    (document_id, text),
-                )
+            self._upsert_text(connection, key, text)
 
     def _get_text_sync(self, key: str) -> str:
         with self.database.connect() as connection:

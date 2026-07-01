@@ -46,7 +46,11 @@ from librarian.application.export_okf import (
     build_bundle,
     collect_sources,
 )
-from librarian.application.factory import build_container, build_ingest_container
+from librarian.application.factory import (
+    build_container,
+    build_ingest_container,
+    cache_wrap_extractor,
+)
 from librarian.application.import_library import ImportLibrary, ImportProcessingMode
 from librarian.application.jobs import InProcessJobRunner
 from librarian.application.ports import SearchScope
@@ -1329,7 +1333,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         )
         importer = ImportLibrary(
-            converter=DocumentConverter(extractor, metrics),
+            converter=DocumentConverter(
+                cache_wrap_extractor(
+                    extractor, settings=settings, cache_store=container.repository
+                ),
+                metrics,
+            ),
             ingest=container.ingest_document,
             process=getattr(container, "process_document", None),
             queue_factory=lambda: SQLiteRunQueue(container.database),

@@ -117,7 +117,10 @@ def test_caching_extractor_does_not_cache_failures(tmp_path: Path) -> None:
     assert inner.calls == 2
 
 
-def test_caching_extractor_bypasses_cache_when_manifest_active(tmp_path: Path) -> None:
+def test_caching_extractor_caches_even_with_manifest_active(tmp_path: Path) -> None:
+    # The cache now composes with the page-manifest/sidecar flow: the first
+    # extract populates the cache (running the real extraction with the manifest
+    # active) and the second is served from cache, so re-imports skip work.
     source = _write(tmp_path, "doc.txt", b"hello world")
     inner = _CountingExtractor()
     cache = _InMemoryCache()
@@ -127,8 +130,8 @@ def test_caching_extractor_bypasses_cache_when_manifest_active(tmp_path: Path) -
     asyncio.run(extractor.extract(source))
     asyncio.run(extractor.extract(source))
 
-    assert inner.calls == 2  # cache bypassed while a manifest is requested
-    assert cache.entries == {}
+    assert inner.calls == 1  # second extraction served from cache
+    assert cache.entries != {}
 
 
 def test_extraction_config_signature_is_stable_and_sensitive() -> None:

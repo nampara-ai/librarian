@@ -8,6 +8,7 @@ import hashlib
 import importlib
 import importlib.util
 import json
+import logging
 import multiprocessing
 import queue
 import re
@@ -17,6 +18,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
@@ -28,6 +30,8 @@ from librarian.application.transcripts import (
 )
 from librarian.observability import sanitize_error_message
 from librarian.pipeline.validation import validate_cleaned_text
+
+_LOGGER = logging.getLogger("librarian.ingest.extractors")
 
 IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"})
 ARCHIVE_EXTENSIONS = frozenset({".zip", ".tar", ".tgz", ".gz", ".bz2", ".xz", ".7z", ".rar"})
@@ -206,6 +210,23 @@ class DocxExtractor:
         return "\n\n".join(part for part in parts if part.strip())
 
 
+# Durable page-manifest path for the extraction running in the current asyncio
+# task. Held in a ContextVar (not on the shared extractor instance) so that
+# concurrent conversions never overwrite each other's manifest target.
+_page_manifest_path_var: ContextVar[Path | None] = ContextVar(
+    "librarian_page_manifest_path", default=None
+)
+
+
+def reset_page_manifest_path() -> None:
+    """Clear the current context's page-manifest path.
+
+    Public entry point for callers (and tests) that need to reset the
+    ContextVar without reaching into module-private state.
+    """
+    _page_manifest_path_var.set(None)
+
+
 class PdfExtractor:
     """Extractor for text-bearing PDFs."""
 
@@ -255,11 +276,20 @@ class PdfExtractor:
         self.max_pages = max_pages
         self.metrics = metrics
         self.last_metadata: dict[str, object] | None = None
-        self.page_manifest_path: Path | None = None
+
+    @property
+    def page_manifest_path(self) -> Path | None:
+        return _page_manifest_path_var.get()
 
     def set_page_manifest_path(self, path: Path | None) -> None:
-        """Set an optional durable manifest path for page-level extraction state."""
-        self.page_manifest_path = path
+        """Set the durable page-manifest path for the current extraction.
+
+        Stored in a ContextVar rather than on the instance: extractors are
+        shared across concurrent conversions (import_concurrency > 1), so
+        per-instance state would let one document's pages/provenance be written
+        into another's sidecar. A ContextVar is isolated per asyncio task.
+        """
+        _page_manifest_path_var.set(path)
 
     async def extract(self, path: Path) -> str:
         _validate_input_size(path, self.max_input_bytes, "PDF extraction input")
@@ -1039,16 +1069,22 @@ class FallbackExtractor:
             text = await self._primary.extract(path)
             self.last_metadata = _extractor_metadata(self._primary)
             return text
-        except Exception:  # noqa: BLE001 - intentional fallback to the legacy extractor
+        except Exception as exc:  # noqa: BLE001 - intentional fallback to the legacy extractor
+            # A silent engine downgrade (e.g. a permanently broken liteparse
+            # install) is otherwise undiagnosable, so record why we fell back.
+            primary_error = sanitize_error_message(exc)
+            _LOGGER.warning(
+                "primary extractor failed for %s; falling back: %s", path.name, primary_error
+            )
             text = await self._fallback.extract(path)
-            self.last_metadata = _extractor_metadata(self._fallback)
+            metadata = dict(_extractor_metadata(self._fallback) or {})
+            metadata["fallback_from_primary"] = True
+            metadata["primary_error"] = primary_error
+            self.last_metadata = metadata
             return text
 
     def set_page_manifest_path(self, path: Path | None) -> None:
-        for extractor in (self._primary, self._fallback):
-            setter = getattr(extractor, "set_page_manifest_path", None)
-            if callable(setter):
-                setter(path)
+        _page_manifest_path_var.set(path)
 
 
 class TextExtractorLike(Protocol):
@@ -1131,16 +1167,20 @@ class CachingExtractor:
         self.supported_extensions = inner.supported_extensions
         self.last_metadata: dict[str, object] | None = None
         self.last_cache_hit: bool | None = None
-        self._manifest_path: Path | None = None
 
     async def extract(self, path: Path) -> str:
-        # A page-manifest request (the convert sidecar flow) needs the real
-        # per-page extraction to run, so bypass the cache while one is active.
-        if self._manifest_path is not None:
-            return await self._extract_uncached(path)
-
+        # Cache composes with the page-manifest/sidecar flow: on a hit we return
+        # the cached Markdown (no OCR runs, so no per-page manifest is needed);
+        # on a miss the real extraction runs with the manifest active and the
+        # result is cached. This lets re-imports of unchanged files skip
+        # extraction, which the previous unconditional bypass prevented.
+        extension = path.suffix.lower()
+        # Fold the extension into the key: identical bytes can render very
+        # differently by extension (.json vs .txt, .srt vs .txt), so they must
+        # not share a cache slot.
+        signature = f"{self._config_signature}:{extension}"
         content_sha256 = await asyncio.to_thread(_file_sha256, path)
-        cached = await self._cache.get_extraction(content_sha256, self._config_signature)
+        cached = await self._cache.get_extraction(content_sha256, signature)
         if cached is not None:
             self.last_cache_hit = True
             self.last_metadata = {
@@ -1154,8 +1194,8 @@ class CachingExtractor:
         await self._cache.put_extraction(
             ExtractionCacheEntry(
                 content_sha256=content_sha256,
-                config_signature=self._config_signature,
-                source_extension=path.suffix.lower(),
+                config_signature=signature,
+                source_extension=extension,
                 text=text,
             )
         )
@@ -1168,10 +1208,7 @@ class CachingExtractor:
         return text
 
     def set_page_manifest_path(self, path: Path | None) -> None:
-        self._manifest_path = path
-        setter = getattr(self._inner, "set_page_manifest_path", None)
-        if callable(setter):
-            setter(path)
+        _page_manifest_path_var.set(path)
 
 
 class CompositeExtractor:
@@ -1370,11 +1407,8 @@ class CompositeExtractor:
             ) from exc
 
     def set_page_manifest_path(self, path: Path | None) -> None:
-        """Forward page manifest paths to extractors that support them."""
-        for extractor in self._extractors.values():
-            setter = getattr(extractor, "set_page_manifest_path", None)
-            if callable(setter):
-                setter(path)
+        """Set the page-manifest path for the current task's extraction."""
+        _page_manifest_path_var.set(path)
 
 
 def _ocr_image(
