@@ -16,6 +16,7 @@ from librarian.domain.models import (
     Classification,
     Document,
     DocumentStatus,
+    ProcessingRun,
     RunStage,
     RunStatus,
     SourceFile,
@@ -126,6 +127,46 @@ async def test_sqlite_initializes_schema(tmp_path: Path) -> None:
     assert busy_timeout == 5000
     assert str(journal_mode).lower() == "wal"
     assert synchronous == 1
+
+
+@pytest.mark.asyncio
+async def test_fail_interrupted_runs_reconciles_orphaned_running_runs(tmp_path: Path) -> None:
+    database = SQLiteDatabase(tmp_path / "librarian.sqlite")
+    await database.initialize()
+    repository = SQLiteRepository(database)
+    document = Document(
+        id=DocumentId("doc_orphan"),
+        source=SourceFile(
+            path=tmp_path / "o.pdf",
+            filename="o.pdf",
+            media_type="application/pdf",
+            byte_size=1,
+            sha256="orphan-sha",
+        ),
+        status=DocumentStatus.PROCESSING,
+    )
+    await repository.save_document(document)
+    await repository.save_run(
+        ProcessingRun(
+            id=RunId("run_orphan"),
+            document_id=document.id,
+            status=RunStatus.RUNNING,
+            stage=RunStage.CLEAN,
+        )
+    )
+
+    reconciled = await repository.fail_interrupted_runs(error="interrupted by server restart")
+
+    assert reconciled == 1
+    run = await repository.get_run(RunId("run_orphan"))
+    assert run is not None
+    assert run.status == RunStatus.FAILED
+    assert run.error == "interrupted by server restart"
+    document_after = await repository.get_document(document.id)
+    assert document_after is not None
+    assert document_after.status == DocumentStatus.FAILED
+    # A second pass is a no-op once nothing is left RUNNING.
+    assert await repository.fail_interrupted_runs(error="x") == 0
 
 
 @pytest.mark.asyncio

@@ -79,7 +79,12 @@ from librarian.observability import (
     sanitize_error_message,
     start_request_span,
 )
-from librarian.storage.sqlite import SQLiteDatabase, SQLiteRunQueue, normalize_search_query
+from librarian.storage.sqlite import (
+    SQLiteDatabase,
+    SQLiteRepository,
+    SQLiteRunQueue,
+    normalize_search_query,
+)
 from librarian.taxonomy.dewey import DeweyTaxonomy
 from librarian.version import __version__
 
@@ -702,7 +707,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-        await SQLiteDatabase(settings.database_path).initialize()
+        database = SQLiteDatabase(settings.database_path)
+        await database.initialize()
+        # An in-process run has no durable lease, so any run still marked RUNNING
+        # at startup was orphaned by a previous crash/restart. Reconcile it to
+        # FAILED so it doesn't appear active forever and can be retried.
+        if settings.job_backend == "in-process":
+            reconciled = await SQLiteRepository(database).fail_interrupted_runs(
+                error="interrupted by server restart"
+            )
+            if reconciled:
+                logging.getLogger("librarian.api").warning(
+                    "reconciled %d interrupted run(s) on startup", reconciled
+                )
         runner = InProcessJobRunner(max_concurrency=settings.job_max_concurrency)
         app.state.job_runner = runner
         app.state.settings = settings

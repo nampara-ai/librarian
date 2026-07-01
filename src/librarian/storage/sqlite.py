@@ -519,6 +519,16 @@ class SQLiteRepository:
         """Delete a document and dependent records."""
         await asyncio.to_thread(self._delete_document_sync, document_id)
 
+    async def fail_interrupted_runs(self, *, error: str) -> int:
+        """Fail runs left RUNNING by a crashed in-process worker.
+
+        An in-process run has no durable lease, so a row still marked RUNNING at
+        startup belongs to a process that died mid-run. Mark it FAILED (and its
+        document FAILED if still PROCESSING) so it can be retried instead of
+        appearing active forever. Returns the number of runs reconciled.
+        """
+        return await asyncio.to_thread(self._fail_interrupted_runs_sync, error)
+
     async def update_status(
         self,
         run_id: RunId,
@@ -1002,6 +1012,33 @@ class SQLiteRepository:
                 (limit, offset),
             ).fetchall()
         return [_run_from_row(row) for row in rows]
+
+    def _fail_interrupted_runs_sync(self, error: str) -> int:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT id, document_id FROM runs WHERE status = 'running'"
+            ).fetchall()
+            if not rows:
+                return 0
+            now = utc_now().isoformat()
+            connection.execute(
+                """
+                UPDATE runs
+                SET status = 'failed', stage = 'complete', error = ?, updated_at = ?
+                WHERE status = 'running'
+                """,
+                (error, now),
+            )
+            for document_id in {row["document_id"] for row in rows}:
+                connection.execute(
+                    """
+                    UPDATE documents
+                    SET status = 'failed', updated_at = ?
+                    WHERE id = ? AND status = 'processing'
+                    """,
+                    (now, document_id),
+                )
+        return len(rows)
 
     def _update_run_status_sync(
         self,
