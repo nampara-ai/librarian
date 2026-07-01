@@ -1408,6 +1408,15 @@ class CompositeExtractor:
         return text
 
     async def _extract_with_timeout(self, extractor: TextExtractorLike, path: Path) -> str:
+        """Bound how long the caller waits for an extraction.
+
+        This unblocks the pipeline after the deadline and discards the result.
+        Extractors that shell out (OCR via ``subprocess.run(timeout=...)``, the
+        MarkItDown subprocess) are hard-cancelled at their own layer. A purely
+        CPU-bound in-thread extractor cannot be force-killed by Python, so its
+        thread may keep running to completion in the background even though we
+        stop waiting -- we log that case so a runaway extraction is visible.
+        """
         if self._extraction_timeout_seconds <= 0:
             return await extractor.extract(path)
         try:
@@ -1415,6 +1424,13 @@ class CompositeExtractor:
                 extractor.extract(path), timeout=self._extraction_timeout_seconds
             )
         except TimeoutError as exc:
+            _LOGGER.warning(
+                "extraction_timeout",
+                extra={
+                    "path": path.name,
+                    "timeout_seconds": self._extraction_timeout_seconds,
+                },
+            )
             raise ExtractionTimeoutError(
                 f"Extraction exceeded {self._extraction_timeout_seconds}s: {path.name}"
             ) from exc

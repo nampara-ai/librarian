@@ -58,6 +58,7 @@ from librarian.ingest.extractors import CompositeExtractor
 from librarian.llm import LazyLLMProvider
 from librarian.observability import sanitize_error_message
 from librarian.pipeline.chunking import ChunkingPolicy, chunk_text
+from librarian.runtime.parent_watch import start_parent_death_watcher
 from librarian.storage.sqlite import SQLiteDatabase, SQLiteRunQueue
 from librarian.version import __version__
 
@@ -1918,6 +1919,9 @@ def api(
             )
         if settings.api_import_root is None:
             raise typer.BadParameter("LIBRARIAN_API_IMPORT_ROOT is required when binding publicly")
+    # When launched by a desktop app (which passes LIBRARIAN_PARENT_PID), exit if
+    # that parent dies so the backend never lingers as an orphan on the port.
+    start_parent_death_watcher()
     uvicorn.run(
         "librarian.api.app:create_app",
         factory=True,
