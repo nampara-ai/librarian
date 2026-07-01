@@ -1429,7 +1429,7 @@ def test_api_config_exposes_operational_controls(tmp_path: Path) -> None:
     assert payload["ocr_threshold"] == 160
     assert payload["ocr_preserve_page_images"] is True
     assert payload["ocr_rotation_retry"] is True
-    assert payload["cleaning_prompt_version"] == "cmos_v2"
+    assert payload["cleaning_prompt_version"] == "cmos_v3"
     assert payload["classification_prompt_version"] == "dewey_v5"
     assert payload["universal_timeout_seconds"] == 77
     assert payload["llm_max_retries"] == settings.llm_max_retries

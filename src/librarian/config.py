@@ -17,7 +17,7 @@ LiteParseImageMode = Literal["off", "placeholder", "embed"]
 LogFormatSetting = Literal["json", "text"]
 LogLevelSetting = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 LlmProviderSetting = Literal["mock", "openai-compatible"]
-CleaningPromptVersionSetting = Literal["cmos_v1", "cmos_v2"]
+CleaningPromptVersionSetting = Literal["cmos_v1", "cmos_v2", "cmos_v3"]
 ClassificationPromptVersionSetting = Literal[
     "dewey_v1", "dewey_v2", "dewey_v3", "dewey_v4", "dewey_v5"
 ]
@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     # title + tags + series fields). 500 was too small for dewey_v5's schema.
     classification_max_output_tokens: int = Field(default=2_048, gt=0)
 
-    cleaning_prompt_version: CleaningPromptVersionSetting = Field(default="cmos_v2")
+    cleaning_prompt_version: CleaningPromptVersionSetting = Field(default="cmos_v3")
     classification_prompt_version: ClassificationPromptVersionSetting = Field(default="dewey_v5")
     cleaning_mode: CleaningModeSetting = Field(default="standard")
     coherence_mode: CoherenceModeSetting = Field(default="balanced")

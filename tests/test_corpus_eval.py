@@ -74,7 +74,7 @@ async def test_corpus_eval_runs_conversion_processing_and_search(tmp_path: Path)
     assert rendered["librarian_version"]
     assert rendered["llm_provider"] == "mock"
     assert rendered["llm_model"] == "mock-cleaner"
-    assert rendered["cleaning_prompt_version"] == "cmos_v2"
+    assert rendered["cleaning_prompt_version"] == "cmos_v3"
     assert rendered["classification_prompt_version"] == "dewey_v5"
     assert rendered["generated_at"].endswith("+00:00")
     assert rendered["summary"]["case_count"] == 1
