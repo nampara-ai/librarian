@@ -1808,6 +1808,16 @@ def _ocr_deskew_score(image: Any, angle: float, *, threshold: int) -> float:
     if width == 0 or height == 0:
         return 0.0
     data = rotated.tobytes()
+    numpy_module = _optional_numpy()
+    if numpy_module is not None:
+        # Vectorized: variance of the per-row ink counts. The pure-Python path
+        # below is O(width*height) in interpreter loops and dominates deskew
+        # cost across the 21 candidate angles.
+        pixels = numpy_module.frombuffer(data, dtype=numpy_module.uint8).reshape(height, width)
+        row_counts = (pixels <= threshold).sum(axis=1)
+        if not row_counts.any():
+            return 0.0
+        return float(row_counts.var())
     row_counts = [
         sum(1 for pixel in data[row * width : (row + 1) * width] if pixel <= threshold)
         for row in range(height)
@@ -1816,6 +1826,13 @@ def _ocr_deskew_score(image: Any, angle: float, *, threshold: int) -> float:
         return 0.0
     mean = sum(row_counts) / len(row_counts)
     return sum((count - mean) ** 2 for count in row_counts) / len(row_counts)
+
+
+def _optional_numpy() -> Any | None:
+    try:
+        return importlib.import_module("numpy")
+    except ImportError:
+        return None
 
 
 def parse_tesseract_tsv_confidence(tsv: str) -> float | None:

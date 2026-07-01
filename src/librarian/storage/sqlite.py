@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from importlib.resources import files
 from pathlib import Path
-from typing import TYPE_CHECKING, LiteralString, cast
+from typing import TYPE_CHECKING, Any, LiteralString, cast
 
 from librarian.application.clean_chunks import CleanedChunk
 from librarian.application.jobs import QueuedRun, QueueStatus
@@ -1227,29 +1227,33 @@ class SQLiteRepository:
             return []
 
         by_sha = {chunk.sha256: chunk for chunk in chunks}
+        shas = list(by_sha)
+        # Batch the lookups into a few IN-clause queries instead of one query
+        # per chunk. Cap each batch well under SQLite's default 999-variable
+        # limit, leaving room for the three shared filter parameters.
+        batch_size = 400
+        rows_by_sha: dict[str, Any] = {}
         with self.database.connect() as connection:
-            rows = [
-                row
-                for sha in by_sha
-                if (
-                    row := connection.execute(
-                        """
-                        SELECT chunk_sha256, text, warnings
-                        FROM cleaned_chunk_cache
-                        WHERE chunk_sha256 = ?
-                          AND prompt_version = ?
-                          AND model_provider = ?
-                          AND model_name = ?
-                        """,
-                        (sha, prompt_version, model_provider, model_name),
-                    ).fetchone()
+            for start in range(0, len(shas), batch_size):
+                batch = shas[start : start + batch_size]
+                placeholders = ",".join("?" * len(batch))
+                select_clause = (
+                    "SELECT chunk_sha256, text, warnings FROM cleaned_chunk_cache "
+                    "WHERE prompt_version = ? AND model_provider = ? AND model_name = ? "
+                    "AND chunk_sha256 IN ("
                 )
-                is not None
-            ]
+                query = f"{select_clause}{placeholders})"  # noqa: S608 - only ? placeholders
+                for row in connection.execute(
+                    query,
+                    (prompt_version, model_provider, model_name, *batch),
+                ).fetchall():
+                    rows_by_sha[str(row["chunk_sha256"])] = row
 
         cached: list[CleanedChunk] = []
-        for row in rows:
-            chunk = by_sha[str(row["chunk_sha256"])]
+        for sha, chunk in by_sha.items():
+            row = rows_by_sha.get(sha)
+            if row is None:
+                continue
             warnings = tuple(str(item) for item in json.loads(str(row["warnings"])))
             cached.append(
                 CleanedChunk(
