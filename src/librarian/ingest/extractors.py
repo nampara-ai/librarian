@@ -1490,43 +1490,25 @@ def _ocr_image_result(
             preprocess_mode=preprocess_mode,
             threshold=threshold,
         )
-        completed = _run_tesseract(
+        # Single tesseract pass produces both the plain text and the TSV used
+        # for the confidence estimate; running it twice doubled the per-page OCR
+        # cost for no benefit.
+        outputs = _run_tesseract_to_files(
             prepared_path,
             tesseract_path=tesseract_path,
             language=language,
             timeout_seconds=timeout_seconds,
+            output_dir=Path(tmp_dir),
+            formats=("txt", "tsv"),
         )
-        text = completed.stdout.strip()
+        text = outputs["txt"].strip()
         if not text:
             raise ValueError(f"No OCR text found in image: {path}")
         try:
-            confidence = _ocr_image_confidence(
-                prepared_path,
-                language=language,
-                timeout_seconds=timeout_seconds,
-            )
+            confidence = parse_tesseract_tsv_confidence(outputs["tsv"])
         except Exception:  # noqa: BLE001 - confidence is optional diagnostics
             confidence = None
     return OcrTextResult(text=text, confidence=confidence)
-
-
-def _ocr_image_confidence(
-    path: Path,
-    *,
-    language: str = "eng",
-    timeout_seconds: int = 120,
-) -> float | None:
-    tesseract_path = shutil.which("tesseract")
-    if tesseract_path is None:
-        raise RuntimeError("OCR requires the 'tesseract' executable on PATH")
-    completed = _run_tesseract(
-        path,
-        tesseract_path=tesseract_path,
-        language=language,
-        timeout_seconds=timeout_seconds,
-        output_format="tsv",
-    )
-    return parse_tesseract_tsv_confidence(completed.stdout)
 
 
 def _run_tesseract(
@@ -1547,6 +1529,35 @@ def _run_tesseract(
         text=True,
         timeout=timeout_seconds,
     )
+
+
+def _run_tesseract_to_files(
+    path: Path,
+    *,
+    tesseract_path: str,
+    language: str,
+    timeout_seconds: int,
+    output_dir: Path,
+    formats: tuple[str, ...],
+) -> dict[str, str]:
+    """Run tesseract once, emitting several output formats, and read them back.
+
+    Passing multiple format configs (e.g. ``txt tsv``) to a single tesseract
+    invocation produces all of them from one recognition pass, instead of
+    spawning the process once per format.
+    """
+    output_base = output_dir / "tesseract_output"
+    command = [tesseract_path, str(path), str(output_base), "-l", language, *formats]
+    subprocess.run(  # noqa: S603
+        command,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout_seconds,
+    )
+    return {
+        fmt: output_base.with_suffix(f".{fmt}").read_text(encoding="utf-8") for fmt in formats
+    }
 
 
 _OSD_ROTATE_RE = re.compile(r"^Rotate:\s*(\d+)", re.MULTILINE)

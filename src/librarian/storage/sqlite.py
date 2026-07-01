@@ -143,6 +143,16 @@ class SQLiteDatabase:
         """Run lightweight SQLite maintenance for long-lived local databases."""
         return await asyncio.to_thread(self._maintain_sync, vacuum)
 
+    async def prune_caches(self, *, older_than_days: int) -> dict[str, int]:
+        """Delete content-addressed cache rows older than the retention window.
+
+        The extraction and cleaned-chunk caches are keyed by content hash, so
+        they grow without bound as documents come and go. Pruning by age keeps
+        them from accumulating stale entries no live document will ever reuse.
+        Returns the number of rows removed per table.
+        """
+        return await asyncio.to_thread(self._prune_caches_sync, older_than_days)
+
     async def stats(self) -> SQLiteStorageStats:
         """Return SQLite file, page, row, and stored-text sizing statistics."""
         return await asyncio.to_thread(self._stats_sync)
@@ -232,6 +242,20 @@ class SQLiteDatabase:
             checkpoint_checkpointed_frames=int(row[2]),
             vacuumed=vacuum,
         )
+
+    def _prune_caches_sync(self, older_than_days: int) -> dict[str, int]:
+        if older_than_days < 0:
+            raise ValueError("older_than_days must be non-negative")
+        cutoff = (utc_now() - timedelta(days=older_than_days)).isoformat()
+        removed: dict[str, int] = {}
+        with self.connect() as connection:
+            for table in ("extraction_cache", "cleaned_chunk_cache"):
+                cursor = connection.execute(
+                    f"DELETE FROM {table} WHERE created_at < ?",  # noqa: S608 - fixed table names
+                    (cutoff,),
+                )
+                removed[table] = max(cursor.rowcount, 0)
+        return removed
 
     def _stats_sync(self) -> SQLiteStorageStats:
         self.path.parent.mkdir(parents=True, exist_ok=True)

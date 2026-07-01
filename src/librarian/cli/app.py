@@ -168,13 +168,27 @@ def db_maintain(
         bool,
         typer.Option(help="Also run VACUUM after checkpoint/optimize."),
     ] = False,
+    prune_cache_days: Annotated[
+        int | None,
+        typer.Option(
+            "--prune-cache-days",
+            help="Delete extraction/cleaned-chunk cache rows older than N days.",
+            min=0,
+        ),
+    ] = None,
 ) -> None:
-    """Run SQLite optimize, WAL checkpoint, and optional vacuum maintenance."""
+    """Run SQLite optimize, WAL checkpoint, optional cache prune, and vacuum."""
     settings = Settings()
 
     async def run() -> None:
         database = SQLiteDatabase(settings.database_path)
         await database.initialize()
+        if prune_cache_days is not None:
+            pruned = await database.prune_caches(older_than_days=prune_cache_days)
+            console.print(
+                "Pruned cache rows: "
+                + ", ".join(f"{table}={count}" for table, count in sorted(pruned.items()))
+            )
         result = await database.maintain(vacuum=vacuum)
         console.print(
             "SQLite maintenance complete: "

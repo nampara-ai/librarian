@@ -60,6 +60,43 @@ class FakeTracer:
 
 
 @pytest.mark.asyncio
+async def test_prune_caches_removes_only_stale_rows(tmp_path: Path) -> None:
+    database = SQLiteDatabase(tmp_path / "librarian.sqlite")
+    await database.initialize()
+
+    old = (datetime.now(UTC) - timedelta(days=45)).isoformat()
+    fresh = datetime.now(UTC).isoformat()
+    with database.connect() as connection:
+        connection.execute(
+            "INSERT INTO extraction_cache "
+            "(content_sha256, config_signature, source_extension, text, created_at) "
+            "VALUES ('stale', 'cfg', '.pdf', 't', ?)",
+            (old,),
+        )
+        connection.execute(
+            "INSERT INTO extraction_cache "
+            "(content_sha256, config_signature, source_extension, text, created_at) "
+            "VALUES ('fresh', 'cfg', '.pdf', 't', ?)",
+            (fresh,),
+        )
+        connection.execute(
+            "INSERT INTO cleaned_chunk_cache (chunk_sha256, prompt_version, "
+            "model_provider, model_name, text, warnings, created_at) "
+            "VALUES ('stale', 'v', 'p', 'm', 't', '[]', ?)",
+            (old,),
+        )
+
+    removed = await database.prune_caches(older_than_days=30)
+
+    assert removed == {"extraction_cache": 1, "cleaned_chunk_cache": 1}
+    with database.connect() as connection:
+        remaining = connection.execute(
+            "SELECT content_sha256 FROM extraction_cache"
+        ).fetchall()
+    assert [row["content_sha256"] for row in remaining] == ["fresh"]
+
+
+@pytest.mark.asyncio
 async def test_sqlite_initializes_schema(tmp_path: Path) -> None:
     database_path = tmp_path / "librarian.sqlite"
     database = SQLiteDatabase(database_path)
