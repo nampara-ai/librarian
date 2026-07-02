@@ -62,6 +62,11 @@ struct ContentView: View {
         }
         .listStyle(.inset)
         .scrollContentBackground(.hidden)
+        .onDeleteCommand {
+            if let selection {
+                model.remove(selection)
+            }
+        }
     }
 }
 
@@ -123,6 +128,8 @@ struct QueueRowView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let item: QueueItem
+    @State private var showFailureDetails = false
+    @State private var failureEvents: [RunEvent] = []
 
     var body: some View {
         HStack(spacing: 10) {
@@ -132,6 +139,7 @@ struct QueueRowView: View {
                 .frame(width: 24)
                 .transition(reduceMotion ? .opacity : .scale.combined(with: .opacity))
                 .id(leadingSymbol)
+                .accessibilityLabel(stageAccessibilityLabel)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.filename)
@@ -150,6 +158,9 @@ struct QueueRowView: View {
             if case .done(let outputURL) = item.stage {
                 Button(Copy.showInFinder) { model.revealInFinder(outputURL) }
                 Button(Copy.openFile) { model.openFile(outputURL) }
+            }
+            if !item.stage.isTerminal {
+                Button(Copy.stop) { model.stop(item.id) }
             }
             Button(Copy.removeFromList) { model.remove(item.id) }
         }
@@ -214,14 +225,51 @@ struct QueueRowView: View {
             .buttonStyle(.link)
             .transition(reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
         case .failed(_, let retryable):
-            if retryable {
-                Button(Copy.retry) {
-                    model.retry(item.id)
+            HStack(spacing: 8) {
+                if item.runID != nil {
+                    Button(Copy.failureDetails) {
+                        let runID = item.runID
+                        Task { @MainActor in
+                            if let runID {
+                                failureEvents = await model.failureEvents(runID: runID)
+                            }
+                            showFailureDetails = true
+                        }
+                    }
+                    .buttonStyle(.link)
+                    .popover(isPresented: $showFailureDetails) {
+                        FailureDetailsView(item: item, events: failureEvents)
+                    }
                 }
-                .buttonStyle(.bordered)
+                if retryable {
+                    Button(Copy.retry) {
+                        model.retry(item.id)
+                    }
+                    .buttonStyle(.bordered)
+                }
             }
-        default:
+        case .queued, .uploading:
             EmptyView()
+        default:
+            // Converting/cleaning/classifying: the engine is spending real
+            // provider tokens, so stopping must not require the context menu.
+            Button(Copy.stop) {
+                model.stop(item.id)
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private var stageAccessibilityLabel: String {
+        switch item.stage {
+        case .queued: return Copy.stageWaiting
+        case .uploading: return Copy.stageSending
+        case .converting: return Copy.stageConverting
+        case .cleaning: return Copy.stageCleaning
+        case .classifying: return Copy.stageClassifying
+        case .done: return Copy.stageSaved
+        case .failed(let reason, _): return reason
         }
     }
 
@@ -255,6 +303,56 @@ struct QueueRowView: View {
         default:
             return "doc.text"
         }
+    }
+}
+
+// MARK: - Failure details
+
+/// The engine's per-run event log for a failed row, so a failure is more than
+/// one summarized line. Read-only; the last few events usually name the stage
+/// and error that sank the file.
+struct FailureDetailsView: View {
+    let item: QueueItem
+    let events: [RunEvent]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(item.filename)
+                .font(.headline)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if case .failed(let reason, _) = item.stage {
+                Text(reason)
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+            }
+            Divider()
+            if events.isEmpty {
+                Text(Copy.failureDetailsEmpty)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(events) { event in
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Text(event.stage)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 70, alignment: .leading)
+                                Text(event.message)
+                                    .font(.caption)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 220)
+            }
+        }
+        .padding(14)
+        .frame(width: 420)
     }
 }
 
@@ -298,6 +396,14 @@ struct FooterView: View {
         HStack(spacing: 10) {
             aggregateStatus
             enginePill
+            if let notice = model.okfSyncNotice {
+                Label(notice, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(notice)
+            }
             Spacer()
             if model.queue.contains(where: { $0.stage.isDone }) {
                 Button(Copy.clearFinished) {

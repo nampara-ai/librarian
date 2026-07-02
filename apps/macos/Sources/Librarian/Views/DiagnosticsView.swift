@@ -12,6 +12,15 @@ struct DiagnosticsView: View {
     @State private var isLoading = false
     @State private var actionOutput: String?
     @State private var isMigrating = false
+    @State private var isReclaiming = false
+    @State private var configText: String?
+
+    /// What the readiness rows show while unknown: a spinner-stand-in when the
+    /// engine is reachable, an honest "offline" when it is not — never an
+    /// eternal "…".
+    private var pendingDetail: String {
+        model.serverOnline ? "…" : "offline"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -19,6 +28,12 @@ struct DiagnosticsView: View {
                 Text("Diagnostics")
                     .font(.title2.weight(.semibold))
                 Spacer()
+                Button {
+                    Task { await load() }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .disabled(isLoading)
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.defaultAction)
             }
@@ -28,22 +43,22 @@ struct DiagnosticsView: View {
                     ChecklistRowView(
                         ok: model.serverOnline,
                         title: "Server",
-                        detail: version.map { "v\($0)" } ?? (model.serverOnline ? "…" : "offline")
+                        detail: version.map { "v\($0)" } ?? pendingDetail
                     )
                     ChecklistRowView(
                         ok: readiness?.database == "ok",
                         title: "Database",
-                        detail: readiness?.database ?? "…"
+                        detail: readiness?.database ?? pendingDetail
                     )
                     ChecklistRowView(
                         ok: readiness?.storage == "ok",
                         title: "Storage",
-                        detail: readiness?.storage ?? "…"
+                        detail: readiness?.storage ?? pendingDetail
                     )
                     ChecklistRowView(
                         ok: (readiness?.appliedMigrations ?? 0) > 0,
                         title: "Migrations",
-                        detail: readiness.map { "\($0.appliedMigrations) applied" } ?? "…"
+                        detail: readiness.map { "\($0.appliedMigrations) applied" } ?? pendingDetail
                     )
                 }
                 .padding(6)
@@ -100,6 +115,14 @@ struct DiagnosticsView: View {
                             Task { await migrate() }
                         }
                         .disabled(isMigrating || !BackendCLI.isAvailable)
+                        Button(isReclaiming ? "Reclaiming…" : "Reclaim Disk Space") {
+                            Task { await reclaimDiskSpace() }
+                        }
+                        .disabled(isReclaiming || !BackendCLI.isAvailable)
+                        .help(
+                            "Removes cached work older than 30 days and compacts "
+                                + "the database. Your documents are not touched."
+                        )
                         Button("Restart Backend") {
                             Task {
                                 await model.restartBackend()
@@ -123,6 +146,25 @@ struct DiagnosticsView: View {
                     }
                 }
                 .padding(6)
+            }
+
+            if BackendCLI.isAvailable {
+                DisclosureGroup("Effective configuration") {
+                    ScrollView {
+                        Text(configText ?? "Loading…")
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(6)
+                    }
+                    .frame(height: 180)
+                    .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+                    .task {
+                        if configText == nil {
+                            await loadConfig()
+                        }
+                    }
+                }
             }
         }
         .padding(20)
@@ -156,6 +198,38 @@ struct DiagnosticsView: View {
         } catch {
             actionOutput = error.localizedDescription
         }
+    }
+
+    /// Prune caches older than 30 days and compact the database. The engine's
+    /// caches only speed up re-processing of identical content; removing old
+    /// entries never loses documents.
+    private func reclaimDiskSpace() async {
+        isReclaiming = true
+        defer { isReclaiming = false }
+        do {
+            let result = try await BackendCLI.run([
+                "admin", "db-maintain", "--prune-cache-days", "30", "--vacuum",
+            ])
+            let text = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            actionOutput = text.isEmpty
+                ? (result.succeeded ? "Done." : "Reclaim failed — see backend.log.")
+                : text
+        } catch {
+            actionOutput = error.localizedDescription
+        }
+    }
+
+    /// The engine's full effective configuration with secrets redacted,
+    /// via `admin config --json` — the support answer to "what is it
+    /// actually running with?".
+    private func loadConfig() async {
+        guard let result = try? await BackendCLI.run(["admin", "config", "--json"]),
+              result.succeeded else {
+            configText = "Configuration unavailable."
+            return
+        }
+        let text = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        configText = text.isEmpty ? "Configuration unavailable." : text
     }
 }
 

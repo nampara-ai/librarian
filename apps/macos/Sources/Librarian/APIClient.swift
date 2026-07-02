@@ -52,7 +52,9 @@ struct APIClient {
         return try Self.decoder.decode(DocumentsPage.self, from: data)
     }
 
-    func listRuns(limit: Int = 100) async throws -> RunsPage {
+    // 500 is the backend's page ceiling; a lower default could lose track of
+    // queue items during large drops with retries.
+    func listRuns(limit: Int = 500) async throws -> RunsPage {
         let (data, _) = try await send(
             "GET", "/runs", query: [URLQueryItem(name: "limit", value: String(limit))]
         )

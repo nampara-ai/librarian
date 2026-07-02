@@ -34,6 +34,25 @@ struct LibrarianApp: App {
                 .environmentObject(model)
                 .tint(Self.tint)
                 .toolbar {
+                    // Adding files must not depend on the empty-state button or
+                    // drag-and-drop: once the queue is non-empty those vanish,
+                    // and keyboard/VoiceOver users need a persistent control.
+                    ToolbarItem(placement: .automatic) {
+                        Button {
+                            model.presentChooseFilesPanel()
+                        } label: {
+                            Label(Copy.addFiles, systemImage: "plus")
+                        }
+                        .help("Add documents to clean")
+                    }
+                    ToolbarItem(placement: .automatic) {
+                        OpenAuxiliaryWindowButton(
+                            title: Copy.libraryTitle,
+                            systemImage: "books.vertical",
+                            windowID: "library"
+                        )
+                        .help("Browse and search everything you've processed")
+                    }
                     ToolbarItem(placement: .primaryAction) {
                         SettingsLink {
                             Label("Settings", systemImage: "gearshape")
@@ -47,7 +66,18 @@ struct LibrarianApp: App {
         }
         .defaultSize(width: 680, height: 520)
         .commands {
+            CommandGroup(replacing: .newItem) {
+                Button(Copy.addFiles) {
+                    model.presentChooseFilesPanel()
+                }
+                .keyboardShortcut("o")
+            }
             CommandMenu("Tools") {
+                OpenAuxiliaryWindowButton(
+                    title: "\(Copy.libraryTitle)…",
+                    windowID: "library"
+                )
+                .keyboardShortcut("l")
                 OpenAuxiliaryWindowButton(
                     title: "File & Transcript Tools…",
                     windowID: "tools"
@@ -57,6 +87,13 @@ struct LibrarianApp: App {
                 OpenAuxiliaryWindowButton(title: "Diagnostics…", windowID: "diagnostics")
             }
         }
+
+        Window(Copy.libraryTitle, id: "library") {
+            LibraryView()
+                .environmentObject(model)
+                .tint(Self.tint)
+        }
+        .defaultSize(width: 640, height: 460)
 
         Window("Tools", id: "tools") {
             ToolsView()
@@ -84,11 +121,18 @@ struct LibrarianApp: App {
 private struct OpenAuxiliaryWindowButton: View {
     @Environment(\.openWindow) private var openWindow
     let title: String
+    var systemImage: String?
     let windowID: String
 
     var body: some View {
-        Button(title) {
+        Button {
             openWindow(id: windowID)
+        } label: {
+            if let systemImage {
+                Label(title, systemImage: systemImage)
+            } else {
+                Text(title)
+            }
         }
     }
 }

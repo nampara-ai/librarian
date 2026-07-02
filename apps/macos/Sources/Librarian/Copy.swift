@@ -23,7 +23,23 @@ enum Copy {
     static let openFile = "Open"
     static let removeFromList = "Remove from list"
     static let retry = "Retry"
+    static let stop = "Stop"
     static let clearFinished = "Clear Finished"
+    static let addFiles = "Add Files…"
+    static let failureDetails = "Details"
+    static let failureDetailsEmpty = "No further detail was recorded."
+
+    static let libraryTitle = "Library"
+    static let librarySearchPrompt = "Search your cleaned documents"
+    static let libraryEmpty = "Documents you process appear here."
+    static let libraryNoMatches = "No matches — try different words."
+    static let librarySaveCopy = "Save a Copy"
+    static let libraryDelete = "Delete…"
+    static let libraryDeleteConfirmTitle = "Delete this document?"
+    static func libraryDeleteConfirmBody(_ filename: String) -> String {
+        "\"\(filename)\" and its cleaned text will be removed from the app. "
+            + "Files already saved to your folder are not touched."
+    }
 
     static func footerActive(_ current: Int, of total: Int) -> String {
         "Cleaning \(current) of \(total)"
@@ -63,6 +79,14 @@ enum Copy {
 
     static let reasonTimeout = "Took too long — try again"
     static let reasonInterrupted = "Interrupted"
+    static let reasonStopped = "Stopped"
+
+    static let okfSyncFailed =
+        "The bundle couldn't be updated — it will retry after the next finished file."
+    static func okfSkipped(_ count: Int) -> String {
+        "\(count) document\(count == 1 ? " was" : "s were") left out of the bundle "
+            + "(not processed yet)."
+    }
 
     /// Translate backend failure text into plain words. All failure copy
     /// lives here so wording stays in one place.

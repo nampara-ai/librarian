@@ -119,10 +119,12 @@ final class BackendController: ObservableObject {
         // key, so other local processes cannot read or modify the corpus.
         let apiKey = Self.generateAPIKey()
         embeddedAPIKey = apiKey
+        var occupiedPorts = 0
         for port in Self.candidatePorts {
             // A previous (orphaned) instance holds its own per-launch key and
             // cannot be adopted; treat a responding port as occupied.
             if await Self.isLibrarianHealthy(port: port) {
+                occupiedPorts += 1
                 continue
             }
             do {
@@ -130,7 +132,12 @@ final class BackendController: ObservableObject {
             } catch {
                 continue
             }
-            for _ in 0..<60 {
+            // A cold first launch (relocatable Python start + migrations) can
+            // legitimately take tens of seconds; killing a healthy boot at 15 s
+            // read as "Engine didn't start" on slower Macs. Wait up to 60 s
+            // while the process is alive, and bail out as soon as it exits so
+            // the next candidate port is tried without burning the full budget.
+            for _ in 0..<240 {
                 if process?.isRunning != true { break }
                 if await Self.isLibrarianHealthy(port: port) {
                     mode = .embedded(port: port)
@@ -138,13 +145,30 @@ final class BackendController: ObservableObject {
                 }
                 try? await Task.sleep(for: .milliseconds(250))
             }
-            stop()
+            let ranFullBudget = process?.isRunning == true
+            await stopGracefully(preserveMode: true)
+            if ranFullBudget {
+                // The engine ran for the whole budget without answering; a
+                // different port will not help, so surface the failure now.
+                break
+            }
+        }
+        if occupiedPorts == Self.candidatePorts.count {
+            mode = .failed(
+                "Other programs are using the engine's ports "
+                    + "(\(Self.candidatePorts.map(String.init).joined(separator: ", "))). "
+                    + "Quit them or restart your Mac, then try again."
+            )
+            return
         }
         mode = .failed(
             "The embedded backend did not start. See backend.log in the data folder."
         )
     }
 
+    /// Synchronous stop for app termination, where blocking briefly is the
+    /// only way to guarantee no orphaned engine survives the app. UI paths
+    /// (settings toggles, restarts) use `stopGracefully()` instead.
     func stop() {
         if let running = process {
             running.terminationHandler = nil
@@ -169,20 +193,40 @@ final class BackendController: ObservableObject {
         }
     }
 
-    /// Stop the embedded backend and start a fresh instance, picking up any
-    /// configuration changes from the data directory's .env file.
-    func restart() async {
-        let previous = process
-        stop()
-        // Wait until the old instance has actually exited (and uvicorn has
-        // released its port) before relaunching, up to 3 seconds.
-        if let previous {
+    /// Async stop that never blocks the main actor: terminate, await exit for
+    /// up to 3 s, then SIGKILL. `preserveMode` keeps the current mode (used
+    /// mid-boot, where the caller sets the final mode itself).
+    func stopGracefully(preserveMode: Bool = false) async {
+        if let running = process {
+            running.terminationHandler = nil
+            running.terminate()
             var waited = 0
-            while previous.isRunning && waited < 30 {
+            while running.isRunning && waited < 30 {
                 try? await Task.sleep(for: .milliseconds(100))
                 waited += 1
             }
+            if running.isRunning {
+                kill(running.processIdentifier, SIGKILL)
+            }
         }
+        process = nil
+        try? logHandle?.close()
+        logHandle = nil
+        if !preserveMode {
+            if case .embedded = mode {
+                mode = .external
+            } else if case .starting = mode {
+                mode = .external
+            }
+        }
+    }
+
+    /// Stop the embedded backend and start a fresh instance, picking up any
+    /// configuration changes from the data directory's .env file.
+    func restart() async {
+        // stopGracefully waits for the old instance to exit (and uvicorn to
+        // release its port) before we relaunch.
+        await stopGracefully()
         await startEmbeddedIfNeeded()
     }
 
