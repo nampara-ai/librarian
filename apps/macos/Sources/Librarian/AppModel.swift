@@ -313,6 +313,9 @@ final class AppModel: ObservableObject {
 
     private func upload(itemID: UUID) async {
         guard let index = queue.firstIndex(where: { $0.id == itemID }) else { return }
+        // A queued item can be stopped while waiting for an upload slot; the
+        // slot runner must not resurrect it into .uploading.
+        guard isStillActive(itemID) else { return }
         let sourceURL = queue[index].sourceURL
         setStage(itemID, .uploading(progress: nil))
         // Reject oversize files locally before reading a byte, so we neither
@@ -344,7 +347,12 @@ final class AppModel: ObservableObject {
                 item.startedAt = Date()
             }
             let run = try await client.createRun(documentId: document.id)
-            guard isStillActive(itemID) else { return }
+            guard isStillActive(itemID) else {
+                // Stopped in the createRun window: the row never learned this
+                // run's id, so Stop couldn't cancel it — cancel it here.
+                Task { _ = try? await client.cancelRun(id: run.id) }
+                return
+            }
             update(itemID) { item in
                 item.runID = run.id
                 item.stage = .converting(progress: nil)
@@ -538,6 +546,9 @@ final class AppModel: ObservableObject {
                     ? nil
                     : Copy.okfSkipped(bundle.skipped.count)
             } catch {
+                // A newer completion cancelled this sync mid-write; its
+                // replacement is about to run, so this is not a failure.
+                if Task.isCancelled { return }
                 // The documents are processed and will appear on the next
                 // successful sync (another completion or a manual refresh);
                 // leave the rows saved but say the bundle is stale.

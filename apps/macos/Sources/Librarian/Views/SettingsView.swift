@@ -382,22 +382,20 @@ struct SettingsView: View {
 
     /// Persist the Advanced engine options and restart the engine so they
     /// apply. Defaults are removed from the file rather than written, so a
-    /// hand-edited .env only carries deliberate overrides.
+    /// hand-edited .env only carries deliberate overrides. Diffed against the
+    /// file first: onChange also fires when state is restored on open, and a
+    /// no-op "apply" must never restart the engine (killing in-flight runs).
     private func applyEngineOptions() async {
-        var updates: [String: String?] = [:]
-        updates.updateValue(
-            coherenceMode == "balanced" ? nil : coherenceMode,
-            forKey: "LIBRARIAN_COHERENCE_MODE"
-        )
-        updates.updateValue(
-            figureVisionEnabled ? "true" : nil,
-            forKey: "LIBRARIAN_FIGURE_VISION_ENABLED"
-        )
         let visionModel = figureVisionModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        updates.updateValue(
-            (figureVisionEnabled && !visionModel.isEmpty) ? visionModel : nil,
-            forKey: "LIBRARIAN_FIGURE_VISION_MODEL"
-        )
+        let updates: [String: String?] = [
+            "LIBRARIAN_COHERENCE_MODE": coherenceMode == "balanced" ? nil : coherenceMode,
+            "LIBRARIAN_FIGURE_VISION_ENABLED": figureVisionEnabled ? "true" : nil,
+            "LIBRARIAN_FIGURE_VISION_MODEL":
+                (figureVisionEnabled && !visionModel.isEmpty) ? visionModel : nil,
+        ]
+        let current = EnvFile.read()
+        let changed = updates.contains { key, value in current[key] != value }
+        guard changed else { return }
         do {
             try EnvFile.update(updates)
         } catch {

@@ -131,6 +131,8 @@ struct DiagnosticsView: View {
                         }
                         .disabled(!BackendController.isEmbeddedAvailable ||
                             !model.useEmbeddedBackend)
+                    }
+                    HStack(spacing: 10) {
                         Button("Data Folder") {
                             model.backend.revealDataFolder()
                         }
@@ -183,6 +185,11 @@ struct DiagnosticsView: View {
            let report = try? JSONDecoder().decode(DoctorReport.self, from: data) {
             checks = report.checks
         }
+        // Refresh also re-reads the effective configuration when it has
+        // already been shown once.
+        if configText != nil {
+            await loadConfig()
+        }
     }
 
     private func migrate() async {
@@ -211,9 +218,15 @@ struct DiagnosticsView: View {
                 "admin", "db-maintain", "--prune-cache-days", "30", "--vacuum",
             ])
             let text = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
-            actionOutput = text.isEmpty
-                ? (result.succeeded ? "Done." : "Reclaim failed — see backend.log.")
-                : text
+            if result.succeeded {
+                actionOutput = text.isEmpty ? "Done." : text
+            } else if text.lowercased().contains("locked") || text.lowercased().contains("busy") {
+                // VACUUM needs the database to itself; the live engine holds
+                // it open while files are processing.
+                actionOutput = "The engine is busy — try again when nothing is processing."
+            } else {
+                actionOutput = text.isEmpty ? "Reclaim failed — see backend.log." : text
+            }
         } catch {
             actionOutput = error.localizedDescription
         }

@@ -36,8 +36,9 @@ struct LibraryView: View {
                     ProgressView().controlSize(.small)
                 } else if !query.isEmpty {
                     Button {
+                        // onChange(of: query) below owns the reload; calling
+                        // scheduleSearch here too would race it.
                         query = ""
-                        scheduleSearch(immediate: true)
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.secondary)
@@ -49,7 +50,9 @@ struct LibraryView: View {
             .padding(10)
             .background(.bar)
             .onChange(of: query) {
-                scheduleSearch(immediate: false)
+                // Emptying the field (clear button, select-all-delete) shows
+                // the full library immediately; typing debounces.
+                scheduleSearch(immediate: query.isEmpty)
             }
 
             Divider()
@@ -153,22 +156,28 @@ struct LibraryView: View {
             }
             notice = nil
         } catch {
+            // A newer keystroke cancelled this reload; keep showing the
+            // current rows rather than blanking the list with an error the
+            // replacement reload is about to overwrite.
+            if Task.isCancelled { return }
             rows = []
             notice = Copy.userFacingReason(for: error.localizedDescription)
         }
     }
 
     /// The engine returns snippets HTML-escaped with `<mark>` highlight tags
-    /// (for web clients); render them as plain text here.
+    /// (for web clients); render them as plain text here. `&amp;` must be
+    /// unescaped LAST: document text "&lt;" arrives as "&amp;lt;", and
+    /// unescaping the ampersand first would double-unescape it to "<".
     static func plainSnippet(_ raw: String) -> String {
         raw
             .replacingOccurrences(of: "<mark>", with: "")
             .replacingOccurrences(of: "</mark>", with: "")
-            .replacingOccurrences(of: "&amp;", with: "&")
             .replacingOccurrences(of: "&lt;", with: "<")
             .replacingOccurrences(of: "&gt;", with: ">")
             .replacingOccurrences(of: "&quot;", with: "\"")
             .replacingOccurrences(of: "&#x27;", with: "'")
+            .replacingOccurrences(of: "&amp;", with: "&")
             .replacingOccurrences(of: "\n", with: " ")
     }
 

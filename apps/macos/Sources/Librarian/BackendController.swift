@@ -22,6 +22,13 @@ final class BackendController: ObservableObject {
     private var process: Process?
     private var logHandle: FileHandle?
 
+    /// Ownership token for the boot loop: every user-visible stop or restart
+    /// bumps it, and a suspended `startEmbeddedIfNeeded` aborts when it wakes
+    /// up under a different generation — so toggling the engine off (or
+    /// restarting) mid-boot can never let the old loop relaunch a zombie
+    /// engine or fight a newer boot for `process`.
+    private var bootGeneration = 0
+
     /// Timestamps of recent automatic relaunches after an unexpected exit,
     /// used to detect a crash loop and stop hammering a backend that cannot
     /// stay up instead of restarting it forever.
@@ -115,6 +122,8 @@ final class BackendController: ObservableObject {
             break
         }
         mode = .starting
+        bootGeneration += 1
+        let generation = bootGeneration
         // Fresh credential for every launch: the embedded API requires this
         // key, so other local processes cannot read or modify the corpus.
         let apiKey = Self.generateAPIKey()
@@ -124,9 +133,11 @@ final class BackendController: ObservableObject {
             // A previous (orphaned) instance holds its own per-launch key and
             // cannot be adopted; treat a responding port as occupied.
             if await Self.isLibrarianHealthy(port: port) {
+                guard generation == bootGeneration else { return }
                 occupiedPorts += 1
                 continue
             }
+            guard generation == bootGeneration else { return }
             do {
                 try launch(port: port, apiKey: apiKey)
             } catch {
@@ -138,26 +149,34 @@ final class BackendController: ObservableObject {
             // while the process is alive, and bail out as soon as it exits so
             // the next candidate port is tried without burning the full budget.
             for _ in 0..<240 {
+                guard generation == bootGeneration else { return }
                 if process?.isRunning != true { break }
                 if await Self.isLibrarianHealthy(port: port) {
+                    guard generation == bootGeneration else { return }
                     mode = .embedded(port: port)
                     return
                 }
                 try? await Task.sleep(for: .milliseconds(250))
             }
+            guard generation == bootGeneration else { return }
             let ranFullBudget = process?.isRunning == true
-            await stopGracefully(preserveMode: true)
+            await terminateProcess()
+            guard generation == bootGeneration else { return }
             if ranFullBudget {
                 // The engine ran for the whole budget without answering; a
                 // different port will not help, so surface the failure now.
                 break
             }
         }
+        guard generation == bootGeneration else { return }
         if occupiedPorts == Self.candidatePorts.count {
+            // Every candidate port answered /health, meaning previous engine
+            // instances are still running (they hold per-launch keys and
+            // cannot be adopted).
             mode = .failed(
-                "Other programs are using the engine's ports "
-                    + "(\(Self.candidatePorts.map(String.init).joined(separator: ", "))). "
-                    + "Quit them or restart your Mac, then try again."
+                "A previous engine instance is still running on the engine's "
+                    + "ports (\(Self.candidatePorts.map(String.init).joined(separator: ", "))). "
+                    + "Quit other copies of Librarian or restart your Mac, then try again."
             )
             return
         }
@@ -170,6 +189,7 @@ final class BackendController: ObservableObject {
     /// only way to guarantee no orphaned engine survives the app. UI paths
     /// (settings toggles, restarts) use `stopGracefully()` instead.
     func stop() {
+        bootGeneration += 1
         if let running = process {
             running.terminationHandler = nil
             running.terminate()
@@ -193,10 +213,24 @@ final class BackendController: ObservableObject {
         }
     }
 
-    /// Async stop that never blocks the main actor: terminate, await exit for
-    /// up to 3 s, then SIGKILL. `preserveMode` keeps the current mode (used
-    /// mid-boot, where the caller sets the final mode itself).
-    func stopGracefully(preserveMode: Bool = false) async {
+    /// Async stop that never blocks the main actor. Bumps the boot generation
+    /// so any in-flight `startEmbeddedIfNeeded` aborts instead of relaunching
+    /// against the user's intent.
+    func stopGracefully() async {
+        bootGeneration += 1
+        await terminateProcess()
+        if case .embedded = mode {
+            mode = .external
+        } else if case .starting = mode {
+            mode = .external
+        }
+    }
+
+    /// Terminate the child process and release the log handle without touching
+    /// `mode` or the boot generation. Internal building block: the boot loop
+    /// uses it between port attempts (aborting its own boot would deadlock the
+    /// rotation), and the public stops wrap it.
+    private func terminateProcess() async {
         if let running = process {
             running.terminationHandler = nil
             running.terminate()
@@ -212,13 +246,6 @@ final class BackendController: ObservableObject {
         process = nil
         try? logHandle?.close()
         logHandle = nil
-        if !preserveMode {
-            if case .embedded = mode {
-                mode = .external
-            } else if case .starting = mode {
-                mode = .external
-            }
-        }
     }
 
     /// Stop the embedded backend and start a fresh instance, picking up any

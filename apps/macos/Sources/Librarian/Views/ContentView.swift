@@ -130,6 +130,7 @@ struct QueueRowView: View {
     let item: QueueItem
     @State private var showFailureDetails = false
     @State private var failureEvents: [RunEvent] = []
+    @State private var isLoadingFailureEvents = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -228,17 +229,25 @@ struct QueueRowView: View {
             HStack(spacing: 8) {
                 if item.runID != nil {
                     Button(Copy.failureDetails) {
+                        // Open immediately with a loading state; a slow or
+                        // unreachable engine must not make the button feel dead.
+                        showFailureDetails = true
+                        isLoadingFailureEvents = true
                         let runID = item.runID
                         Task { @MainActor in
                             if let runID {
                                 failureEvents = await model.failureEvents(runID: runID)
                             }
-                            showFailureDetails = true
+                            isLoadingFailureEvents = false
                         }
                     }
                     .buttonStyle(.link)
                     .popover(isPresented: $showFailureDetails) {
-                        FailureDetailsView(item: item, events: failureEvents)
+                        FailureDetailsView(
+                            item: item,
+                            events: failureEvents,
+                            isLoading: isLoadingFailureEvents
+                        )
                     }
                 }
                 if retryable {
@@ -314,6 +323,7 @@ struct QueueRowView: View {
 struct FailureDetailsView: View {
     let item: QueueItem
     let events: [RunEvent]
+    var isLoading: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -327,7 +337,14 @@ struct FailureDetailsView: View {
                     .foregroundStyle(.orange)
             }
             Divider()
-            if events.isEmpty {
+            if isLoading && events.isEmpty {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Loading…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            } else if events.isEmpty {
                 Text(Copy.failureDetailsEmpty)
                     .font(.callout)
                     .foregroundStyle(.secondary)
