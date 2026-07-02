@@ -50,6 +50,48 @@ def test_cli_read_only_commands_do_not_require_llm_credentials(tmp_path: Path) -
     assert "Missing API key" not in show.output + status.output + export.output
 
 
+def test_cli_agent_json_surfaces_round_trip(tmp_path: Path) -> None:
+    """Agents drive imports and monitor runs via --json; lock those surfaces."""
+    runner = CliRunner()
+    source_dir = tmp_path / "docs"
+    source_dir.mkdir()
+    (source_dir / "note.txt").write_text("Racehorse conditioning notes for the spring meet.")
+    env = {
+        "LIBRARIAN_DATA_DIR": str(tmp_path / ".librarian"),
+        "LIBRARIAN_DATABASE_PATH": str(tmp_path / ".librarian" / "librarian.sqlite"),
+        "LIBRARIAN_LLM_PROVIDER": "mock",
+    }
+
+    version = runner.invoke(app, ["version", "--json"], env=env)
+    assert version.exit_code == 0
+    assert json.loads(version.stdout)["version"]
+
+    imported = runner.invoke(app, ["import", str(source_dir), "--process", "--json"], env=env)
+    assert imported.exit_code == 0
+    report = json.loads(imported.stdout)
+    assert report["summary"]["processed"] == 1
+    run_id = report["items"][0]["run_id"]
+
+    runs = runner.invoke(app, ["admin", "runs", "--json"], env=env)
+    assert runs.exit_code == 0
+    run_records = json.loads(runs.stdout)["runs"]
+    assert run_records[0]["id"] == run_id
+    assert run_records[0]["status"] == "succeeded"
+
+    queue = runner.invoke(app, ["admin", "queue", "--json"], env=env)
+    assert queue.exit_code == 0
+    assert json.loads(queue.stdout) == {"queue": []}
+
+    converted = runner.invoke(app, ["convert-dir", str(source_dir), "--json"], env=env)
+    assert converted.exit_code == 0
+    conversion = json.loads(converted.stdout)
+    assert conversion["summary"]["converted"] == 1
+    # Sidecars are always written now (they mark outputs as librarian
+    # artifacts so re-runs skip them); the deprecated flag is a no-op.
+    output_path = Path(conversion["items"][0]["output_path"])
+    assert output_path.with_suffix(output_path.suffix + ".json").exists()
+
+
 def test_cli_admin_config_prints_redacted_settings(tmp_path: Path) -> None:
     runner = CliRunner()
     env = {

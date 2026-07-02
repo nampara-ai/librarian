@@ -78,8 +78,16 @@ _MAX_PAGE_MANIFEST_READ_BYTES = 256 * 1024 * 1024
 
 
 @app.command()
-def version() -> None:
+def version(
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable version info."),
+    ] = False,
+) -> None:
     """Print the Librarian version."""
+    if json_output:
+        console.out(json.dumps({"version": __version__}))
+        return
     console.print(__version__)
 
 
@@ -595,12 +603,17 @@ def convert_dir(
     ] = "librarian-converted",
     recursive: Annotated[bool, typer.Option(help="Recurse into child directories.")] = False,
     overwrite: Annotated[bool, typer.Option(help="Overwrite existing outputs.")] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the machine-readable conversion report to stdout."),
+    ] = False,
     sidecar_metadata: Annotated[
         bool,
         typer.Option(help="Deprecated; batch conversion always writes provenance sidecars."),
     ] = False,
 ) -> None:
     """Batch convert supported files in a directory."""
+    del sidecar_metadata
     conversion_format = _conversion_format(format)
     mode = _directory_output_mode(output_mode)
     try:
@@ -629,20 +642,26 @@ def convert_dir(
             subdirectory_name=subdirectory_name,
             recursive=recursive,
             overwrite=overwrite,
-            write_sidecar=sidecar_metadata,
+            # Sidecars mark outputs as librarian artifacts so re-runs skip
+            # them; the deprecated flag is ignored to match import behavior
+            # (and the flag's own help text).
+            write_sidecar=True,
         )
-        table = Table("Status", "Source", "Output", "Error")
-        for item in result.items:
-            table.add_row(
-                item.status,
-                str(item.source_path),
-                str(item.output_path) if item.output_path else "",
-                item.error or "",
+        if json_output:
+            console.out(json.dumps(result.to_json_dict(), indent=2))
+        else:
+            table = Table("Status", "Source", "Output", "Error")
+            for item in result.items:
+                table.add_row(
+                    item.status,
+                    str(item.source_path),
+                    str(item.output_path) if item.output_path else "",
+                    item.error or "",
+                )
+            console.print(table)
+            console.print(
+                f"Converted {result.converted}, skipped {result.skipped}, failed {result.failed}"
             )
-        console.print(table)
-        console.print(
-            f"Converted {result.converted}, skipped {result.skipped}, failed {result.failed}"
-        )
         if result.failed:
             raise typer.Exit(code=1)
 
@@ -754,6 +773,10 @@ def import_directory(
     ] = None,
     resume: Annotated[bool, typer.Option(help="Resume from an existing manifest.")] = False,
     report: Annotated[Path | None, typer.Option(help="Write final JSON report.")] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the machine-readable import report to stdout."),
+    ] = False,
     sidecar_metadata: Annotated[
         bool,
         typer.Option(help="Deprecated; batch import always writes provenance sidecars."),
@@ -827,22 +850,25 @@ def import_directory(
                 await write_import_report(report.expanduser(), result)
             except ValueError as exc:
                 raise typer.BadParameter(sanitize_error_message(exc)) from exc
-        table = Table("Status", "Source", "Converted", "Document", "Run", "Error")
-        for item in result.items:
-            table.add_row(
-                item.status,
-                str(item.source_path),
-                str(item.converted_path) if item.converted_path else "",
-                str(item.document_id) if item.document_id else "",
-                str(item.run_id) if item.run_id else "",
-                item.error or "",
+        if json_output:
+            console.out(json.dumps(result.to_json_dict(), indent=2))
+        else:
+            table = Table("Status", "Source", "Converted", "Document", "Run", "Error")
+            for item in result.items:
+                table.add_row(
+                    item.status,
+                    str(item.source_path),
+                    str(item.converted_path) if item.converted_path else "",
+                    str(item.document_id) if item.document_id else "",
+                    str(item.run_id) if item.run_id else "",
+                    item.error or "",
+                )
+            console.print(table)
+            console.print(
+                "Converted "
+                f"{result.converted}, ingested {result.ingested}, processed {result.processed}, "
+                f"queued {result.queued}, skipped {result.skipped}, failed {result.failed}"
             )
-        console.print(table)
-        console.print(
-            "Converted "
-            f"{result.converted}, ingested {result.ingested}, processed {result.processed}, "
-            f"queued {result.queued}, skipped {result.skipped}, failed {result.failed}"
-        )
         if result.failed:
             raise typer.Exit(code=1)
 
@@ -853,12 +879,34 @@ def import_directory(
 def list_runs(
     limit: Annotated[int, typer.Option(help="Maximum runs.", min=1, max=500)] = 100,
     offset: Annotated[int, typer.Option(help="Runs to skip.", min=0)] = 0,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable run records."),
+    ] = False,
 ) -> None:
     """List processing runs."""
 
     async def run() -> None:
         container = await build_ingest_container()
         runs = await container.repository.list_runs(limit=limit, offset=offset)
+        if json_output:
+            payload = [
+                {
+                    "id": str(item.id),
+                    "document_id": str(item.document_id),
+                    "status": item.status.value,
+                    "stage": item.stage.value,
+                    "total_chunks": item.total_chunks,
+                    "completed_chunks": item.completed_chunks,
+                    "failed_chunks": item.failed_chunks,
+                    "created_at": item.created_at.isoformat(),
+                    "updated_at": item.updated_at.isoformat(),
+                    "error": item.error,
+                }
+                for item in runs
+            ]
+            console.out(json.dumps({"runs": payload}, indent=2))
+            return
         table = Table("ID", "Document", "Status", "Stage", "Chunks", "Error")
         for item in runs:
             table.add_row(
@@ -877,6 +925,10 @@ def list_runs(
 @admin_app.command("run-cancel")
 def cancel_run(
     run_id: Annotated[str, typer.Argument(help="Run ID to cancel.")],
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print a machine-readable result."),
+    ] = False,
 ) -> None:
     """Mark a queued or running run as canceled."""
 
@@ -895,6 +947,9 @@ def cancel_run(
         )
         if container.settings.job_backend == "sqlite":
             await SQLiteRunQueue(container.database).cancel(existing.id, error="canceled by user")
+        if json_output:
+            console.out(json.dumps({"run_id": str(existing.id), "status": "canceled"}))
+            return
         console.print(f"Canceled {existing.id}")
 
     asyncio.run(run())
@@ -904,6 +959,10 @@ def cancel_run(
 def retry_run(
     run_id: Annotated[str, typer.Argument(help="Failed run ID to retry.")],
     queue: Annotated[bool, typer.Option(help="Enqueue retry instead of processing now.")] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the new run as machine-readable JSON."),
+    ] = False,
 ) -> None:
     """Replay a failed run as a new processing run."""
 
@@ -929,9 +988,17 @@ def retry_run(
                 raise typer.BadParameter(
                     f"Failed to enqueue retry {new_run.id}: {error}"
                 ) from exc
+            if json_output:
+                console.out(json.dumps({"run_id": str(new_run.id), "status": "queued"}))
+                return
             console.print(f"Queued retry {new_run.id}")
             return
         finished = await container.process_document.execute_existing(new_run.id)
+        if json_output:
+            console.out(
+                json.dumps({"run_id": str(finished.id), "status": finished.status.value})
+            )
+            return
         console.print(f"Retry {finished.id}: {finished.status.value}")
 
     asyncio.run(run())
@@ -941,12 +1008,31 @@ def retry_run(
 def inspect_queue(
     limit: Annotated[int, typer.Option(help="Maximum queue rows.", min=1, max=500)] = 100,
     offset: Annotated[int, typer.Option(help="Queue rows to skip.", min=0)] = 0,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable queue records."),
+    ] = False,
 ) -> None:
     """List durable queue items."""
 
     async def run() -> None:
         container = await build_ingest_container()
         rows = await SQLiteRunQueue(container.database).list(limit=limit, offset=offset)
+        if json_output:
+            payload = [
+                {
+                    "run_id": str(item.run_id),
+                    "status": item.status.value,
+                    "attempts": item.attempts,
+                    "available_at": item.available_at.isoformat(),
+                    "locked_at": item.locked_at.isoformat() if item.locked_at else None,
+                    "locked_by": item.locked_by,
+                    "last_error": item.last_error,
+                }
+                for item in rows
+            ]
+            console.out(json.dumps({"queue": payload}, indent=2))
+            return
         table = Table("Run", "Status", "Attempts", "Available", "Locked By", "Error")
         for item in rows:
             table.add_row(
