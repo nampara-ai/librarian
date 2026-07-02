@@ -90,14 +90,12 @@ jobs:
           # install the Intel OCR binaries there.
           # Pin the Homebrew installer to an immutable commit SHA instead of the
           # moving HEAD ref, so a compromised or changed upstream install.sh
-          # cannot be pulled into the build.
-          # TODO(security): replace this placeholder with the real 40-char SHA of
-          # the desired Homebrew/install commit. Obtain it with:
+          # cannot be pulled into the build. Pinned to Homebrew/install commit
+          # 184a7bce ("Fix DNF group advice", 2026-06-21); the script at this
+          # SHA was fetched and reviewed before pinning. To bump:
           #   gh api 'repos/Homebrew/install/commits?path=install.sh&per_page=1' --jq '.[0].sha'
-          # (could not be resolved in the offline audit environment). Until a real
-          # SHA is set, the raw.githubusercontent.com fetch 404s and the build
-          # fails fast rather than silently running an unpinned installer.
-          HOMEBREW_INSTALL_SHA="REPLACE_WITH_PINNED_HOMEBREW_INSTALL_COMMIT_SHA"
+          # then re-review the fetched script before updating the value.
+          HOMEBREW_INSTALL_SHA="184a7bce1569b711ecb5451f5e9a3d30cb444242"
           if [ ! -x /usr/local/bin/brew ]; then
             NONINTERACTIVE=1 arch -x86_64 /bin/bash -c \
               "$(curl -fsSL "https://raw.githubusercontent.com/Homebrew/install/${HOMEBREW_INSTALL_SHA}/install.sh")" </dev/null

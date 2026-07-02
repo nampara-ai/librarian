@@ -118,16 +118,39 @@ def _osd_functional() -> bool:
     return "osd" in (result.stdout + result.stderr)
 
 
+def _fixture_font(size: int):
+    """A real scalable font on any OS.
+
+    Falling back to Pillow's tiny bitmap default renders text too small for
+    Tesseract's orientation detection to work, which made these tests fail on
+    macOS runners (no DejaVu at the Linux path) while passing on Linux.
+    """
+    from PIL import ImageFont
+
+    for candidate in (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Linux
+        "/System/Library/Fonts/Supplemental/Arial.ttf",  # macOS
+        "/System/Library/Fonts/Helvetica.ttc",  # macOS
+        "C:/Windows/Fonts/arial.ttf",  # Windows
+    ):
+        try:
+            return ImageFont.truetype(candidate, size)
+        except OSError:
+            continue
+    try:
+        # Pillow >= 10.1 renders its default font at any size.
+        return ImageFont.load_default(size=size)
+    except TypeError:  # pragma: no cover - ancient Pillow only
+        return ImageFont.load_default()
+
+
 def _document_image(tmp_path: Path, *, rotate: int):
     image_module = pytest.importorskip("PIL.Image")
-    from PIL import ImageDraw, ImageFont
+    from PIL import ImageDraw
 
     image = image_module.new("RGB", (900, 420), "white")
     draw = ImageDraw.Draw(image)
-    try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 30)
-    except OSError:
-        font = ImageFont.load_default()
+    font = _fixture_font(30)
     lines = [
         "The quarterly revenue report shows strong growth",
         "across every region this fiscal year.",

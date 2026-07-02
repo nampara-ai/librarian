@@ -1,6 +1,12 @@
 import AppKit
 import Foundation
 
+/// backend.log is opened for append on every launch, so without rotation it
+/// grows forever. Cap it at a few MB. File-scope (not a static on the
+/// @MainActor class) so the nonisolated log-rotation helper can read it
+/// without crossing actor isolation — that reference is an error in Swift 6.
+private let backendMaxLogBytes: UInt64 = 5 * 1024 * 1024
+
 /// Launches and supervises the Librarian backend that ships inside the app
 /// bundle (Contents/Resources/backend). Falls back to an external server when
 /// no bundled backend is present or the user disables embedded mode.
@@ -67,16 +73,12 @@ final class BackendController: ObservableObject {
         dataDirectory.appendingPathComponent("backend.log")
     }
 
-    /// backend.log is opened for append on every launch, so without rotation it
-    /// grows forever. Cap it at a few MB.
-    private static let maxLogBytes: UInt64 = 5 * 1024 * 1024
-
     /// If the log has exceeded the cap, move it aside to a single `.1` backup
     /// (overwriting any earlier backup) so the active file starts empty.
     nonisolated private static func rotateLogIfNeeded(at logURL: URL) {
         let manager = FileManager.default
         guard let attributes = try? manager.attributesOfItem(atPath: logURL.path),
-              let size = attributes[.size] as? UInt64, size > maxLogBytes else {
+              let size = attributes[.size] as? UInt64, size > backendMaxLogBytes else {
             return
         }
         let rotated = logURL.appendingPathExtension("1")

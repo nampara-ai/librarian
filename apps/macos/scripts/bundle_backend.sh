@@ -13,7 +13,7 @@ set -euo pipefail
 # A --constraints file (e.g. the release constraints.txt exported from uv.lock)
 # is applied to pip so bundled dependency versions are pinned/reproducible.
 
-PBS_RELEASE="20260602"
+PBS_RELEASE="20260623"
 PYTHON_VERSION="3.12.13"
 
 # Expected SHA256 of the python-build-standalone tarball, per architecture, for
@@ -21,15 +21,14 @@ PYTHON_VERSION="3.12.13"
 # the download is verified against these digests and the build fails hard on any
 # mismatch (or if the digest is left unset).
 #
-# TODO(security): fill in the real digests before shipping. Obtain them from the
-# .sha256 sidecar files the PBS release publishes, e.g.:
-#   curl -fsSL "https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_RELEASE}/${TARBALL}.sha256"
-# (that file contains the hex digest for the matching TARBALL). Paste the 64-hex
-# value for each arch below. The literal placeholder string will never match a
-# real digest, so an unfilled value fails the build rather than skipping the
-# check.
-PBS_SHA256_aarch64="REPLACE_WITH_REAL_SHA256_FOR_aarch64"
-PBS_SHA256_x86_64="REPLACE_WITH_REAL_SHA256_FOR_x86_64"
+# Provenance: these digests were cross-verified against two independent
+# sources — the SHA256 GitHub displays per asset on the release page
+# (https://github.com/astral-sh/python-build-standalone/releases/tag/20260623)
+# and the digest table vendored in uv 0.11.26 — which agreed exactly.
+# When bumping PBS_RELEASE/PYTHON_VERSION, re-verify the new digests the same
+# way; a stale or mistyped value fails the build rather than skipping the check.
+PBS_SHA256_aarch64="41df7d3ae4757e84b97874f76d634268456aaa271740d33f968d826374998fb7"
+PBS_SHA256_x86_64="a6bbea996c5f14eb55ab275889d2df45408deec504b4a7219d7b59c045b2555e"
 
 APP=""
 WHEEL=""
