@@ -262,6 +262,26 @@ async def test_docx_extractor_preserves_list_markers(tmp_path: Path) -> None:
     assert "1. Numbered item" in text
 
 
+@pytest.mark.asyncio
+async def test_docx_extractor_preserves_body_order_of_mixed_content(tmp_path: Path) -> None:
+    from docx import Document
+
+    path = tmp_path / "fixture.docx"
+    document = Document()
+    document.add_paragraph("FIRST paragraph")
+    table = document.add_table(rows=1, cols=2)
+    table.cell(0, 0).text = "cell a"
+    table.cell(0, 1).text = "cell b"
+    document.add_paragraph("LAST paragraph")
+    document.save(str(path))
+
+    text = await CompositeExtractor().extract(path)
+
+    # The table sits between the two paragraphs in the source; it must stay
+    # there rather than being hoisted to the end of the document.
+    assert text.index("FIRST") < text.index("cell a | cell b") < text.index("LAST")
+
+
 @pytest.mark.skipif(shutil.which("tesseract") is None, reason="tesseract not installed")
 @pytest.mark.asyncio
 async def test_image_ocr_extractor_reads_fixture(tmp_path: Path) -> None:
@@ -1509,6 +1529,7 @@ async def test_pdf_extractor_passes_ocr_preprocessing_options(
         "ocr_threshold": 155,
         "ocr_preserve_page_images": False,
         "ocr_rotation_retry": False,
+        "ocr_auto_orient": True,
         "ocr_correction_mode": "never",
         "ocr_correction_model": "mock-cleaner",
         "ocr_low_confidence_threshold": 85.0,

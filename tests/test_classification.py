@@ -2,7 +2,10 @@ import json
 
 import pytest
 
-from librarian.application.classify_document import ClassifyDocument
+from librarian.application.classify_document import (
+    ClassifyDocument,
+    _classification_sample,  # pyright: ignore[reportPrivateUsage]
+)
 from librarian.domain.ids import DocumentId
 from librarian.llm.mock import MockLLMProvider
 from librarian.prompts import PromptCatalog
@@ -38,6 +41,22 @@ def _classifier(provider: MockLLMProvider | _CannedProvider) -> ClassifyDocument
         model="mock-cleaner",
         taxonomy=DeweyTaxonomy(),
     )
+
+
+def test_classification_sample_uses_whole_text_when_short() -> None:
+    assert _classification_sample("brief report", budget=8_000) == "brief report"
+
+
+def test_classification_sample_covers_head_middle_tail_for_long_text() -> None:
+    text = "H" * 5_000 + "M" * 5_000 + "T" * 5_000
+    sample = _classification_sample(text, budget=900)
+
+    # A long document must not be classified on its opening pages alone.
+    assert sample.startswith("H")
+    assert sample.endswith("T")
+    assert "M" in sample
+    assert "[...]" in sample
+    assert len(sample) < len(text)
 
 
 @pytest.mark.asyncio

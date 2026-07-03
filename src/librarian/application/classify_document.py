@@ -111,6 +111,24 @@ _GENERIC_SERIES_STEMS = frozenset(
 )
 
 
+def _classification_sample(text: str, *, budget: int) -> str:
+    """Return a representative excerpt of the document for classification.
+
+    Short documents are used whole. For longer ones, sampling only the head
+    means a title page or table of contents decides the classification; taking
+    head + middle + tail gives the model a view of the actual body too, within
+    the same character budget.
+    """
+    if budget <= 0 or len(text) <= budget:
+        return text
+    segment = max(1, budget // 3)
+    head = text[:segment]
+    middle_start = max(segment, (len(text) - segment) // 2)
+    middle = text[middle_start : middle_start + segment]
+    tail = text[len(text) - segment :]
+    return "\n[...]\n".join((head, middle, tail))
+
+
 def _clean_one_line(value: str | None, *, max_chars: int) -> str | None:
     if value is None:
         return None
@@ -174,8 +192,11 @@ def _series_key(
     falls back to a period-stripped filename stem, but only when that stem is
     distinctive enough to be a real series rather than a generic name.
     """
-    primary = " ".join(part for part in (issuer, series_title) if part and part.strip())
-    if primary.strip():
+    # A series identity requires an actual recurring-publication *title*. An
+    # issuer alone is not a series (otherwise every one-off document from the
+    # same publisher would be falsely linked as editions of one series).
+    if series_title and series_title.strip():
+        primary = " ".join(part for part in (issuer, series_title) if part and part.strip())
         return _series_slug(primary) or None
     if fallback_filename:
         stem = (
@@ -226,9 +247,10 @@ class ClassifyDocument:
     prompt_version: str
     model: str
     taxonomy: TaxonomyProvider
-    max_tokens: int = 500
+    max_tokens: int = 2_048
     temperature: float = 0.0
     max_response_chars: int = 2 * 1024 * 1024
+    sample_chars: int = 8_000
 
     async def execute(
         self,
@@ -238,7 +260,7 @@ class ClassifyDocument:
         source_filename: str | None = None,
     ) -> Classification:
         prompt = self.prompt_catalog.get("classification", self.prompt_version)
-        sample = text[:8_000]
+        sample = _classification_sample(text, budget=self.sample_chars)
         raw = await self.provider.complete(
             system_prompt=(
                 "You are a librarian expert in Dewey Decimal Classification. "

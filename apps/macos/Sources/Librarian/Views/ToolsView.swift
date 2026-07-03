@@ -87,6 +87,13 @@ struct ToolsView: View {
                     }
                 }
                 .disabled(isRunning || !canRun)
+                if !BackendCLI.isAvailable {
+                    // Mirror DiagnosticsView: a silently disabled Run button
+                    // in unbundled (swift run) builds reads as broken.
+                    Text("File tools need the packaged app with a bundled backend.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 if let lastWrittenURL {
                     Button("Reveal Output in Finder") {
                         model.revealInFinder(lastWrittenURL)

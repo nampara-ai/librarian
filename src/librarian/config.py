@@ -9,6 +9,17 @@ from typing import Literal, Self
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Settings fields that hold secrets and must never be printed or returned.
+_SECRET_SETTING_FIELDS = frozenset(
+    {
+        "api_key",
+        "api_keys",
+        "api_key_sha256",
+        "api_key_hashes",
+        "otel_headers",
+    }
+)
+
 CoherenceModeSetting = Literal["fast", "balanced", "max-coherence"]
 OcrLlmCorrectionMode = Literal["always", "never", "low-confidence"]
 OcrPreprocessMode = Literal["none", "grayscale", "threshold", "deskew"]
@@ -17,7 +28,7 @@ LiteParseImageMode = Literal["off", "placeholder", "embed"]
 LogFormatSetting = Literal["json", "text"]
 LogLevelSetting = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 LlmProviderSetting = Literal["mock", "openai-compatible"]
-CleaningPromptVersionSetting = Literal["cmos_v1", "cmos_v2"]
+CleaningPromptVersionSetting = Literal["cmos_v1", "cmos_v2", "cmos_v3"]
 ClassificationPromptVersionSetting = Literal[
     "dewey_v1", "dewey_v2", "dewey_v3", "dewey_v4", "dewey_v5"
 ]
@@ -49,8 +60,15 @@ class Settings(BaseSettings):
     llm_completion_cost_per_1k_tokens_usd: float = Field(default=0.0, ge=0)
     llm_max_prompt_chars: int = Field(default=2 * 1024 * 1024, gt=0)
     llm_max_response_chars: int = Field(default=2 * 1024 * 1024, gt=0)
+    # Output token budget for chunk cleaning. Must exceed the tokens needed to
+    # return a fully-cleaned chunk (~chunk_target_chars); token-dense text
+    # (CJK, tables, dense OCR) needs headroom or the provider truncates.
+    llm_max_output_tokens: int = Field(default=16_384, gt=0)
+    # Output token budget for classification JSON (summary + description +
+    # title + tags + series fields). 500 was too small for dewey_v5's schema.
+    classification_max_output_tokens: int = Field(default=2_048, gt=0)
 
-    cleaning_prompt_version: CleaningPromptVersionSetting = Field(default="cmos_v2")
+    cleaning_prompt_version: CleaningPromptVersionSetting = Field(default="cmos_v3")
     classification_prompt_version: ClassificationPromptVersionSetting = Field(default="dewey_v5")
     cleaning_mode: CleaningModeSetting = Field(default="standard")
     coherence_mode: CoherenceModeSetting = Field(default="balanced")
@@ -183,4 +201,21 @@ class Settings(BaseSettings):
                 "llm_retry_max_delay_seconds must be greater than or equal to "
                 "llm_retry_base_delay_seconds"
             )
+        if self.figure_vision_min_bytes > self.figure_vision_max_bytes:
+            raise ValueError(
+                "figure_vision_min_bytes must be less than or equal to figure_vision_max_bytes"
+            )
         return self
+
+    def redacted_config(self) -> dict[str, object]:
+        """Return the effective configuration with secret values redacted.
+
+        Field values that hold credentials (raw and hashed API keys, OTLP
+        headers) are replaced with a marker so the result is safe to log,
+        print, or return from an endpoint.
+        """
+        payload = self.model_dump(mode="json")
+        for name in _SECRET_SETTING_FIELDS:
+            if payload.get(name) is not None:
+                payload[name] = "***redacted***"
+        return payload

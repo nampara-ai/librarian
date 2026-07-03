@@ -157,20 +157,20 @@ whole pipeline without scraping tables. Run any command with `--help` for its fu
 | `librarian init` | Create a local workspace (`.librarian/` with the SQLite database). |
 | `librarian doctor [--strict] [--json]` | Report optional dependencies and OCR tools, with install hints. |
 | `librarian migrate` | Apply pending database migrations. |
-| `librarian version` | Print the Librarian version. |
+| `librarian version [--json]` | Print the Librarian version. |
 
 ### Convert (no database, file → file)
 | Command | What it does |
 | --- | --- |
 | `librarian convert report.docx --format md --output out/report.md` | Convert one file to Markdown/text. |
-| `librarian convert-dir ./folder --format md --output-mode subdirectory` | Convert every supported file in a folder. |
+| `librarian convert-dir ./folder --format md --output-mode subdirectory [--json]` | Convert every supported file in a folder. |
 | `librarian transcript-normalize captions.srt --format md --output clean.md` | Normalize an SRT/VTT transcript to clean Markdown/text. |
 | `librarian transcript-find captions.srt "a quoted phrase" --json` | Locate a quote in a transcript with timestamps. |
 
 ### Ingest, clean & classify
 | Command | What it does |
 | --- | --- |
-| `librarian import ./folder --recursive --process` | The big one: convert → ingest → (optionally) clean+classify a whole tree. `--manifest <path> --resume` makes huge imports idempotent; `--report report.json` writes a full run report; exits non-zero if anything failed. |
+| `librarian import ./folder --recursive --process [--json]` | The big one: convert → ingest → (optionally) clean+classify a whole tree. `--manifest <path> --resume` makes huge imports idempotent; `--report report.json` writes a full run report (`--json` prints the same report to stdout); exits non-zero if anything failed. |
 | `librarian ingest transcript.txt` | Ingest a single file and persist its extracted text. |
 | `librarian process doc_...` | Run cleaning + classification on an ingested document. |
 | `librarian worker --once` | Drain the durable SQLite job queue (for `--process`-deferred imports). |
@@ -194,13 +194,14 @@ whole pipeline without scraping tables. Run any command with `--help` for its fu
 ### `librarian admin …` — operator & storage
 | Command | What it does |
 | --- | --- |
+| `admin config [--json]` | Print the effective runtime configuration with secrets redacted. |
 | `admin db-stats [--json]` | File size, page usage, row counts, stored-text totals (incl. the extraction cache). |
-| `admin db-maintain [--vacuum]` | SQLite `optimize`, WAL checkpoint, optional `VACUUM`. |
+| `admin db-maintain [--vacuum] [--prune-cache-days N]` | SQLite `optimize`, WAL checkpoint, optional cache prune + `VACUUM`. |
 | `admin db-check` | Verify integrity, foreign keys, and migration state. |
 | `admin db-backup <dest>` / `admin db-restore <src>` | Consistent online SQLite backup / verified restore. |
 | `admin workspace-backup <dest>` / `admin workspace-restore <src>` | Archive/restore data files **plus** a consistent DB snapshot. |
-| `admin runs` / `admin run-cancel <id>` / `admin run-retry <id>` | List runs; cancel a queued/running run; replay a failed one. |
-| `admin queue` | Inspect the durable job queue. |
+| `admin runs [--json]` / `admin run-cancel <id> [--json]` / `admin run-retry <id> [--json]` | List runs; cancel a queued/running run; replay a failed one. |
+| `admin queue [--json]` | Inspect the durable job queue. |
 | `admin api-audit [--json]` | Inspect API audit-log events. |
 | `admin page-manifest <doc> [--json]` | Inspect a PDF's per-page OCR manifest (which pages were OCR'd, confidence, warnings). |
 

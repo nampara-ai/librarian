@@ -86,7 +86,7 @@ async def test_real_provider_shipped_v2_eval_suite(tmp_path: Path) -> None:
 
     assert result.passed
     assert result.provider == "openai-compatible"
-    assert result.cleaning_prompt_version == "cmos_v2"
+    assert result.cleaning_prompt_version == "cmos_v3"
     assert result.classification_prompt_version == "dewey_v5"
 
 

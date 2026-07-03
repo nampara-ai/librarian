@@ -8,6 +8,8 @@ import hashlib
 import importlib
 import importlib.util
 import json
+import logging
+import math
 import multiprocessing
 import queue
 import re
@@ -16,7 +18,8 @@ import subprocess
 import tempfile
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
@@ -28,6 +31,8 @@ from librarian.application.transcripts import (
 )
 from librarian.observability import sanitize_error_message
 from librarian.pipeline.validation import validate_cleaned_text
+
+_LOGGER = logging.getLogger("librarian.ingest.extractors")
 
 IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"})
 ARCHIVE_EXTENSIONS = frozenset({".zip", ".tar", ".tgz", ".gz", ".bz2", ".xz", ".7z", ".rar"})
@@ -194,16 +199,33 @@ class DocxExtractor:
         from docx import Document
 
         doc = Document(str(path))
-        parts = [
-            *(_paragraph_text(paragraph) for paragraph in doc.paragraphs),
-            *(_table_text(table) for table in doc.tables),
-        ]
+        # Iterate the body in true document order so a table that sits between
+        # two paragraphs stays between them, instead of hoisting every table to
+        # the end (which scrambled the reading order of mixed documents).
+        parts = list(_iter_docx_body_text(doc))
         for section in doc.sections:
             parts.extend(_paragraph_text(paragraph) for paragraph in section.header.paragraphs)
             parts.extend(_table_text(table) for table in section.header.tables)
             parts.extend(_paragraph_text(paragraph) for paragraph in section.footer.paragraphs)
             parts.extend(_table_text(table) for table in section.footer.tables)
         return "\n\n".join(part for part in parts if part.strip())
+
+
+# Durable page-manifest path for the extraction running in the current asyncio
+# task. Held in a ContextVar (not on the shared extractor instance) so that
+# concurrent conversions never overwrite each other's manifest target.
+_page_manifest_path_var: ContextVar[Path | None] = ContextVar(
+    "librarian_page_manifest_path", default=None
+)
+
+
+def reset_page_manifest_path() -> None:
+    """Clear the current context's page-manifest path.
+
+    Public entry point for callers (and tests) that need to reset the
+    ContextVar without reaching into module-private state.
+    """
+    _page_manifest_path_var.set(None)
 
 
 class PdfExtractor:
@@ -255,11 +277,20 @@ class PdfExtractor:
         self.max_pages = max_pages
         self.metrics = metrics
         self.last_metadata: dict[str, object] | None = None
-        self.page_manifest_path: Path | None = None
+
+    @property
+    def page_manifest_path(self) -> Path | None:
+        return _page_manifest_path_var.get()
 
     def set_page_manifest_path(self, path: Path | None) -> None:
-        """Set an optional durable manifest path for page-level extraction state."""
-        self.page_manifest_path = path
+        """Set the durable page-manifest path for the current extraction.
+
+        Stored in a ContextVar rather than on the instance: extractors are
+        shared across concurrent conversions (import_concurrency > 1), so
+        per-instance state would let one document's pages/provenance be written
+        into another's sidecar. A ContextVar is isolated per asyncio task.
+        """
+        _page_manifest_path_var.set(path)
 
     async def extract(self, path: Path) -> str:
         _validate_input_size(path, self.max_input_bytes, "PDF extraction input")
@@ -483,6 +514,7 @@ class PdfExtractor:
             "ocr_threshold": self.ocr_threshold,
             "ocr_preserve_page_images": self.ocr_preserve_page_images,
             "ocr_rotation_retry": self.ocr_rotation_retry,
+            "ocr_auto_orient": self.ocr_auto_orient,
             "ocr_correction_mode": self.ocr_correction_mode,
             "ocr_correction_model": self.ocr_correction_model,
             "ocr_low_confidence_threshold": self.ocr_low_confidence_threshold,
@@ -718,15 +750,23 @@ class MarkItDownExtractor:
             daemon=True,
         )
         process.start()
-        process.join(self.timeout_seconds)
+        # Read the result BEFORE joining. A multiprocessing.Queue payload larger
+        # than the OS pipe buffer (~64 KiB) blocks the child's feeder thread
+        # until the parent drains it, so join()-before-get() deadlocks on any
+        # sizeable conversion and surfaces a false TimeoutError. Draining first
+        # lets the child flush and exit.
+        try:
+            status, payload = result_queue.get(timeout=self.timeout_seconds)
+        except queue.Empty:
+            process.terminate()
+            process.join(5)
+            raise TimeoutError(
+                f"Broad format conversion timed out after {self.timeout_seconds}s"
+            ) from None
+        process.join(5)
         if process.is_alive():
             process.terminate()
             process.join()
-            raise TimeoutError(f"Broad format conversion timed out after {self.timeout_seconds}s")
-        try:
-            status, payload = result_queue.get_nowait()
-        except queue.Empty as exc:
-            raise RuntimeError("Broad format conversion failed without returning a result") from exc
         if status == "ok":
             return payload
         raise RuntimeError(payload)
@@ -801,6 +841,10 @@ _FIGURE_MEDIA_TYPES = {
     "webp": "image/webp",
 }
 
+# Upper bound on the tokens requested per figure description, so a very large
+# configured character budget can't derive an output-token count providers reject.
+_MAX_FIGURE_VISION_TOKENS = 8_192
+
 
 def figure_media_type(image_format: str) -> str:
     """Map a liteparse image format to an IANA media type (default PNG)."""
@@ -845,6 +889,13 @@ async def enrich_markdown_figures(
     if not eligible:
         return markdown, 0
 
+    # Derive the token ceiling from the character budget rather than hardcoding
+    # it: a description is truncated to max_response_chars anyway, so asking for
+    # far more tokens just wastes latency and cost, while a tiny fixed cap would
+    # clip a large configured budget. ~4 chars/token with headroom and a floor,
+    # and an upper bound so an unusually large char budget can't request an
+    # absurd token count that providers reject.
+    vision_max_tokens = min(_MAX_FIGURE_VISION_TOKENS, max(256, math.ceil(max_response_chars / 3)))
     semaphore = asyncio.Semaphore(max(1, max_concurrency))
 
     async def describe(figure: FigureImage) -> tuple[FigureImage, str | None]:
@@ -856,7 +907,7 @@ async def enrich_markdown_figures(
                     system_prompt=FIGURE_VISION_SYSTEM_PROMPT,
                     user_prompt=FIGURE_VISION_USER_PROMPT,
                     model=model,
-                    max_tokens=2048,
+                    max_tokens=vision_max_tokens,
                     temperature=temperature,
                 )
             except Exception:  # noqa: BLE001 - one figure must not fail the document
@@ -987,6 +1038,7 @@ class LiteParseExtractor:
                     output_dir=Path(tmp_dir),
                     auto_orient=self.auto_orient,
                     ocr_timeout_seconds=self.ocr_timeout_seconds,
+                    fallback_dpi=self.dpi,
                 )
                 return self._collect_result(parser.parse(str(pdf_path)))
         return self._collect_result(parser.parse(str(path)))
@@ -1031,16 +1083,22 @@ class FallbackExtractor:
             text = await self._primary.extract(path)
             self.last_metadata = _extractor_metadata(self._primary)
             return text
-        except Exception:  # noqa: BLE001 - intentional fallback to the legacy extractor
+        except Exception as exc:  # noqa: BLE001 - intentional fallback to the legacy extractor
+            # A silent engine downgrade (e.g. a permanently broken liteparse
+            # install) is otherwise undiagnosable, so record why we fell back.
+            primary_error = sanitize_error_message(exc)
+            _LOGGER.warning(
+                "primary extractor failed for %s; falling back: %s", path.name, primary_error
+            )
             text = await self._fallback.extract(path)
-            self.last_metadata = _extractor_metadata(self._fallback)
+            metadata = dict(_extractor_metadata(self._fallback) or {})
+            metadata["fallback_from_primary"] = True
+            metadata["primary_error"] = primary_error
+            self.last_metadata = metadata
             return text
 
     def set_page_manifest_path(self, path: Path | None) -> None:
-        for extractor in (self._primary, self._fallback):
-            setter = getattr(extractor, "set_page_manifest_path", None)
-            if callable(setter):
-                setter(path)
+        _page_manifest_path_var.set(path)
 
 
 class TextExtractorLike(Protocol):
@@ -1123,16 +1181,20 @@ class CachingExtractor:
         self.supported_extensions = inner.supported_extensions
         self.last_metadata: dict[str, object] | None = None
         self.last_cache_hit: bool | None = None
-        self._manifest_path: Path | None = None
 
     async def extract(self, path: Path) -> str:
-        # A page-manifest request (the convert sidecar flow) needs the real
-        # per-page extraction to run, so bypass the cache while one is active.
-        if self._manifest_path is not None:
-            return await self._extract_uncached(path)
-
+        # Cache composes with the page-manifest/sidecar flow: on a hit we return
+        # the cached Markdown (no OCR runs, so no per-page manifest is needed);
+        # on a miss the real extraction runs with the manifest active and the
+        # result is cached. This lets re-imports of unchanged files skip
+        # extraction, which the previous unconditional bypass prevented.
+        extension = path.suffix.lower()
+        # Fold the extension into the key: identical bytes can render very
+        # differently by extension (.json vs .txt, .srt vs .txt), so they must
+        # not share a cache slot.
+        signature = f"{self._config_signature}:{extension}"
         content_sha256 = await asyncio.to_thread(_file_sha256, path)
-        cached = await self._cache.get_extraction(content_sha256, self._config_signature)
+        cached = await self._cache.get_extraction(content_sha256, signature)
         if cached is not None:
             self.last_cache_hit = True
             self.last_metadata = {
@@ -1146,8 +1208,8 @@ class CachingExtractor:
         await self._cache.put_extraction(
             ExtractionCacheEntry(
                 content_sha256=content_sha256,
-                config_signature=self._config_signature,
-                source_extension=path.suffix.lower(),
+                config_signature=signature,
+                source_extension=extension,
                 text=text,
             )
         )
@@ -1160,10 +1222,7 @@ class CachingExtractor:
         return text
 
     def set_page_manifest_path(self, path: Path | None) -> None:
-        self._manifest_path = path
-        setter = getattr(self._inner, "set_page_manifest_path", None)
-        if callable(setter):
-            setter(path)
+        _page_manifest_path_var.set(path)
 
 
 class CompositeExtractor:
@@ -1298,6 +1357,11 @@ class CompositeExtractor:
                 "liteparse_ocr_server_url": liteparse_ocr_server_url,
                 "liteparse_dpi": liteparse_dpi,
                 "liteparse_image_mode": liteparse_image_mode,
+                # The bundled tessdata models change OCR output, so a different
+                # path must invalidate cached liteparse extractions.
+                "liteparse_tessdata_path": (
+                    liteparse_tessdata_path if self.liteparse_active else None
+                ),
                 # Every vision knob that changes which figures are described, or
                 # how much text each yields, must invalidate the cache when the
                 # vision pass is active (gated so toggling unrelated knobs while
@@ -1350,6 +1414,15 @@ class CompositeExtractor:
         return text
 
     async def _extract_with_timeout(self, extractor: TextExtractorLike, path: Path) -> str:
+        """Bound how long the caller waits for an extraction.
+
+        This unblocks the pipeline after the deadline and discards the result.
+        Extractors that shell out (OCR via ``subprocess.run(timeout=...)``, the
+        MarkItDown subprocess) are hard-cancelled at their own layer. A purely
+        CPU-bound in-thread extractor cannot be force-killed by Python, so its
+        thread may keep running to completion in the background even though we
+        stop waiting -- we log that case so a runaway extraction is visible.
+        """
         if self._extraction_timeout_seconds <= 0:
             return await extractor.extract(path)
         try:
@@ -1357,16 +1430,20 @@ class CompositeExtractor:
                 extractor.extract(path), timeout=self._extraction_timeout_seconds
             )
         except TimeoutError as exc:
+            _LOGGER.warning(
+                "extraction_timeout",
+                extra={
+                    "path": path.name,
+                    "timeout_seconds": self._extraction_timeout_seconds,
+                },
+            )
             raise ExtractionTimeoutError(
                 f"Extraction exceeded {self._extraction_timeout_seconds}s: {path.name}"
             ) from exc
 
     def set_page_manifest_path(self, path: Path | None) -> None:
-        """Forward page manifest paths to extractors that support them."""
-        for extractor in self._extractors.values():
-            setter = getattr(extractor, "set_page_manifest_path", None)
-            if callable(setter):
-                setter(path)
+        """Set the page-manifest path for the current task's extraction."""
+        _page_manifest_path_var.set(path)
 
 
 def _ocr_image(
@@ -1435,43 +1512,25 @@ def _ocr_image_result(
             preprocess_mode=preprocess_mode,
             threshold=threshold,
         )
-        completed = _run_tesseract(
+        # Single tesseract pass produces both the plain text and the TSV used
+        # for the confidence estimate; running it twice doubled the per-page OCR
+        # cost for no benefit.
+        outputs = _run_tesseract_to_files(
             prepared_path,
             tesseract_path=tesseract_path,
             language=language,
             timeout_seconds=timeout_seconds,
+            output_dir=Path(tmp_dir),
+            formats=("txt", "tsv"),
         )
-        text = completed.stdout.strip()
+        text = outputs["txt"].strip()
         if not text:
             raise ValueError(f"No OCR text found in image: {path}")
         try:
-            confidence = _ocr_image_confidence(
-                prepared_path,
-                language=language,
-                timeout_seconds=timeout_seconds,
-            )
+            confidence = parse_tesseract_tsv_confidence(outputs["tsv"])
         except Exception:  # noqa: BLE001 - confidence is optional diagnostics
             confidence = None
     return OcrTextResult(text=text, confidence=confidence)
-
-
-def _ocr_image_confidence(
-    path: Path,
-    *,
-    language: str = "eng",
-    timeout_seconds: int = 120,
-) -> float | None:
-    tesseract_path = shutil.which("tesseract")
-    if tesseract_path is None:
-        raise RuntimeError("OCR requires the 'tesseract' executable on PATH")
-    completed = _run_tesseract(
-        path,
-        tesseract_path=tesseract_path,
-        language=language,
-        timeout_seconds=timeout_seconds,
-        output_format="tsv",
-    )
-    return parse_tesseract_tsv_confidence(completed.stdout)
 
 
 def _run_tesseract(
@@ -1492,6 +1551,35 @@ def _run_tesseract(
         text=True,
         timeout=timeout_seconds,
     )
+
+
+def _run_tesseract_to_files(
+    path: Path,
+    *,
+    tesseract_path: str,
+    language: str,
+    timeout_seconds: int,
+    output_dir: Path,
+    formats: tuple[str, ...],
+) -> dict[str, str]:
+    """Run tesseract once, emitting several output formats, and read them back.
+
+    Passing multiple format configs (e.g. ``txt tsv``) to a single tesseract
+    invocation produces all of them from one recognition pass, instead of
+    spawning the process once per format.
+    """
+    output_base = output_dir / "tesseract_output"
+    command = [tesseract_path, str(path), str(output_base), "-l", language, *formats]
+    subprocess.run(  # noqa: S603
+        command,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout_seconds,
+    )
+    return {
+        fmt: output_base.with_suffix(f".{fmt}").read_text(encoding="utf-8") for fmt in formats
+    }
 
 
 _OSD_ROTATE_RE = re.compile(r"^Rotate:\s*(\d+)", re.MULTILINE)
@@ -1562,6 +1650,7 @@ def _image_to_single_page_pdf(
     output_dir: Path,
     auto_orient: bool,
     ocr_timeout_seconds: int,
+    fallback_dpi: int = 150,
 ) -> Path:
     """Render a loose image as a one-page PDF so liteparse can parse it.
 
@@ -1571,15 +1660,26 @@ def _image_to_single_page_pdf(
     full liteparse pipeline -- tables, headings, figures -- without that
     heavyweight dependency. The image is oriented upright first so rotated
     photos and scans extract correctly.
+
+    The PDF resolution is taken from the image's embedded DPI when present so
+    the page keeps its true physical size; otherwise ``fallback_dpi`` is used.
+    A hardcoded resolution would stretch or shrink pages whose real DPI differs.
     """
     try:
         image_module = importlib.import_module("PIL.Image")
+        image_sequence = importlib.import_module("PIL.ImageSequence")
     except ImportError as exc:
         raise RuntimeError(
             "liteparse image extraction requires Pillow (install the 'ocr' extra)"
         ) from exc
+
+    with image_module.open(image_path) as probe:
+        multi_frame = getattr(probe, "n_frames", 1) > 1
+
+    # Auto-orient only single-frame images: it re-saves one frame and would drop
+    # the rest of a multi-page TIFF. Multi-frame scans are handled page-by-page.
     source = image_path
-    if auto_orient:
+    if auto_orient and not multi_frame:
         tesseract_path = shutil.which("tesseract")
         if tesseract_path is not None:
             source = auto_orient_image(
@@ -1588,12 +1688,66 @@ def _image_to_single_page_pdf(
                 timeout_seconds=ocr_timeout_seconds,
                 output_dir=output_dir,
             )
+
     pdf_path = output_dir / f"{image_path.stem}.liteparse.pdf"
     with image_module.open(source) as image:
-        # Flatten onto white so transparency does not become a black page.
-        rgb = image.convert("RGB")
-        rgb.save(pdf_path, "PDF", resolution=200.0)
+        resolution = _image_resolution(image, fallback_dpi=fallback_dpi)
+        pages = [_flatten_to_white(frame, image_module) for frame in image_sequence.Iterator(image)]
+    if not pages:  # pragma: no cover - Pillow always yields at least one frame
+        raise ValueError(f"No image frames found: {image_path}")
+    pages[0].save(
+        pdf_path,
+        "PDF",
+        resolution=resolution,
+        save_all=len(pages) > 1,
+        append_images=pages[1:],
+    )
     return pdf_path
+
+
+def _image_resolution(image: Any, *, fallback_dpi: int) -> float:
+    """Return the image's embedded horizontal DPI, or the fallback if absent."""
+    info = getattr(image, "info", None)
+    if not isinstance(info, dict):
+        return float(fallback_dpi)
+    dpi_value = cast("Any", info).get("dpi")
+    try:
+        horizontal = float(dpi_value[0])
+    except (TypeError, ValueError, IndexError):
+        return float(fallback_dpi)
+    return horizontal if horizontal > 0 else float(fallback_dpi)
+
+
+def _apply_exif_orientation(image: Any) -> Any:
+    """Bake in an image's EXIF orientation tag (best effort).
+
+    Phone cameras and scanners often store pixels in the sensor's native
+    orientation plus an EXIF tag telling viewers how to rotate them. Pillow
+    does not apply that tag on open, so a "portrait" photo would otherwise be
+    OCR'd sideways. ``exif_transpose`` rewrites the pixels to match the tag and
+    is a no-op when no orientation tag is present.
+    """
+    try:
+        image_ops = importlib.import_module("PIL.ImageOps")
+        return image_ops.exif_transpose(image)
+    except Exception:  # noqa: BLE001 - orientation is best-effort
+        return image
+
+
+def _flatten_to_white(image: Any, image_module: Any) -> Any:
+    """Composite a possibly-transparent frame onto a white RGB background.
+
+    ``Image.convert("RGB")`` merely drops the alpha channel, so transparent
+    pixels become black (unreadable OCR that still looks like a valid page).
+    Alpha-compositing onto white preserves the intended appearance. The frame's
+    EXIF orientation is applied first so rotated photos land upright.
+    """
+    image = _apply_exif_orientation(image)
+    if image.mode in ("RGBA", "LA", "PA") or (image.mode == "P" and "transparency" in image.info):
+        rgba = image.convert("RGBA")
+        background = image_module.new("RGBA", rgba.size, (255, 255, 255, 255))
+        return image_module.alpha_composite(background, rgba).convert("RGB")
+    return image.convert("RGB")
 
 
 def _prepare_ocr_image(
@@ -1611,7 +1765,7 @@ def _prepare_ocr_image(
     except ImportError as exc:
         raise RuntimeError("OCR preprocessing requires installing the 'ocr' extra") from exc
 
-    image = image_module.open(path)
+    image = _apply_exif_orientation(image_module.open(path))
     grayscale = image.convert("L")
     if preprocess_mode == "grayscale":
         prepared = grayscale
@@ -1660,6 +1814,16 @@ def _ocr_deskew_score(image: Any, angle: float, *, threshold: int) -> float:
     if width == 0 or height == 0:
         return 0.0
     data = rotated.tobytes()
+    numpy_module = _optional_numpy()
+    if numpy_module is not None:
+        # Vectorized: variance of the per-row ink counts. The pure-Python path
+        # below is O(width*height) in interpreter loops and dominates deskew
+        # cost across the 21 candidate angles.
+        pixels = numpy_module.frombuffer(data, dtype=numpy_module.uint8).reshape(height, width)
+        row_counts = (pixels <= threshold).sum(axis=1)
+        if not row_counts.any():
+            return 0.0
+        return float(row_counts.var())
     row_counts = [
         sum(1 for pixel in data[row * width : (row + 1) * width] if pixel <= threshold)
         for row in range(height)
@@ -1668,6 +1832,13 @@ def _ocr_deskew_score(image: Any, angle: float, *, threshold: int) -> float:
         return 0.0
     mean = sum(row_counts) / len(row_counts)
     return sum((count - mean) ** 2 for count in row_counts) / len(row_counts)
+
+
+def _optional_numpy() -> Any | None:
+    try:
+        return importlib.import_module("numpy")
+    except ImportError:
+        return None
 
 
 def parse_tesseract_tsv_confidence(tsv: str) -> float | None:
@@ -2329,6 +2500,26 @@ def _reject_disallowed_archive_signature(path: Path, payload: bytes) -> None:
     if label == "zip" and path.suffix.lower() in ZIP_CONTAINER_EXTENSIONS:
         return
     raise ValueError(f"Archive inputs are not supported by default: {label} signature detected")
+
+
+def _iter_docx_body_text(doc: Any) -> Iterator[str]:
+    """Yield DOCX body paragraphs and tables in document order.
+
+    ``doc.paragraphs`` and ``doc.tables`` are separate flat lists, so emitting
+    one after the other loses the interleaving of the original document. Walking
+    the body's child elements preserves the real reading order.
+    """
+    from docx.oxml.ns import qn
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    paragraph_tag = qn("w:p")
+    table_tag = qn("w:tbl")
+    for child in doc.element.body.iterchildren():
+        if child.tag == paragraph_tag:
+            yield _paragraph_text(Paragraph(child, doc))
+        elif child.tag == table_tag:
+            yield _table_text(Table(child, doc))
 
 
 def _paragraph_text(paragraph: Any) -> str:

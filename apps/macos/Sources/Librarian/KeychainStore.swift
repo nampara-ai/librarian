@@ -22,7 +22,10 @@ enum KeychainStore {
         return String(data: data, encoding: .utf8)
     }
 
-    static func set(_ value: String, account: String) {
+    /// Returns false when the Keychain rejects the write, so callers can
+    /// tell the user instead of silently losing the key.
+    @discardableResult
+    static func set(_ value: String, account: String) -> Bool {
         let encoded = Data(value.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -34,8 +37,9 @@ enum KeychainStore {
         if status == errSecItemNotFound {
             var insert = query
             insert[kSecValueData as String] = encoded
-            SecItemAdd(insert as CFDictionary, nil)
+            return SecItemAdd(insert as CFDictionary, nil) == errSecSuccess
         }
+        return status == errSecSuccess
     }
 
     static func delete(_ account: String) {
@@ -61,6 +65,17 @@ enum ProviderCredentials {
         for account in knownKeyAccounts {
             if let value = KeychainStore.get(account), !value.isEmpty {
                 overlay[account] = value
+            }
+        }
+        // Local servers (Ollama, LM Studio, keyless custom) store no key in
+        // the Keychain, but the OpenAI-compatible client requires a non-empty
+        // one. Hand the spawned process a transient placeholder; it is never
+        // persisted anywhere.
+        let values = EnvFile.read()
+        if values["LIBRARIAN_LLM_PROVIDER"] == "openai-compatible" {
+            let keyEnv = values["LIBRARIAN_LLM_API_KEY_ENV"] ?? "OPENAI_API_KEY"
+            if overlay[keyEnv] == nil {
+                overlay[keyEnv] = "local"
             }
         }
         return overlay

@@ -183,19 +183,45 @@ def test_fallback_extractor_uses_legacy_on_primary_failure(tmp_path: Path) -> No
     result = asyncio.run(fallback.extract(tmp_path / "x.pdf"))
 
     assert result == "legacy extracted text"
-    assert fallback.last_metadata == {"engine": "legacy"}
+    # The downgrade is recorded so a permanently broken primary is diagnosable.
+    assert fallback.last_metadata is not None
+    assert fallback.last_metadata["engine"] == "legacy"
+    assert fallback.last_metadata["fallback_from_primary"] is True
+    assert "engine unavailable" in str(fallback.last_metadata["primary_error"])
+
+
+def _fixture_font(size: int):
+    """A real scalable font on any OS.
+
+    Pillow's tiny bitmap fallback renders text too small for Tesseract's
+    orientation detection (macOS runners have no DejaVu at the Linux path).
+    """
+    from PIL import ImageFont
+
+    for candidate in (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Linux
+        "/System/Library/Fonts/Supplemental/Arial.ttf",  # macOS
+        "/System/Library/Fonts/Helvetica.ttc",  # macOS
+        "C:/Windows/Fonts/arial.ttf",  # Windows
+    ):
+        try:
+            return ImageFont.truetype(candidate, size)
+        except OSError:
+            continue
+    try:
+        # Pillow >= 10.1 renders its default font at any size.
+        return ImageFont.load_default(size=size)
+    except TypeError:  # pragma: no cover - ancient Pillow only
+        return ImageFont.load_default()
 
 
 def _text_image_png(tmp_path: Path, *, rotate: int = 0) -> Path:
     image_module = pytest.importorskip("PIL.Image")
-    from PIL import ImageDraw, ImageFont
+    from PIL import ImageDraw
 
     image = image_module.new("RGB", (820, 300), "white")
     draw = ImageDraw.Draw(image)
-    try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 30)
-    except OSError:
-        font = ImageFont.load_default()
+    font = _fixture_font(30)
     for index, line in enumerate(
         ["The annual report summarizes revenue", "and dividend policy for shareholders."]
     ):

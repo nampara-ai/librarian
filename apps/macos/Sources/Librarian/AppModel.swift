@@ -15,6 +15,11 @@ final class AppModel: ObservableObject {
     /// Items stuck in a non-terminal stage longer than this are failed.
     static let stageTimeout: TimeInterval = 15 * 60
 
+    /// Client-side upload ceiling, mirroring the backend's 100 MiB limit so an
+    /// oversize file is rejected instantly instead of being read into RAM and
+    /// streamed only to be refused by the server.
+    static let maxUploadBytes = 100 * 1024 * 1024
+
     let backend = BackendController()
 
     @Published var queue: [QueueItem] = []
@@ -29,6 +34,24 @@ final class AppModel: ObservableObject {
     private var okfSyncTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
     private var backendObservation: AnyCancellable?
+
+    /// Bounded upload scheduling: a large drop must not launch one upload (each
+    /// with its own health-poll wait) per file. Uploads beyond
+    /// `maxConcurrentUploads` wait in `pendingUploads` until a slot frees up.
+    static let maxConcurrentUploads = 4
+    private var pendingUploads: [UUID] = []
+    private var activeUploadCount = 0
+
+    /// Set when a folder drop was truncated at the expansion limit, so the UI
+    /// can tell the user that some files were skipped rather than silently
+    /// dropping them.
+    @Published var skippedFilesNotice: String?
+
+    /// Bundle-mode sync status: set when the OKF bundle write failed or left
+    /// documents out, cleared on the next fully successful sync. Rows are
+    /// marked Saved before the (debounced) bundle write, so without this a
+    /// persistently failing sync would be invisible.
+    @Published var okfSyncNotice: String?
 
     init() {
         backendObservation = backend.objectWillChange.sink { [weak self] _ in
@@ -89,20 +112,26 @@ final class AppModel: ObservableObject {
         EnvFile.read()["LIBRARIAN_LLM_PROVIDER"] == "openai-compatible"
     }
 
+    /// A base URL that resolves to nowhere, used while the embedded engine is
+    /// still starting so the client fails fast instead of sending files and the
+    /// per-launch API key to whatever stranger happens to answer on a guessed
+    /// candidate port (e.g. 8765).
+    private static let unresolvedEmbeddedURL = URL(string: "http://127.0.0.1:1")!
+
     var client: APIClient {
         if useEmbeddedBackend && BackendController.isEmbeddedAvailable {
-            // Embedded mode must never silently fall through to the external
-            // URL while the engine is starting or restarting — that points
-            // uploads at a dead address. Target the embedded engine's port,
-            // or its default port while it boots; callers wait for health.
+            // Embedded mode must never send real traffic to a *guessed* port:
+            // the engine might launch on a different candidate port, and a
+            // stranger already listening on the guess would receive our files
+            // and per-launch key. Only target the port the controller actually
+            // confirmed healthy (embeddedBaseURL). Until then, return a client
+            // pointed at a dead address that fails fast — and withhold the
+            // per-launch key entirely; callers wait for the engine via
+            // waitForEngine() and retry once it is confirmed.
             if let embeddedURL = backend.embeddedBaseURL {
                 return APIClient(baseURL: embeddedURL, apiKey: backend.embeddedAPIKey ?? "")
             }
-            let port = BackendController.candidatePorts[0]
-            return APIClient(
-                baseURL: URL(string: "http://127.0.0.1:\(port)")!,
-                apiKey: backend.embeddedAPIKey ?? ""
-            )
+            return APIClient(baseURL: Self.unresolvedEmbeddedURL, apiKey: "")
         }
         let raw = UserDefaults.standard.string(forKey: Self.baseURLKey) ?? Self.defaultBaseURL
         let url = URL(string: raw) ?? URL(string: Self.defaultBaseURL)!
@@ -135,7 +164,9 @@ final class AppModel: ObservableObject {
         if useEmbeddedBackend {
             await backend.startEmbeddedIfNeeded()
         } else {
-            backend.stop()
+            // Graceful async stop: the sync variant busy-waits up to 3 s and
+            // would beach-ball the UI when toggled from Settings.
+            await backend.stopGracefully()
         }
         await refresh()
     }
@@ -182,7 +213,8 @@ final class AppModel: ObservableObject {
     // MARK: - Adding files
 
     func handleDrop(of urls: [URL]) {
-        for url in expandDroppedURLs(urls) {
+        let (files, skipped) = expandDroppedURLs(urls)
+        for url in files {
             let item = QueueItem(
                 id: UUID(),
                 sourceURL: url,
@@ -192,7 +224,13 @@ final class AppModel: ObservableObject {
                 startedAt: Date()
             )
             queue.append(item)
-            Task { await self.upload(itemID: item.id) }
+            enqueueUpload(item.id)
+        }
+        if skipped > 0 {
+            // Surface the truncation instead of silently dropping files.
+            skippedFilesNotice =
+                "Added the first \(files.count) files; \(skipped) more were skipped. "
+                + "Drop them in a smaller batch to process the rest."
         }
     }
 
@@ -211,8 +249,13 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func expandDroppedURLs(_ urls: [URL], limit: Int = 200) -> [URL] {
+    /// Expand dropped URLs (recursing into folders) into a flat file list,
+    /// capped at `limit`. Returns the accepted files plus a count of how many
+    /// additional files were skipped because the cap was hit, so the caller can
+    /// tell the user instead of silently truncating.
+    private func expandDroppedURLs(_ urls: [URL], limit: Int = 200) -> (files: [URL], skipped: Int) {
         var files: [URL] = []
+        var skipped = 0
         for url in urls {
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
@@ -224,49 +267,98 @@ final class AppModel: ObservableObject {
                     options: [.skipsHiddenFiles, .skipsPackageDescendants]
                 )
                 while let child = enumerator?.nextObject() as? URL {
-                    guard files.count < limit else { break }
                     let isFile = (try? child.resourceValues(forKeys: [.isRegularFileKey]))?
                         .isRegularFile
-                    if isFile == true {
+                    guard isFile == true else { continue }
+                    if files.count < limit {
                         files.append(child)
+                    } else {
+                        // Keep counting so the "N skipped" message is accurate.
+                        skipped += 1
                     }
                 }
-            } else {
+            } else if files.count < limit {
                 files.append(url)
+            } else {
+                skipped += 1
             }
-            if files.count >= limit { break }
         }
-        return files
+        return (files, skipped)
     }
 
     // MARK: - Pipeline
 
+    /// Schedule an upload through the bounded runner: start immediately if a
+    /// slot is free, otherwise queue it. This prevents a large drop from
+    /// launching hundreds of simultaneous uploads and health polls.
+    private func enqueueUpload(_ itemID: UUID) {
+        pendingUploads.append(itemID)
+        startNextUploadsIfPossible()
+    }
+
+    /// Fill any free upload slots from the pending queue.
+    private func startNextUploadsIfPossible() {
+        while activeUploadCount < Self.maxConcurrentUploads, !pendingUploads.isEmpty {
+            let itemID = pendingUploads.removeFirst()
+            activeUploadCount += 1
+            Task { [weak self] in
+                guard let self else { return }
+                await self.upload(itemID: itemID)
+                self.activeUploadCount -= 1
+                // A slot freed up; pull in the next waiting upload.
+                self.startNextUploadsIfPossible()
+            }
+        }
+    }
+
     private func upload(itemID: UUID) async {
         guard let index = queue.firstIndex(where: { $0.id == itemID }) else { return }
+        // A queued item can be stopped while waiting for an upload slot; the
+        // slot runner must not resurrect it into .uploading.
+        guard isStillActive(itemID) else { return }
         let sourceURL = queue[index].sourceURL
         setStage(itemID, .uploading(progress: nil))
+        // Reject oversize files locally before reading a byte, so we neither
+        // buffer a huge file in RAM nor waste an upload the server will refuse.
+        if let size = try? FileManager.default.attributesOfItem(atPath: sourceURL.path)[.size]
+            as? Int, size > Self.maxUploadBytes {
+            setStage(
+                itemID,
+                .failed(reason: "File is too large", retryable: false)
+            )
+            return
+        }
         // The engine restarts briefly when settings change; wait for it
         // instead of failing files dropped during the gap.
         await waitForEngine(seconds: 15)
         let client = self.client
         do {
-            let contents = try await Task.detached(priority: .userInitiated) {
-                try Data(contentsOf: sourceURL)
-            }.value
+            // Stream from disk rather than buffering the whole file (and again
+            // as a multipart Data) in memory.
             let document = try await client.uploadDocument(
                 filename: sourceURL.lastPathComponent,
-                contents: contents
+                fileURL: sourceURL
             )
+            // The user may have stopped or removed the row while the upload
+            // was in flight; a late completion must not revive it.
+            guard isStillActive(itemID) else { return }
             update(itemID) { item in
                 item.documentID = document.id
                 item.startedAt = Date()
             }
             let run = try await client.createRun(documentId: document.id)
+            guard isStillActive(itemID) else {
+                // Stopped in the createRun window: the row never learned this
+                // run's id, so Stop couldn't cancel it — cancel it here.
+                Task { _ = try? await client.cancelRun(id: run.id) }
+                return
+            }
             update(itemID) { item in
                 item.runID = run.id
                 item.stage = .converting(progress: nil)
             }
         } catch {
+            guard isStillActive(itemID) else { return }
             setStage(
                 itemID,
                 .failed(
@@ -277,14 +369,30 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Wait briefly for the engine to come (back) up, e.g. across the
-    /// restart that follows a settings change.
+    /// Whether the row still exists and has not been stopped/finished, so
+    /// late async completions don't overwrite a user action.
+    private func isStillActive(_ itemID: UUID) -> Bool {
+        guard let item = queue.first(where: { $0.id == itemID }) else { return false }
+        return !item.stage.isTerminal
+    }
+
+    /// Wait for the engine to come (back) up, e.g. across the restart that
+    /// follows a settings change. While the embedded engine is still booting
+    /// the wait is open-ended — boot has its own bounded deadline in
+    /// BackendController — so files dropped during a slow first launch
+    /// (cold start, migrations) don't fail before the engine ever answers.
     private func waitForEngine(seconds: Double) async {
+        while case .starting = backend.mode {
+            try? await Task.sleep(for: .milliseconds(400))
+        }
         let deadline = Date().addingTimeInterval(seconds)
         while Date() < deadline {
             if case .starting = backend.mode {
-                // Still booting; keep waiting.
-            } else if let healthy = try? await client.health(), healthy {
+                // A restart began mid-wait; defer to its own deadline again.
+                try? await Task.sleep(for: .milliseconds(400))
+                continue
+            }
+            if let healthy = try? await client.health(), healthy {
                 serverOnline = true
                 return
             }
@@ -302,7 +410,12 @@ final class AppModel: ObservableObject {
                 continue
             }
             guard let documentID = item.documentID else { continue }
-            let run = runs.first { $0.documentId == documentID }
+            // Prefer the exact run we started for this item (item.runID); a
+            // document can accumulate several runs across retries, and matching
+            // only by document could pick a stale one. Fall back to the latest
+            // run for the document when we don't yet know the run id.
+            let run = item.runID.flatMap { id in runs.first { $0.id == id } }
+                ?? runs.first { $0.documentId == documentID }
             let document = documents.first { $0.id == documentID }
 
             if let run, run.status == "failed" {
@@ -310,6 +423,12 @@ final class AppModel: ObservableObject {
                     item.id,
                     .failed(reason: Copy.userFacingReason(for: run.error), retryable: true)
                 )
+                continue
+            }
+            if let run, run.status == "canceled" {
+                // Canceled from this app or externally (CLI/API): stop the row
+                // instead of letting it spin until the stage timeout.
+                setStage(item.id, .failed(reason: Copy.reasonStopped, retryable: true))
                 continue
             }
             if document?.status == "failed" {
@@ -421,14 +540,48 @@ final class AppModel: ObservableObject {
             do {
                 let bundle = try await client.exportOkfBundle()
                 try await Self.writeOkfBundle(bundle, into: folder)
+                // Rows are marked Saved before this write, so surface partial
+                // bundles instead of leaving them invisible.
+                self.okfSyncNotice = bundle.skipped.isEmpty
+                    ? nil
+                    : Copy.okfSkipped(bundle.skipped.count)
             } catch {
+                // A newer completion cancelled this sync mid-write; its
+                // replacement is about to run, so this is not a failure.
+                if Task.isCancelled { return }
                 // The documents are processed and will appear on the next
                 // successful sync (another completion or a manual refresh);
-                // leave the rows saved rather than failing them on a transient
-                // bundle-write error.
+                // leave the rows saved but say the bundle is stale.
+                self.okfSyncNotice = Copy.okfSyncFailed
                 return
             }
         }
+    }
+
+    // MARK: - Library
+
+    /// Export a document's cleaned output into the destination folder using
+    /// the current format, returning the written file. Used by the Library
+    /// window's "Save a Copy" action.
+    func exportDocumentToFolder(documentID: String, fallbackStem: String) async throws -> URL {
+        let format = exportFormat.isBundle ? ExportFormat.markdown : exportFormat
+        let export = try await client.exportRaw(documentId: documentID, format: format)
+        let folder = outputFolderURL
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let stem = Self.sanitizedExportStem(export.suggestedStem)
+            ?? (fallbackStem.isEmpty ? "document" : fallbackStem)
+        let destination = collisionFreeURL(
+            in: folder,
+            stem: stem,
+            fileExtension: format.fileExtension
+        )
+        try export.data.write(to: destination)
+        return destination
+    }
+
+    /// Delete a document (and its cleaned output) from the engine's corpus.
+    func deleteDocument(id: String) async throws {
+        try await client.deleteDocument(id: id)
     }
 
     /// Write the bundle's path -> content map under `folder`, creating
@@ -517,9 +670,38 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Stop an in-flight item: cancel its backend run (so the engine stops
+    /// spending provider tokens on it) and mark the row Stopped/retryable.
+    func stop(_ itemID: UUID) {
+        guard let item = queue.first(where: { $0.id == itemID }),
+              !item.stage.isTerminal else { return }
+        setStage(itemID, .failed(reason: Copy.reasonStopped, retryable: true))
+        guard let runID = item.runID else { return }
+        let client = self.client
+        Task {
+            // Best effort: the reconcile loop also handles externally-visible
+            // "canceled" status, so a failed cancel call just leaves the run
+            // to finish or fail on its own.
+            _ = try? await client.cancelRun(id: runID)
+        }
+    }
+
     func remove(_ itemID: UUID) {
+        guard let item = queue.first(where: { $0.id == itemID }) else { return }
+        if !item.stage.isTerminal, let runID = item.runID {
+            // Removing an active row must not orphan a backend run that keeps
+            // spending provider tokens; cancel it on the way out.
+            let client = self.client
+            Task { _ = try? await client.cancelRun(id: runID) }
+        }
         queue.removeAll { $0.id == itemID }
         exportsInFlight.remove(itemID)
+    }
+
+    /// The backend's per-run event log for a failed item, newest last. Used by
+    /// the row's Details popover so failures are more than one lossy line.
+    func failureEvents(runID: String) async -> [RunEvent] {
+        (try? await client.runEvents(runId: runID)) ?? []
     }
 
     func clearFinished() {

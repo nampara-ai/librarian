@@ -12,7 +12,7 @@ import sqlite3
 import tempfile
 import time
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -46,7 +46,11 @@ from librarian.application.export_okf import (
     build_bundle,
     collect_sources,
 )
-from librarian.application.factory import build_container, build_ingest_container
+from librarian.application.factory import (
+    build_container,
+    build_ingest_container,
+    cache_wrap_extractor,
+)
 from librarian.application.import_library import ImportLibrary, ImportProcessingMode
 from librarian.application.jobs import InProcessJobRunner
 from librarian.application.ports import SearchScope
@@ -75,7 +79,12 @@ from librarian.observability import (
     sanitize_error_message,
     start_request_span,
 )
-from librarian.storage.sqlite import SQLiteDatabase, SQLiteRunQueue, normalize_search_query
+from librarian.storage.sqlite import (
+    SQLiteDatabase,
+    SQLiteRepository,
+    SQLiteRunQueue,
+    normalize_search_query,
+)
 from librarian.taxonomy.dewey import DeweyTaxonomy
 from librarian.version import __version__
 
@@ -457,6 +466,31 @@ class ConfigResponse(BaseModel):
     ocr_fail_on_page_error: bool
     universal_max_input_bytes: int
     universal_timeout_seconds: int
+    # Extraction engine / cache.
+    pdf_engine: str
+    liteparse_dpi: int
+    liteparse_image_mode: str
+    liteparse_ocr_server_url: str | None
+    liteparse_tessdata_path: str | None
+    ocr_auto_orient: bool
+    extraction_cache_enabled: bool
+    extraction_timeout_seconds: int
+    import_concurrency: int
+    # Token ceilings.
+    llm_max_output_tokens: int
+    classification_max_output_tokens: int
+    # Figure vision.
+    figure_vision_enabled: bool
+    figure_vision_model: str | None
+    figure_vision_max_figures: int
+    figure_vision_min_bytes: int
+    figure_vision_max_bytes: int
+    figure_vision_max_concurrency: int
+    figure_vision_max_response_chars: int
+    # Server bind + storage.
+    api_host: str
+    api_port: int
+    database_path: str
     log_level: str
     log_format: str
     metrics_enabled: bool
@@ -673,7 +707,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-        await SQLiteDatabase(settings.database_path).initialize()
+        database = SQLiteDatabase(settings.database_path)
+        await database.initialize()
+        # An in-process run has no durable lease, so any run still marked RUNNING
+        # at startup was orphaned by a previous crash/restart. Reconcile it to
+        # FAILED so it doesn't appear active forever and can be retried.
+        if settings.job_backend == "in-process":
+            reconciled = await SQLiteRepository(database).fail_interrupted_runs(
+                error="interrupted by server restart"
+            )
+            if reconciled:
+                logging.getLogger("librarian.api").warning(
+                    "reconciled %d interrupted run(s) on startup", reconciled
+                )
         runner = InProcessJobRunner(max_concurrency=settings.job_max_concurrency)
         app.state.job_runner = runner
         app.state.settings = settings
@@ -1329,7 +1375,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         )
         importer = ImportLibrary(
-            converter=DocumentConverter(extractor, metrics),
+            converter=DocumentConverter(
+                cache_wrap_extractor(
+                    extractor, settings=settings, cache_store=container.repository
+                ),
+                metrics,
+            ),
             ingest=container.ingest_document,
             process=getattr(container, "process_document", None),
             queue_factory=lambda: SQLiteRunQueue(container.database),
@@ -1778,6 +1829,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ocr_fail_on_page_error=settings.ocr_fail_on_page_error,
             universal_max_input_bytes=settings.universal_max_input_bytes,
             universal_timeout_seconds=settings.universal_timeout_seconds,
+            pdf_engine=settings.pdf_engine,
+            liteparse_dpi=settings.liteparse_dpi,
+            liteparse_image_mode=settings.liteparse_image_mode,
+            liteparse_ocr_server_url=settings.liteparse_ocr_server_url,
+            liteparse_tessdata_path=settings.liteparse_tessdata_path,
+            ocr_auto_orient=settings.ocr_auto_orient,
+            extraction_cache_enabled=settings.extraction_cache_enabled,
+            extraction_timeout_seconds=settings.extraction_timeout_seconds,
+            import_concurrency=settings.import_concurrency,
+            llm_max_output_tokens=settings.llm_max_output_tokens,
+            classification_max_output_tokens=settings.classification_max_output_tokens,
+            figure_vision_enabled=settings.figure_vision_enabled,
+            figure_vision_model=settings.figure_vision_model,
+            figure_vision_max_figures=settings.figure_vision_max_figures,
+            figure_vision_min_bytes=settings.figure_vision_min_bytes,
+            figure_vision_max_bytes=settings.figure_vision_max_bytes,
+            figure_vision_max_concurrency=settings.figure_vision_max_concurrency,
+            figure_vision_max_response_chars=settings.figure_vision_max_response_chars,
+            api_host=settings.api_host,
+            api_port=settings.api_port,
+            database_path=str(settings.database_path),
             log_level=settings.log_level,
             log_format=settings.log_format,
             metrics_enabled=settings.metrics_enabled,
@@ -2682,10 +2754,19 @@ def _rate_limit_identity(request: Request, settings: Settings) -> str:
 def _client_host(request: Request, settings: Settings) -> str:
     client_host = request.client.host if request.client else "unknown"
     forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for and _trusted_proxy_client_host(client_host, settings):
-        forwarded_host = forwarded_for.split(",", maxsplit=1)[0].strip()
-        if _valid_forwarded_ip(forwarded_host):
-            client_host = forwarded_host
+    if not forwarded_for or not _trusted_proxy_client_host(client_host, settings):
+        return client_host
+    # Walk the chain from the right: the rightmost entry was appended by our own
+    # trusted proxy and is the hardest to spoof, whereas the leftmost is fully
+    # client-controlled. Skip successive trusted-proxy hops until the first
+    # address that is not a trusted proxy -- that is the real client.
+    hops = [hop.strip() for hop in forwarded_for.split(",") if hop.strip()]
+    for candidate in reversed(hops):
+        if not _valid_forwarded_ip(candidate):
+            continue
+        if _trusted_proxy_client_host(candidate, settings):
+            continue
+        return candidate
     return client_host
 
 
@@ -2815,35 +2896,85 @@ def _job_runner(request: Request) -> InProcessJobRunner:
     return runner
 
 
-async def _event_stream(settings: Settings, run_id: RunId) -> AsyncIterator[str]:
+_TERMINAL_RUN_STATUSES = frozenset(
+    {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELED}
+)
+_EVENT_STREAM_PAGE = 500
+
+
+def _sse_data_frame(text: str) -> str:
+    """Render an SSE ``data:`` frame, splitting embedded newlines.
+
+    A raw newline inside a ``data:`` payload terminates the SSE event early,
+    so each line is emitted as its own ``data:`` field per the spec.
+    """
+    body = "\n".join(f"data: {line}" for line in text.split("\n"))
+    return f"{body}\n\n"
+
+
+async def _stream_run_events(
+    settings: Settings,
+    run_id: RunId,
+    fetch_frames: Callable[[Any, int], Awaitable[list[str]]],
+) -> AsyncIterator[str]:
+    """Poll and stream a run's events as SSE frames until the run is terminal.
+
+    The container is built once (not per poll), a full page triggers an
+    immediate re-read (no artificial 200ms delay while backlogged), and when
+    the run reaches a terminal status the loop drains any remaining events
+    before signaling ``done``. The final "processing failed/complete" event is
+    emitted *after* the terminal status is written, so the drain is what keeps
+    it from being lost.
+    """
+    container = await build_ingest_container(settings)
     seen = 0
     while True:
-        container = await build_ingest_container(settings)
-        events = list(await container.repository.list_events(run_id, limit=500, offset=seen))
-        for event in events:
-            yield f"data: {event}\n\n"
-        seen += len(events)
+        frames = await fetch_frames(container, seen)
+        for frame in frames:
+            yield frame
+        seen += len(frames)
+        if len(frames) == _EVENT_STREAM_PAGE:
+            continue
         run = await container.repository.get_run(run_id)
-        if run is None or run.status in {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELED}:
+        if run is None or run.status in _TERMINAL_RUN_STATUSES:
+            while True:
+                tail = await fetch_frames(container, seen)
+                if not tail:
+                    break
+                for frame in tail:
+                    yield frame
+                seen += len(tail)
             yield "event: done\ndata: done\n\n"
-            break
+            return
         await asyncio.sleep(0.2)
+
+
+async def _event_stream(settings: Settings, run_id: RunId) -> AsyncIterator[str]:
+    async def fetch_frames(container: Any, offset: int) -> list[str]:
+        events = await container.repository.list_events(
+            run_id, limit=_EVENT_STREAM_PAGE, offset=offset
+        )
+        return [_sse_data_frame(event) for event in events]
+
+    async for frame in _stream_run_events(settings, run_id, fetch_frames):
+        yield frame
 
 
 async def _event_record_stream(settings: Settings, run_id: RunId) -> AsyncIterator[str]:
-    seen = 0
-    while True:
-        container = await build_ingest_container(settings)
-        events = list(await container.repository.list_event_records(run_id, limit=500, offset=seen))
+    async def fetch_frames(container: Any, offset: int) -> list[str]:
+        events = await container.repository.list_event_records(
+            run_id, limit=_EVENT_STREAM_PAGE, offset=offset
+        )
+        frames: list[str] = []
         for event in events:
             payload = _run_event_response(event).model_dump()
-            yield f"event: run-event\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
-        seen += len(events)
-        run = await container.repository.get_run(run_id)
-        if run is None or run.status in {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELED}:
-            yield "event: done\ndata: done\n\n"
-            break
-        await asyncio.sleep(0.2)
+            frames.append(
+                f"event: run-event\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
+            )
+        return frames
+
+    async for frame in _stream_run_events(settings, run_id, fetch_frames):
+        yield frame
 
 
 def _normalize_export_format(format: str) -> ExportFormat:

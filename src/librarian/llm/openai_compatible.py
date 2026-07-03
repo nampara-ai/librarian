@@ -20,6 +20,26 @@ from openai.types.chat import ChatCompletion
 from librarian.observability import sanitize_error_message
 
 
+class LLMResponseTruncatedError(RuntimeError):
+    """Raised when the model stopped because it hit the output token cap.
+
+    Silently returning a truncated completion is a correctness hazard — the
+    caller (chunk cleaner, classifier) cannot tell a mid-sentence cutoff from a
+    complete answer — so we fail loudly and let it surface as a run error.
+    """
+
+
+def _content_or_raise(response: ChatCompletion) -> str:
+    """Return the completion text, raising if the model output was truncated."""
+    choice = response.choices[0]
+    if getattr(choice, "finish_reason", None) == "length":
+        raise LLMResponseTruncatedError(
+            "LLM response was truncated at the output token limit; "
+            "increase max_tokens (LIBRARIAN_LLM_MAX_OUTPUT_TOKENS)"
+        )
+    return choice.message.content or ""
+
+
 class LLMUsageMetrics(Protocol):
     """Metrics sink for provider token usage."""
 
@@ -88,7 +108,7 @@ class OpenAICompatibleProvider:
                 temperature=temperature,
             )
         self._record_usage(response, model=model)
-        return response.choices[0].message.content or ""
+        return _content_or_raise(response)
 
     async def describe_image(
         self,
@@ -122,7 +142,7 @@ class OpenAICompatibleProvider:
                 temperature=temperature,
             )
         self._record_usage(response, model=model)
-        return response.choices[0].message.content or ""
+        return _content_or_raise(response)
 
     async def _chat_with_retries(
         self,

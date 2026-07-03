@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from importlib.resources import files
 from pathlib import Path
-from typing import TYPE_CHECKING, LiteralString, cast
+from typing import TYPE_CHECKING, Any, LiteralString, cast
 
 from librarian.application.clean_chunks import CleanedChunk
 from librarian.application.jobs import QueuedRun, QueueStatus
@@ -143,6 +143,16 @@ class SQLiteDatabase:
         """Run lightweight SQLite maintenance for long-lived local databases."""
         return await asyncio.to_thread(self._maintain_sync, vacuum)
 
+    async def prune_caches(self, *, older_than_days: int) -> dict[str, int]:
+        """Delete content-addressed cache rows older than the retention window.
+
+        The extraction and cleaned-chunk caches are keyed by content hash, so
+        they grow without bound as documents come and go. Pruning by age keeps
+        them from accumulating stale entries no live document will ever reuse.
+        Returns the number of rows removed per table.
+        """
+        return await asyncio.to_thread(self._prune_caches_sync, older_than_days)
+
     async def stats(self) -> SQLiteStorageStats:
         """Return SQLite file, page, row, and stored-text sizing statistics."""
         return await asyncio.to_thread(self._stats_sync)
@@ -179,11 +189,27 @@ class SQLiteDatabase:
             for migration in sorted(migration_root.iterdir(), key=lambda item: item.name):
                 if not migration.name.endswith(".sql") or migration.name in applied:
                     continue
-                connection.executescript(migration.read_text(encoding="utf-8"))
-                connection.execute(
-                    "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-                    (migration.name, utc_now().isoformat()),
-                )
+                sql = migration.read_text(encoding="utf-8")
+                applied_at = utc_now().isoformat()
+                if "PRAGMA" in sql.upper():
+                    # Contains a PRAGMA (journal_mode / foreign_keys) that must
+                    # run outside a transaction (e.g. the 0003 table rebuild), so
+                    # it can't be wrapped; record the version right after.
+                    connection.executescript(sql)
+                    connection.execute(
+                        "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                        (migration.name, applied_at),
+                    )
+                else:
+                    # Apply the migration DDL and record its version in one
+                    # transaction so a crash can't leave a half-applied schema
+                    # with no version row (which would fail the next startup,
+                    # e.g. "duplicate column" on the ALTER TABLE migrations).
+                    # Trusted inputs: package filename + ISO timestamp (no quotes
+                    # possible), executed inside the migration's own transaction.
+                    insert = "INSERT INTO schema_migrations (version, applied_at) VALUES "
+                    version_row = f"{insert}('{migration.name}', '{applied_at}');"  # noqa: S608
+                    connection.executescript(f"BEGIN;\n{sql}\n{version_row}\nCOMMIT;")  # noqa: S608
 
     def connect(self) -> sqlite3.Connection:
         """Open a configured SQLite connection."""
@@ -216,6 +242,20 @@ class SQLiteDatabase:
             checkpoint_checkpointed_frames=int(row[2]),
             vacuumed=vacuum,
         )
+
+    def _prune_caches_sync(self, older_than_days: int) -> dict[str, int]:
+        if older_than_days < 0:
+            raise ValueError("older_than_days must be non-negative")
+        cutoff = (utc_now() - timedelta(days=older_than_days)).isoformat()
+        removed: dict[str, int] = {}
+        with self.connect() as connection:
+            for table in ("extraction_cache", "cleaned_chunk_cache"):
+                cursor = connection.execute(
+                    f"DELETE FROM {table} WHERE created_at < ?",  # noqa: S608 - fixed table names
+                    (cutoff,),
+                )
+                removed[table] = max(cursor.rowcount, 0)
+        return removed
 
     def _stats_sync(self) -> SQLiteStorageStats:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -422,6 +462,14 @@ class SQLiteRepository:
         """Save a document."""
         await asyncio.to_thread(self._save_document_sync, document)
 
+    async def save_document_with_content(
+        self, document: Document, content_key: str, content_text: str
+    ) -> None:
+        """Persist a document and its raw text atomically (single transaction)."""
+        await asyncio.to_thread(
+            self._save_document_with_content_sync, document, content_key, content_text
+        )
+
     async def save_run(self, run: ProcessingRun) -> None:
         """Save a processing run."""
         await asyncio.to_thread(self._save_run_sync, run)
@@ -470,6 +518,16 @@ class SQLiteRepository:
     async def delete_document(self, document_id: DocumentId) -> None:
         """Delete a document and dependent records."""
         await asyncio.to_thread(self._delete_document_sync, document_id)
+
+    async def fail_interrupted_runs(self, *, error: str) -> int:
+        """Fail runs left RUNNING by a crashed in-process worker.
+
+        An in-process run has no durable lease, so a row still marked RUNNING at
+        startup belongs to a process that died mid-run. Mark it FAILED (and its
+        document FAILED if still PROCESSING) so it can be retried instead of
+        appearing active forever. Returns the number of runs reconciled.
+        """
+        return await asyncio.to_thread(self._fail_interrupted_runs_sync, error)
 
     async def update_status(
         self,
@@ -756,36 +814,70 @@ class SQLiteRepository:
                 yield message
             offset += len(messages)
 
+    @staticmethod
+    def _upsert_document(connection: sqlite3.Connection, document: Document) -> None:
+        connection.execute(
+            """
+            INSERT INTO documents (
+              id, source_path, filename, media_type, byte_size, sha256,
+              status, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              source_path = excluded.source_path,
+              filename = excluded.filename,
+              media_type = excluded.media_type,
+              byte_size = excluded.byte_size,
+              sha256 = excluded.sha256,
+              status = excluded.status,
+              updated_at = excluded.updated_at
+            """,
+            (
+                str(document.id),
+                str(document.source.path),
+                document.source.filename,
+                document.source.media_type,
+                document.source.byte_size,
+                document.source.sha256,
+                document.status.value,
+                document.created_at.isoformat(),
+                document.updated_at.isoformat(),
+            ),
+        )
+
+    @staticmethod
+    def _upsert_text(connection: sqlite3.Connection, key: str, text: str) -> None:
+        connection.execute(
+            """
+            INSERT INTO content_blobs (key, text, created_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET text = excluded.text
+            """,
+            (key, text, utc_now().isoformat()),
+        )
+        if key.startswith("raw:"):
+            document_id = key.removeprefix("raw:")
+            connection.execute(
+                "DELETE FROM raw_content_fts WHERE document_id = ?",
+                (document_id,),
+            )
+            connection.execute(
+                "INSERT INTO raw_content_fts (document_id, text) VALUES (?, ?)",
+                (document_id, text),
+            )
+
     def _save_document_sync(self, document: Document) -> None:
         with self.database.connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO documents (
-                  id, source_path, filename, media_type, byte_size, sha256,
-                  status, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                  source_path = excluded.source_path,
-                  filename = excluded.filename,
-                  media_type = excluded.media_type,
-                  byte_size = excluded.byte_size,
-                  sha256 = excluded.sha256,
-                  status = excluded.status,
-                  updated_at = excluded.updated_at
-                """,
-                (
-                    str(document.id),
-                    str(document.source.path),
-                    document.source.filename,
-                    document.source.media_type,
-                    document.source.byte_size,
-                    document.source.sha256,
-                    document.status.value,
-                    document.created_at.isoformat(),
-                    document.updated_at.isoformat(),
-                ),
-            )
+            self._upsert_document(connection, document)
+
+    def _save_document_with_content_sync(
+        self, document: Document, content_key: str, content_text: str
+    ) -> None:
+        # One transaction: a crash must not leave a document row without its raw
+        # text (which breaks processing with a KeyError) or vice versa.
+        with self.database.connect() as connection:
+            self._upsert_document(connection, document)
+            self._upsert_text(connection, content_key, content_text)
 
     def _get_document_sync(self, document_id: DocumentId) -> Document | None:
         with self.database.connect() as connection:
@@ -921,6 +1013,33 @@ class SQLiteRepository:
             ).fetchall()
         return [_run_from_row(row) for row in rows]
 
+    def _fail_interrupted_runs_sync(self, error: str) -> int:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT id, document_id FROM runs WHERE status = 'running'"
+            ).fetchall()
+            if not rows:
+                return 0
+            now = utc_now().isoformat()
+            connection.execute(
+                """
+                UPDATE runs
+                SET status = 'failed', stage = 'complete', error = ?, updated_at = ?
+                WHERE status = 'running'
+                """,
+                (error, now),
+            )
+            for document_id in {row["document_id"] for row in rows}:
+                connection.execute(
+                    """
+                    UPDATE documents
+                    SET status = 'failed', updated_at = ?
+                    WHERE id = ? AND status = 'processing'
+                    """,
+                    (now, document_id),
+                )
+        return len(rows)
+
     def _update_run_status_sync(
         self,
         run_id: RunId,
@@ -963,7 +1082,7 @@ class SQLiteRepository:
                 UPDATE runs
                 SET status = ?, stage = ?, completed_chunks = ?, failed_chunks = ?, updated_at = ?
                 WHERE id = ?
-                  AND status != 'canceled'
+                  AND status NOT IN ('canceled', 'succeeded', 'failed')
                 """,
                 (
                     status.value,
@@ -977,27 +1096,7 @@ class SQLiteRepository:
 
     def _put_text_sync(self, key: str, text: str) -> None:
         with self.database.connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO content_blobs (key, text, created_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(key) DO UPDATE SET text = excluded.text
-                """,
-                (key, text, utc_now().isoformat()),
-            )
-            if key.startswith("raw:"):
-                document_id = key.removeprefix("raw:")
-                connection.execute(
-                    "DELETE FROM raw_content_fts WHERE document_id = ?",
-                    (document_id,),
-                )
-                connection.execute(
-                    """
-                    INSERT INTO raw_content_fts (document_id, text)
-                    VALUES (?, ?)
-                    """,
-                    (document_id, text),
-                )
+            self._upsert_text(connection, key, text)
 
     def _get_text_sync(self, key: str) -> str:
         with self.database.connect() as connection:
@@ -1043,7 +1142,20 @@ class SQLiteRepository:
             )
 
     def _save_chunks_sync(self, chunks: Sequence[Chunk]) -> None:
+        if not chunks:
+            return
+        document_ids = {str(chunk.document_id) for chunk in chunks}
         with self.database.connect() as connection:
+            # Replace the document's chunk set wholesale. Chunk ids hash the
+            # chunk text, so re-chunking (policy/engine change) produces new ids
+            # for the same (document_id, ordinal); a plain upsert on id then
+            # violates UNIQUE(document_id, ordinal). Deleting first also clears
+            # now-stale higher-ordinal chunks from a previously longer document.
+            placeholders = ",".join("?" for _ in document_ids)
+            connection.execute(
+                f"DELETE FROM chunks WHERE document_id IN ({placeholders})",  # noqa: S608
+                tuple(document_ids),
+            )
             connection.executemany(
                 """
                 INSERT INTO chunks (
@@ -1115,29 +1227,33 @@ class SQLiteRepository:
             return []
 
         by_sha = {chunk.sha256: chunk for chunk in chunks}
+        shas = list(by_sha)
+        # Batch the lookups into a few IN-clause queries instead of one query
+        # per chunk. Cap each batch well under SQLite's default 999-variable
+        # limit, leaving room for the three shared filter parameters.
+        batch_size = 400
+        rows_by_sha: dict[str, Any] = {}
         with self.database.connect() as connection:
-            rows = [
-                row
-                for sha in by_sha
-                if (
-                    row := connection.execute(
-                        """
-                        SELECT chunk_sha256, text, warnings
-                        FROM cleaned_chunk_cache
-                        WHERE chunk_sha256 = ?
-                          AND prompt_version = ?
-                          AND model_provider = ?
-                          AND model_name = ?
-                        """,
-                        (sha, prompt_version, model_provider, model_name),
-                    ).fetchone()
+            for start in range(0, len(shas), batch_size):
+                batch = shas[start : start + batch_size]
+                placeholders = ",".join("?" * len(batch))
+                select_clause = (
+                    "SELECT chunk_sha256, text, warnings FROM cleaned_chunk_cache "
+                    "WHERE prompt_version = ? AND model_provider = ? AND model_name = ? "
+                    "AND chunk_sha256 IN ("
                 )
-                is not None
-            ]
+                query = f"{select_clause}{placeholders})"  # noqa: S608 - only ? placeholders
+                for row in connection.execute(
+                    query,
+                    (prompt_version, model_provider, model_name, *batch),
+                ).fetchall():
+                    rows_by_sha[str(row["chunk_sha256"])] = row
 
         cached: list[CleanedChunk] = []
-        for row in rows:
-            chunk = by_sha[str(row["chunk_sha256"])]
+        for sha, chunk in by_sha.items():
+            row = rows_by_sha.get(sha)
+            if row is None:
+                continue
             warnings = tuple(str(item) for item in json.loads(str(row["warnings"])))
             cached.append(
                 CleanedChunk(

@@ -130,6 +130,33 @@ jobs:
           done
           test -f dmgs/Librarian-AppleSilicon/Librarian-AppleSilicon.dmg
           test -f dmgs/Librarian-Intel/Librarian-Intel.dmg
+      - name: Verify DMG app version matches tag
+        run: |
+          # Mirror the tag-vs-package check for the built macOS app: mount each
+          # DMG, read CFBundleShortVersionString from the bundled Info.plist, and
+          # fail if it does not equal the tag version. This catches an app that
+          # was stamped with a stale version (see Makefile version stamping).
+          # Runs on the ubuntu release runner, so parse the plist without macOS
+          # tools: 7z lists/extracts the HFS image, python reads the XML plist.
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends p7zip-full
+          EXPECTED="${GITHUB_REF_NAME#v}"
+          for dmg in dmgs/Librarian-AppleSilicon/Librarian-AppleSilicon.dmg \
+                     dmgs/Librarian-Intel/Librarian-Intel.dmg; do
+            workdir="$(mktemp -d)"
+            # Extract the app's Info.plist out of the DMG (UDZO -> HFS payload).
+            7z x -y -o"$workdir" "$dmg" >/dev/null
+            plist="$(find "$workdir" -path '*/Librarian.app/Contents/Info.plist' -print -quit)"
+            test -n "$plist" || { echo "Info.plist not found in $dmg" >&2; exit 1; }
+            GOT="$(python3 -c 'import plistlib,sys; print(plistlib.load(open(sys.argv[1],"rb"))["CFBundleShortVersionString"])' "$plist")"
+            if [ "$GOT" != "$EXPECTED" ]; then
+              echo "$dmg CFBundleShortVersionString $GOT does not match tag $EXPECTED" >&2
+              exit 1
+            fi
+            echo "$dmg version OK: $GOT"
+            rm -rf "$workdir"
+          done
       - name: Generate checksums
         run: |
           sha256sum dist/* sbom.json constraints.txt > SHA256SUMS.txt
@@ -176,12 +203,27 @@ jobs:
       - name: Push image
         run: |
           IMAGE="ghcr.io/${{ github.repository }}"
-          docker push "$IMAGE:${{ github.ref_name }}"
+          # GHCR intermittently returns "unknown blob" mid-push. Retry the push
+          # a few times with backoff so a transient registry flake does not fail
+          # an immutable release.
+          push_with_retry() {
+            local ref="$1" attempt
+            for attempt in 1 2 3; do
+              if docker push "$ref"; then
+                return 0
+              fi
+              echo "docker push $ref failed (attempt $attempt); retrying..." >&2
+              sleep $((attempt * 10))
+            done
+            echo "docker push $ref failed after 3 attempts" >&2
+            return 1
+          }
+          push_with_retry "$IMAGE:${{ github.ref_name }}"
           case "${{ github.ref_name }}" in
             *a*|*b*|*rc*) ;;
             *)
               docker tag "$IMAGE:${{ github.ref_name }}" "$IMAGE:latest"
-              docker push "$IMAGE:latest"
+              push_with_retry "$IMAGE:latest"
               ;;
           esac
       - name: Resolve image digest

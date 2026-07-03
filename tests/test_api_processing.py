@@ -665,6 +665,33 @@ def test_api_rate_limit_uses_x_forwarded_for_from_trusted_proxy(tmp_path: Path) 
     assert limited.json()["code"] == "rate_limited"
 
 
+def test_api_rate_limit_uses_rightmost_untrusted_forwarded_hop(tmp_path: Path) -> None:
+    # Two proxies in front: the real client is the rightmost non-proxy hop
+    # (appended by our own trusted proxy). A spoofed leftmost value must be
+    # ignored so an attacker cannot dodge or forge another client's rate bucket.
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        api_rate_limit_per_minute=1,
+        api_trusted_proxy_cidrs="10.0.0.0/24",
+    )
+    with TestClient(create_app(settings), client=("10.0.0.5", 50000)) as client:
+        # Real client 198.51.100.1 behind a trusted inner proxy 10.0.0.9.
+        first = client.get(
+            "/documents",
+            headers={"x-forwarded-for": "198.51.100.1, 10.0.0.9"},
+        )
+        # Attacker spoofs a different leftmost value but is the same real client;
+        # the rightmost untrusted hop is still 198.51.100.1, so it is limited.
+        limited = client.get(
+            "/documents",
+            headers={"x-forwarded-for": "203.0.113.7, 198.51.100.1, 10.0.0.9"},
+        )
+
+    assert first.status_code == 200
+    assert limited.status_code == 429
+
+
 def test_api_audit_ignores_untrusted_x_forwarded_for(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",
@@ -1429,7 +1456,7 @@ def test_api_config_exposes_operational_controls(tmp_path: Path) -> None:
     assert payload["ocr_threshold"] == 160
     assert payload["ocr_preserve_page_images"] is True
     assert payload["ocr_rotation_retry"] is True
-    assert payload["cleaning_prompt_version"] == "cmos_v2"
+    assert payload["cleaning_prompt_version"] == "cmos_v3"
     assert payload["classification_prompt_version"] == "dewey_v5"
     assert payload["universal_timeout_seconds"] == 77
     assert payload["llm_max_retries"] == settings.llm_max_retries

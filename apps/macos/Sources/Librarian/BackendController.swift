@@ -1,6 +1,12 @@
 import AppKit
 import Foundation
 
+/// backend.log is opened for append on every launch, so without rotation it
+/// grows forever. Cap it at a few MB. File-scope (not a static on the
+/// @MainActor class) so the nonisolated log-rotation helper can read it
+/// without crossing actor isolation — that reference is an error in Swift 6.
+private let backendMaxLogBytes: UInt64 = 5 * 1024 * 1024
+
 /// Launches and supervises the Librarian backend that ships inside the app
 /// bundle (Contents/Resources/backend). Falls back to an external server when
 /// no bundled backend is present or the user disables embedded mode.
@@ -21,6 +27,20 @@ final class BackendController: ObservableObject {
 
     private var process: Process?
     private var logHandle: FileHandle?
+
+    /// Ownership token for the boot loop: every user-visible stop or restart
+    /// bumps it, and a suspended `startEmbeddedIfNeeded` aborts when it wakes
+    /// up under a different generation — so toggling the engine off (or
+    /// restarting) mid-boot can never let the old loop relaunch a zombie
+    /// engine or fight a newer boot for `process`.
+    private var bootGeneration = 0
+
+    /// Timestamps of recent automatic relaunches after an unexpected exit,
+    /// used to detect a crash loop and stop hammering a backend that cannot
+    /// stay up instead of restarting it forever.
+    private var recentRelaunches: [Date] = []
+    private static let relaunchWindow: TimeInterval = 60
+    private static let maxRelaunchesInWindow = 3
 
     private static func generateAPIKey() -> String {
         let raw = UUID().uuidString + UUID().uuidString
@@ -51,6 +71,19 @@ final class BackendController: ObservableObject {
 
     nonisolated static var logFileURL: URL {
         dataDirectory.appendingPathComponent("backend.log")
+    }
+
+    /// If the log has exceeded the cap, move it aside to a single `.1` backup
+    /// (overwriting any earlier backup) so the active file starts empty.
+    nonisolated private static func rotateLogIfNeeded(at logURL: URL) {
+        let manager = FileManager.default
+        guard let attributes = try? manager.attributesOfItem(atPath: logURL.path),
+              let size = attributes[.size] as? UInt64, size > backendMaxLogBytes else {
+            return
+        }
+        let rotated = logURL.appendingPathExtension("1")
+        try? manager.removeItem(at: rotated)
+        try? manager.moveItem(at: logURL, to: rotated)
     }
 
     /// Directory of the bundled OCR command-line tools (tesseract, pdftoppm,
@@ -91,39 +124,87 @@ final class BackendController: ObservableObject {
             break
         }
         mode = .starting
+        bootGeneration += 1
+        let generation = bootGeneration
         // Fresh credential for every launch: the embedded API requires this
         // key, so other local processes cannot read or modify the corpus.
         let apiKey = Self.generateAPIKey()
         embeddedAPIKey = apiKey
+        var occupiedPorts = 0
         for port in Self.candidatePorts {
             // A previous (orphaned) instance holds its own per-launch key and
             // cannot be adopted; treat a responding port as occupied.
             if await Self.isLibrarianHealthy(port: port) {
+                guard generation == bootGeneration else { return }
+                occupiedPorts += 1
                 continue
             }
+            guard generation == bootGeneration else { return }
             do {
                 try launch(port: port, apiKey: apiKey)
             } catch {
                 continue
             }
-            for _ in 0..<60 {
+            // A cold first launch (relocatable Python start + migrations) can
+            // legitimately take tens of seconds; killing a healthy boot at 15 s
+            // read as "Engine didn't start" on slower Macs. Wait up to 60 s
+            // while the process is alive, and bail out as soon as it exits so
+            // the next candidate port is tried without burning the full budget.
+            for _ in 0..<240 {
+                guard generation == bootGeneration else { return }
                 if process?.isRunning != true { break }
                 if await Self.isLibrarianHealthy(port: port) {
+                    guard generation == bootGeneration else { return }
                     mode = .embedded(port: port)
                     return
                 }
                 try? await Task.sleep(for: .milliseconds(250))
             }
-            stop()
+            guard generation == bootGeneration else { return }
+            let ranFullBudget = process?.isRunning == true
+            await terminateProcess()
+            guard generation == bootGeneration else { return }
+            if ranFullBudget {
+                // The engine ran for the whole budget without answering; a
+                // different port will not help, so surface the failure now.
+                break
+            }
+        }
+        guard generation == bootGeneration else { return }
+        if occupiedPorts == Self.candidatePorts.count {
+            // Every candidate port answered /health, meaning previous engine
+            // instances are still running (they hold per-launch keys and
+            // cannot be adopted).
+            mode = .failed(
+                "A previous engine instance is still running on the engine's "
+                    + "ports (\(Self.candidatePorts.map(String.init).joined(separator: ", "))). "
+                    + "Quit other copies of Librarian or restart your Mac, then try again."
+            )
+            return
         }
         mode = .failed(
             "The embedded backend did not start. See backend.log in the data folder."
         )
     }
 
+    /// Synchronous stop for app termination, where blocking briefly is the
+    /// only way to guarantee no orphaned engine survives the app. UI paths
+    /// (settings toggles, restarts) use `stopGracefully()` instead.
     func stop() {
-        process?.terminationHandler = nil
-        process?.terminate()
+        bootGeneration += 1
+        if let running = process {
+            running.terminationHandler = nil
+            running.terminate()
+            // Bounded wait for a graceful exit; escalate so no orphaned
+            // engine survives the app.
+            let deadline = Date().addingTimeInterval(3)
+            while running.isRunning && Date() < deadline {
+                usleep(100_000)
+            }
+            if running.isRunning {
+                kill(running.processIdentifier, SIGKILL)
+            }
+        }
         process = nil
         try? logHandle?.close()
         logHandle = nil
@@ -134,13 +215,60 @@ final class BackendController: ObservableObject {
         }
     }
 
+    /// Async stop that never blocks the main actor. Bumps the boot generation
+    /// so any in-flight `startEmbeddedIfNeeded` aborts instead of relaunching
+    /// against the user's intent.
+    func stopGracefully() async {
+        bootGeneration += 1
+        await terminateProcess()
+        if case .embedded = mode {
+            mode = .external
+        } else if case .starting = mode {
+            mode = .external
+        }
+    }
+
+    /// Terminate the child process and release the log handle without touching
+    /// `mode` or the boot generation. Internal building block: the boot loop
+    /// uses it between port attempts (aborting its own boot would deadlock the
+    /// rotation), and the public stops wrap it.
+    private func terminateProcess() async {
+        if let running = process {
+            running.terminationHandler = nil
+            running.terminate()
+            var waited = 0
+            while running.isRunning && waited < 30 {
+                try? await Task.sleep(for: .milliseconds(100))
+                waited += 1
+            }
+            if running.isRunning {
+                kill(running.processIdentifier, SIGKILL)
+            }
+        }
+        process = nil
+        try? logHandle?.close()
+        logHandle = nil
+    }
+
     /// Stop the embedded backend and start a fresh instance, picking up any
     /// configuration changes from the data directory's .env file.
     func restart() async {
-        stop()
-        // Give uvicorn a moment to release its port before relaunching.
-        try? await Task.sleep(for: .milliseconds(750))
+        // stopGracefully waits for the old instance to exit (and uvicorn to
+        // release its port) before we relaunch.
+        await stopGracefully()
         await startEmbeddedIfNeeded()
+    }
+
+    /// Whether the termination handler may auto-relaunch after an unexpected
+    /// exit. Records the attempt and refuses once more than
+    /// `maxRelaunchesInWindow` have occurred inside `relaunchWindow`, so a
+    /// backend that crashes on boot surrenders to `.failed` instead of looping.
+    private func shouldAttemptRelaunch() -> Bool {
+        let now = Date()
+        recentRelaunches.removeAll { now.timeIntervalSince($0) > Self.relaunchWindow }
+        guard recentRelaunches.count < Self.maxRelaunchesInWindow else { return false }
+        recentRelaunches.append(now)
+        return true
     }
 
     func revealDataFolder() {
@@ -168,6 +296,13 @@ final class BackendController: ObservableObject {
         // Environment variables take precedence over a user .env in the data
         // directory, so the per-launch key always applies.
         environment["LIBRARIAN_API_KEY"] = apiKey
+        // Explicitly blank the multi-key variants so a user-writable .env
+        // cannot mint additional API credentials for the embedded engine.
+        environment["LIBRARIAN_API_KEYS"] = ""
+        environment["LIBRARIAN_API_KEY_SHA256"] = ""
+        environment["LIBRARIAN_API_KEY_HASHES"] = ""
+        // Lets the backend detect an orphaned launch (app gone) and exit.
+        environment["LIBRARIAN_PARENT_PID"] = String(ProcessInfo.processInfo.processIdentifier)
         environment["PYTHONUNBUFFERED"] = "1"
         // Provider API keys live in the Keychain, not on disk; hand them to
         // the backend through its environment.
@@ -208,6 +343,11 @@ final class BackendController: ObservableObject {
         launched.currentDirectoryURL = dataDir
 
         let logURL = Self.logFileURL
+        // Keep backend.log from growing without bound: if it has passed the
+        // cap, rotate it to backend.log.1 (replacing any previous rotation)
+        // and start fresh. Every launch appends, so this bounds it to roughly
+        // twice the cap on disk.
+        Self.rotateLogIfNeeded(at: logURL)
         if !FileManager.default.fileExists(atPath: logURL.path) {
             FileManager.default.createFile(atPath: logURL.path, contents: nil)
         }
@@ -225,7 +365,17 @@ final class BackendController: ObservableObject {
                 self.process = nil
                 try? self.logHandle?.close()
                 self.logHandle = nil
-                if case .embedded = self.mode {
+                // Only an *unexpected* exit while we believed the engine was
+                // healthy triggers recovery; a deliberate stop() clears the
+                // termination handler and never reaches here.
+                guard case .embedded = self.mode else { return }
+                if self.shouldAttemptRelaunch() {
+                    // One automatic relaunch attempt: reset to a restartable
+                    // state and boot again. The crash-loop guard prevents this
+                    // from spinning forever.
+                    self.mode = .external
+                    await self.startEmbeddedIfNeeded()
+                } else {
                     self.mode = .failed(
                         "The backend stopped unexpectedly. See backend.log in the data folder."
                     )

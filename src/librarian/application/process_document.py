@@ -174,8 +174,11 @@ class ProcessDocument:
                     missing_chunks, on_chunk_cleaned=_note_chunk_cleaned
                 )
                 await self._raise_if_canceled(run_id)
+                # Never cache an empty/blank cleaning result: doing so would
+                # permanently rehydrate lost content on every future re-run.
+                cacheable = [chunk for chunk in cleaned_missing if chunk.text.strip()]
                 await self.outputs.save_cleaned_chunk_cache(
-                    cleaned_missing,
+                    cacheable,
                     prompt_version=self.cleaner.prompt_version,
                     model_provider=self.cleaner.provider.name,
                     model_name=self.cleaner.model,
@@ -215,6 +218,14 @@ class ProcessDocument:
                     stage=RunStage.ASSEMBLE,
                 )
                 assembled = assemble_cleaned_document(cleaned_chunks)
+            # Guard against publishing an empty document as a success: if every
+            # chunk cleaned to nothing (truncation, refusal, provider outage),
+            # fail loudly instead of silently shipping a blank output.
+            if chunked and not assembled.strip():
+                raise ValueError(
+                    "cleaning produced no output for a non-empty document "
+                    f"({len(chunked)} chunk(s) all blank) — refusing to publish empty result"
+                )
             await self._raise_if_canceled(run_id)
             output = CleanedOutput(
                 document_id=document_id,

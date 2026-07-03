@@ -16,6 +16,7 @@ from librarian.domain.models import (
     Classification,
     Document,
     DocumentStatus,
+    ProcessingRun,
     RunStage,
     RunStatus,
     SourceFile,
@@ -60,6 +61,43 @@ class FakeTracer:
 
 
 @pytest.mark.asyncio
+async def test_prune_caches_removes_only_stale_rows(tmp_path: Path) -> None:
+    database = SQLiteDatabase(tmp_path / "librarian.sqlite")
+    await database.initialize()
+
+    old = (datetime.now(UTC) - timedelta(days=45)).isoformat()
+    fresh = datetime.now(UTC).isoformat()
+    with database.connect() as connection:
+        connection.execute(
+            "INSERT INTO extraction_cache "
+            "(content_sha256, config_signature, source_extension, text, created_at) "
+            "VALUES ('stale', 'cfg', '.pdf', 't', ?)",
+            (old,),
+        )
+        connection.execute(
+            "INSERT INTO extraction_cache "
+            "(content_sha256, config_signature, source_extension, text, created_at) "
+            "VALUES ('fresh', 'cfg', '.pdf', 't', ?)",
+            (fresh,),
+        )
+        connection.execute(
+            "INSERT INTO cleaned_chunk_cache (chunk_sha256, prompt_version, "
+            "model_provider, model_name, text, warnings, created_at) "
+            "VALUES ('stale', 'v', 'p', 'm', 't', '[]', ?)",
+            (old,),
+        )
+
+    removed = await database.prune_caches(older_than_days=30)
+
+    assert removed == {"extraction_cache": 1, "cleaned_chunk_cache": 1}
+    with database.connect() as connection:
+        remaining = connection.execute(
+            "SELECT content_sha256 FROM extraction_cache"
+        ).fetchall()
+    assert [row["content_sha256"] for row in remaining] == ["fresh"]
+
+
+@pytest.mark.asyncio
 async def test_sqlite_initializes_schema(tmp_path: Path) -> None:
     database_path = tmp_path / "librarian.sqlite"
     database = SQLiteDatabase(database_path)
@@ -83,10 +121,52 @@ async def test_sqlite_initializes_schema(tmp_path: Path) -> None:
         "0007_classification_description.sql",
         "0008_classification_series.sql",
         "0009_extraction_cache.sql",
+        "0010_performance_indexes.sql",
+        "0011_fts_porter_stemming.sql",
     ]
     assert busy_timeout == 5000
     assert str(journal_mode).lower() == "wal"
     assert synchronous == 1
+
+
+@pytest.mark.asyncio
+async def test_fail_interrupted_runs_reconciles_orphaned_running_runs(tmp_path: Path) -> None:
+    database = SQLiteDatabase(tmp_path / "librarian.sqlite")
+    await database.initialize()
+    repository = SQLiteRepository(database)
+    document = Document(
+        id=DocumentId("doc_orphan"),
+        source=SourceFile(
+            path=tmp_path / "o.pdf",
+            filename="o.pdf",
+            media_type="application/pdf",
+            byte_size=1,
+            sha256="orphan-sha",
+        ),
+        status=DocumentStatus.PROCESSING,
+    )
+    await repository.save_document(document)
+    await repository.save_run(
+        ProcessingRun(
+            id=RunId("run_orphan"),
+            document_id=document.id,
+            status=RunStatus.RUNNING,
+            stage=RunStage.CLEAN,
+        )
+    )
+
+    reconciled = await repository.fail_interrupted_runs(error="interrupted by server restart")
+
+    assert reconciled == 1
+    run = await repository.get_run(RunId("run_orphan"))
+    assert run is not None
+    assert run.status == RunStatus.FAILED
+    assert run.error == "interrupted by server restart"
+    document_after = await repository.get_document(document.id)
+    assert document_after is not None
+    assert document_after.status == DocumentStatus.FAILED
+    # A second pass is a no-op once nothing is left RUNNING.
+    assert await repository.fail_interrupted_runs(error="x") == 0
 
 
 @pytest.mark.asyncio

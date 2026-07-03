@@ -12,7 +12,11 @@ from librarian.application.ports import ApplicationMetrics, LLMProvider
 from librarian.application.process_document import ProcessDocument
 from librarian.application.search_library import SearchLibrary
 from librarian.config import Settings
-from librarian.ingest.extractors import CachingExtractor, CompositeExtractor
+from librarian.ingest.extractors import (
+    CachingExtractor,
+    CompositeExtractor,
+    ExtractionCacheStore,
+)
 from librarian.llm import LazyLLMProvider, build_provider
 from librarian.observability import NoOpMetricsRecorder
 from librarian.pipeline.chunking import ChunkingPolicy
@@ -133,9 +137,11 @@ async def build_container(
         prompt_catalog=PromptCatalog(),
         prompt_version=resolved_settings.cleaning_prompt_version,
         model=resolved_settings.llm_model,
+        max_tokens=resolved_settings.llm_max_output_tokens,
         coherence_mode=resolved_settings.coherence_mode,
         max_parallel_chunks=resolved_settings.llm_max_concurrency,
         max_response_chars=resolved_settings.llm_max_response_chars,
+        context_chars=resolved_settings.chunk_overlap_chars,
     )
     taxonomy = ingest_container.taxonomy
     classifier = ClassifyDocument(
@@ -144,6 +150,7 @@ async def build_container(
         prompt_version=resolved_settings.classification_prompt_version,
         model=resolved_settings.llm_model,
         taxonomy=taxonomy,
+        max_tokens=resolved_settings.classification_max_output_tokens,
         max_response_chars=resolved_settings.llm_max_response_chars,
     )
     policy = ChunkingPolicy(
@@ -172,6 +179,24 @@ async def build_container(
         taxonomy=ingest_container.taxonomy,
         process_document=process,
     )
+
+
+def cache_wrap_extractor(
+    extractor: CompositeExtractor,
+    *,
+    settings: Settings,
+    cache_store: ExtractionCacheStore,
+) -> CompositeExtractor | CachingExtractor:
+    """Wrap an extractor with the content-hash cache when enabled.
+
+    Used so the convert/import paths (not just direct ingest) benefit from the
+    extraction cache — re-importing unchanged files then skips re-extraction.
+    """
+    if settings.extraction_cache_enabled:
+        return CachingExtractor(
+            extractor, cache_store, config_signature=extractor.config_signature
+        )
+    return extractor
 
 
 def _build_provider(

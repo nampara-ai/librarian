@@ -93,6 +93,14 @@ struct SettingsView: View {
     /// saved model on open must not restart the engine.
     @State private var applyOnSelect = false
 
+    // Engine options surfaced from the backend configuration. Guarded by
+    // `engineOptionsLoaded` so restoring saved values on open doesn't
+    // restart the engine.
+    @State private var coherenceMode = "balanced"
+    @State private var figureVisionEnabled = false
+    @State private var figureVisionModel = ""
+    @State private var engineOptionsLoaded = false
+
     @AppStorage(AppModel.keepOriginalsKey) private var keepOriginals = false
     @AppStorage(AppModel.useEmbeddedKey) private var useEmbedded = true
     @AppStorage(AppModel.baseURLKey) private var externalURL = AppModel.defaultBaseURL
@@ -121,6 +129,11 @@ struct SettingsView: View {
                 SecureField("API key", text: $apiKey, prompt: Text(keyPrompt))
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { Task { await connect() } }
+                    .onChange(of: apiKey) {
+                        // A stale "key didn't work" banner over a freshly
+                        // edited key reads as a live failure; clear it.
+                        if case .failed = phase { phase = .idle }
+                    }
                 Text(Copy.keychainNote)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -184,6 +197,43 @@ struct SettingsView: View {
 
             DisclosureGroup("Advanced") {
                 VStack(alignment: .leading, spacing: 10) {
+                    Picker("Cleaning style", selection: $coherenceMode) {
+                        Text("Fastest").tag("fast")
+                        Text("Balanced").tag("balanced")
+                        Text("Most careful").tag("max-coherence")
+                    }
+                    .onChange(of: coherenceMode) {
+                        guard engineOptionsLoaded else { return }
+                        Task { await applyEngineOptions() }
+                    }
+                    .help(
+                        "How much surrounding context each part of a document "
+                            + "gets while cleaning. Most careful reads strictly in "
+                            + "order; Fastest cleans parts in parallel."
+                    )
+                    Toggle("Describe charts and figures with AI", isOn: $figureVisionEnabled)
+                        .onChange(of: figureVisionEnabled) {
+                            guard engineOptionsLoaded else { return }
+                            Task { await applyEngineOptions() }
+                        }
+                        .help(
+                            "Adds a written description under each chart or figure "
+                                + "found in PDFs, using your AI provider. Costs extra "
+                                + "tokens per figure."
+                        )
+                    if figureVisionEnabled {
+                        TextField(
+                            "Vision model (blank = cleaning model)",
+                            text: $figureVisionModel,
+                            prompt: Text("optional")
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .autocorrectionDisabled()
+                        .onSubmit {
+                            Task { await applyEngineOptions() }
+                        }
+                    }
+                    Divider()
                     Toggle("Also keep original files in the destination", isOn: $keepOriginals)
                     Toggle("Use the built-in engine", isOn: $useEmbedded)
                         .onChange(of: useEmbedded) {
@@ -287,11 +337,18 @@ struct SettingsView: View {
         selectedModel = ""
         manualModel = ""
         customAddress = preset.isLocal ? (preset.configuredBaseURL ?? "") : ""
-        apiKey = KeychainStore.get(preset.keyAccount) ?? ""
+        // Never pre-fill the Custom preset from the shared OPENAI_API_KEY: its
+        // address is user-typed, so a prefilled real key would be sent to an
+        // arbitrary (possibly hostile or mistyped) URL. Require an explicit paste.
+        apiKey = preset == .custom ? "" : (KeychainStore.get(preset.keyAccount) ?? "")
     }
 
     private func loadCurrent() {
         let values = EnvFile.read()
+        coherenceMode = values["LIBRARIAN_COHERENCE_MODE"] ?? "balanced"
+        figureVisionEnabled = values["LIBRARIAN_FIGURE_VISION_ENABLED"] == "true"
+        figureVisionModel = values["LIBRARIAN_FIGURE_VISION_MODEL"] ?? ""
+        engineOptionsLoaded = true
         guard values["LIBRARIAN_LLM_PROVIDER"] == "openai-compatible" else {
             resetForPresetChange()
             return
@@ -310,7 +367,9 @@ struct SettingsView: View {
         } else {
             preset = .custom
         }
-        apiKey = KeychainStore.get(preset.keyAccount) ?? ""
+        // See resetForPresetChange: the Custom preset must not inherit the
+        // shared OpenAI key, since it would be sent to the user-typed address.
+        apiKey = preset == .custom ? "" : (KeychainStore.get(preset.keyAccount) ?? "")
         customAddress = (preset.isLocal || preset == .custom) ? base : ""
         let current = values["LIBRARIAN_LLM_MODEL"] ?? ""
         if !current.isEmpty {
@@ -319,6 +378,31 @@ struct SettingsView: View {
             manualModel = current
             phase = .active(current)
         }
+    }
+
+    /// Persist the Advanced engine options and restart the engine so they
+    /// apply. Defaults are removed from the file rather than written, so a
+    /// hand-edited .env only carries deliberate overrides. Diffed against the
+    /// file first: onChange also fires when state is restored on open, and a
+    /// no-op "apply" must never restart the engine (killing in-flight runs).
+    private func applyEngineOptions() async {
+        let visionModel = figureVisionModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let updates: [String: String?] = [
+            "LIBRARIAN_COHERENCE_MODE": coherenceMode == "balanced" ? nil : coherenceMode,
+            "LIBRARIAN_FIGURE_VISION_ENABLED": figureVisionEnabled ? "true" : nil,
+            "LIBRARIAN_FIGURE_VISION_MODEL":
+                (figureVisionEnabled && !visionModel.isEmpty) ? visionModel : nil,
+        ]
+        let current = EnvFile.read()
+        let changed = updates.contains { key, value in current[key] != value }
+        guard changed else { return }
+        do {
+            try EnvFile.update(updates)
+        } catch {
+            phase = .failed(error.localizedDescription)
+            return
+        }
+        await model.restartBackend()
     }
 
     private func connect() async {
@@ -355,7 +439,15 @@ struct SettingsView: View {
         guard !chosen.isEmpty else { return }
         phase = .applying
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        KeychainStore.set(key.isEmpty ? "local" : key, account: preset.keyAccount)
+        // Only store a key the user actually entered. Local servers (Ollama,
+        // LM Studio, keyless custom) write nothing to the Keychain; the
+        // engine gets a transient placeholder in its environment instead.
+        if !key.isEmpty {
+            guard KeychainStore.set(key, account: preset.keyAccount) else {
+                phase = .failed(Copy.keychainSaveFailed)
+                return
+            }
+        }
 
         var updates: [String: String?] = [:]
         for account in ProviderCredentials.knownKeyAccounts {

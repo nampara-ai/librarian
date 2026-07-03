@@ -14,7 +14,14 @@ _BOUNDARY_PATTERN = re.compile(r"\n(?=#{1,6}\s)|\n{2,}|(?<=[.!?])\s+")
 
 @dataclass(frozen=True, slots=True)
 class ChunkingPolicy:
-    """Chunking controls."""
+    """Chunking controls.
+
+    ``overlap_chars`` is **not** re-emitted into adjacent chunks (doing so
+    duplicated ~``overlap_chars`` of content at every chunk seam in the final
+    document). Chunks tile the source exactly at clean sentence/paragraph
+    boundaries; cross-boundary continuity for the cleaner is provided separately
+    as read-only *context* (see ``CleanChunks``), sized by ``overlap_chars``.
+    """
 
     target_chars: int = 12_000
     overlap_chars: int = 800
@@ -60,10 +67,10 @@ def chunk_text(document_id: DocumentId, text: str, policy: ChunkingPolicy) -> li
         if end >= text_length:
             break
 
-        next_start = max(end - policy.overlap_chars, 0)
-        if next_start <= start:
-            next_start = end
-        start = _skip_leading_space(normalized, next_start)
+        # Tile exactly: the next chunk starts where this one ended (a boundary
+        # chosen by _choose_boundary), so no source region is emitted twice.
+        # Continuity is handled by read-only cleaning context, not re-emission.
+        start = _skip_leading_space(normalized, end)
 
     return chunks
 

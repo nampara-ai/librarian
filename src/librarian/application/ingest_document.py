@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from librarian.application.ports import ContentStore, DocumentRepository, TextExtractor
 from librarian.domain.ids import DocumentId
@@ -55,8 +57,16 @@ class IngestDocument:
             ),
         )
         raw_text = await self.extractor.extract(source_path)
-        await self.documents.save_document(document)
-        await self.content.put_text(raw_text_key(document_id), raw_text)
+        # Persist the document row and its raw text atomically when the backend
+        # supports it, so a crash can't leave a document with no extractable text
+        # (which would fail processing with a KeyError).
+        save_atomic = getattr(self.documents, "save_document_with_content", None)
+        if callable(save_atomic):
+            save_atomic = cast("Callable[..., Awaitable[None]]", save_atomic)
+            await save_atomic(document, raw_text_key(document_id), raw_text)
+        else:
+            await self.documents.save_document(document)
+            await self.content.put_text(raw_text_key(document_id), raw_text)
         return IngestedDocument(document=document, raw_text=raw_text)
 
 

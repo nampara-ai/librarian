@@ -17,11 +17,24 @@ RUN adduser --disabled-password --gecos "" librarian \
     && mkdir -p /data/uploads /data/imports \
     && chown -R librarian:librarian /data
 
-COPY pyproject.toml README.md ./
+# Copy dependency-defining files first (and an optional constraints.txt if one
+# was generated alongside the build context) so the dependency-install layer is
+# cached independently of source edits. `constraints*.txt` uses a glob so the
+# COPY does not fail when no constraints file is present.
+COPY pyproject.toml README.md constraints*.txt ./
 COPY src ./src
 
+# Install with exact pins from constraints.txt when it is present (reproducible
+# builds), otherwise fall back to unconstrained resolution. `.[all]` still needs
+# src to build the package, but keeping pip upgrade + the install here (after the
+# dependency files are in place) lets Docker reuse the layer across source-only
+# changes that leave pyproject.toml/constraints.txt untouched.
 RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir ".[all]"
+    && if [ -f constraints.txt ]; then \
+         python -m pip install --no-cache-dir -c constraints.txt ".[all]"; \
+       else \
+         python -m pip install --no-cache-dir ".[all]"; \
+       fi
 
 USER librarian
 VOLUME ["/data"]

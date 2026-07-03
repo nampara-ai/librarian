@@ -144,7 +144,8 @@ validated before conversion starts and must not be symlinks or cross symlinked p
   the active result set. `facet_limit` caps classification and filename bucket counts, defaults to
   `50`, and is capped at `500`; source totals still report the full matching document count.
 - `GET /classifications`: built-in Dewey labels.
-- `GET /config`: selected runtime settings.
+- `GET /config`: the effective runtime settings — LLM, chunking, extraction engine and cache,
+  token ceilings, figure vision, OCR, API limits, server bind — everything except secrets.
 - `GET /health`: health check.
 - `GET /ready`: readiness check that verifies the runtime data directory is writable, plus SQLite
   integrity and migration metadata.
