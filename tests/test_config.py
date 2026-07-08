@@ -79,7 +79,7 @@ def test_redacted_config_masks_secrets_and_exposes_settings() -> None:
 def test_settings_default_prompt_stack() -> None:
     settings = Settings()
 
-    assert settings.cleaning_prompt_version == "cmos_v3"
+    assert settings.cleaning_prompt_version == "cmos_v4"
     assert settings.classification_prompt_version == "dewey_v5"
 
 

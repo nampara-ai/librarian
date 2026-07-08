@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.8.0 - 2026-07-08
+
+Quality release: the full codebase-audit fix wave (#50) plus plain-text heading inference.
+
+- Plain-text documents now come out with real structure: the new default cleaning prompt
+  (`cmos_v4`) renders conventions-only structure as Markdown headings — a leading title/byline
+  becomes `#`, standalone chapter/section lines ("Chapter 3", "Introduction", "Part Two") become
+  `##` (joined with their title line when it follows), and a title block repeated before every
+  chapter collapses to its first occurrence. Tightly scoped: nothing is promoted unless the source
+  visually sets it apart, and documents that already carry Markdown headings are left alone.
+  `cmos_v1`–`cmos_v3` remain bundled, so existing run provenance and cleaning caches stay valid.
+- Cleaning fidelity (from the audit): chunk seams no longer duplicate text (chunks tile exactly,
+  with read-only predecessor context for continuity), truncated LLM responses are detected and
+  raised instead of silently published, blank cleaning results are never cached or published, and
+  the prompt now demands verbatim numbers, dates, units, identifiers, and tables.
+- Extraction accuracy: DOCX in true document order, EXIF orientation applied before OCR,
+  transparent images no longer OCR as black pages, multi-frame TIFFs keep all pages, image→PDF
+  conversion honors embedded DPI, and long documents are classified from a head+middle+tail sample
+  instead of the first 8,000 characters.
+- Search: full-text indexes rebuilt with Porter stemming — "dividend" now matches "dividends".
+  Existing text re-indexes automatically on first startup after upgrade.
+- Reliability: extraction cache now applies to `import` (re-imports of identical content are
+  near-instant), reprocessing after a chunking change no longer fails, migrations apply
+  transactionally, interrupted runs are reconciled at startup, canceled runs stop their sibling
+  cleaning workers, SSE progress streams no longer drop the final events, and the engine exits
+  cleanly if the desktop app that launched it dies.
+- Performance: indexes for the hot query paths, one tesseract pass per page instead of two,
+  batched cache reads, vectorized deskew, and `admin db-maintain --prune-cache-days N` to reclaim
+  cache space.
+- Security: secret redaction covers URL-embedded credentials, bearer tokens, and common provider
+  key formats; `X-Forwarded-For` handling is spoof-resistant; the supply chain pins the bundled
+  Python runtime and Homebrew installer to verified digests.
+- Agent/CLI surface: `--json` everywhere it was missing (`import`, `convert-dir`, `admin runs`,
+  `admin queue`, `admin run-cancel`, `admin run-retry`, `version`), a new `admin config` command
+  prints the redacted effective configuration, and `/config` exposes the full (secret-free)
+  settings surface.
+- macOS app: Add Files from the toolbar/⌘O, Stop actually cancels the engine run, a new Library
+  window (⌘L) with search / save-a-copy / delete, failure Details popovers, slow first launches no
+  longer misreported as failures, figure-vision and cleaning-style settings, and Reclaim Disk
+  Space + an effective-configuration panel in Diagnostics.
+
 ## 1.7.1 - 2026-06-26
 
 - Standalone images (PNG/JPG/scans) now get the full liteparse pipeline — reconstructed tables,

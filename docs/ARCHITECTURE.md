@@ -100,10 +100,13 @@ rather than changing API or CLI route code.
 ## Prompt Governance
 
 Prompts live under `src/librarian/prompts`. Prompt text is versioned and recorded in run metadata.
-The default cleaning prompt is `cmos_v2`, which preserves the prototype's CMOS copy-editing intent
-while adding explicit instructions for OCR cleanup, structure preservation, context-marker handling,
-and chunk-local fidelity. `cmos_v1` remains bundled so older run provenance and cache keys stay
-resolvable. Classification prompts are versioned the same way with `dewey_v1` and `dewey_v2`.
+The default cleaning prompt is `cmos_v4`, which layers three additions onto the prototype's CMOS
+copy-editing intent: explicit OCR-cleanup/structure/context-marker/chunk-fidelity instructions
+(`cmos_v2`), verbatim preservation of numbers, dates, identifiers, and tables (`cmos_v3`), and
+tightly-scoped implicit-structure rendering — plain-text titles and standalone chapter/section
+lines become Markdown headings, and running title blocks repeated between chapters collapse to
+one (`cmos_v4`). Earlier versions remain bundled so older run provenance and cache keys stay
+resolvable. Classification prompts are versioned the same way (`dewey_v1`–`dewey_v5`).
 Startup settings reject prompt versions that are not bundled with the package.
 
 ## Migrations
