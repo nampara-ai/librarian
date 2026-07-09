@@ -2,15 +2,22 @@
 
 ## 1.8.1 - 2026-07-09
 
-Packaging re-release of 1.8.0 — **no code changes**. The 1.8.0 code and Docker image published
-correctly, but its GitHub release was created outside the release workflow, so the workflow could
-not attach the build artifacts (the Python wheel/sdist and both macOS DMGs) to the immutable
-release. 1.8.1 re-runs the release cleanly so those downloads are available.
+Re-release of 1.8.0 with a dependency security patch — **no application code changes**.
 
-If you already run 1.8.0 (via `pip`, the Docker image, or source), there is nothing new to pick up
-here. Mac users who could not download a 1.8.0 DMG should install the 1.8.1 DMG. See the 1.8.0
-notes below for what actually changed — most visibly, plain-text documents now get real Markdown
-headings for their titles and chapter/section lines (`cmos_v4`).
+- Security: bump `soupsieve` 2.8.3 → 2.8.4 (a transitive dependency via BeautifulSoup, which
+  MarkItDown uses) to resolve two high-severity advisories, CVE-2026-49476 and CVE-2026-49477.
+  Librarian only exercises soupsieve when parsing HTML through the optional MarkItDown extractor;
+  the bump ships in the pinned runtime bundled with the macOS app and Docker image.
+- Packaging: 1.8.0's code and Docker image published correctly, but its GitHub release was created
+  outside the release workflow, so the workflow could not attach the build artifacts (the Python
+  wheel/sdist and both macOS DMGs) to the immutable release. 1.8.1 re-runs the release cleanly so
+  those downloads are available.
+
+If you already run 1.8.0 (via `pip`, the Docker image, or source), the only change to pick up here
+is the soupsieve security patch. Mac users who could not download a 1.8.0 DMG should install the
+1.8.1 DMG. See the 1.8.0 notes below for what actually changed in the feature set — most visibly,
+plain-text documents now get real Markdown headings for their titles and chapter/section lines
+(`cmos_v4`).
 
 ## 1.8.0 - 2026-07-08
 
