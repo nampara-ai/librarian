@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.8.1 - 2026-07-09
+
+Packaging re-release of 1.8.0 — **no code changes**. The 1.8.0 code and Docker image published
+correctly, but its GitHub release was created outside the release workflow, so the workflow could
+not attach the build artifacts (the Python wheel/sdist and both macOS DMGs) to the immutable
+release. 1.8.1 re-runs the release cleanly so those downloads are available.
+
+If you already run 1.8.0 (via `pip`, the Docker image, or source), there is nothing new to pick up
+here. Mac users who could not download a 1.8.0 DMG should install the 1.8.1 DMG. See the 1.8.0
+notes below for what actually changed — most visibly, plain-text documents now get real Markdown
+headings for their titles and chapter/section lines (`cmos_v4`).
+
 ## 1.8.0 - 2026-07-08
 
 Quality release: the full codebase-audit fix wave (#50) plus plain-text heading inference.
