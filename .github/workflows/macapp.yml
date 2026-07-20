@@ -221,6 +221,21 @@ jobs:
         working-directory: apps/macos
         run: scripts/sign_app.sh --app dist/Librarian.app
 
+      - name: Verify the SIGNED app starts
+        working-directory: apps/macos
+        run: |
+          # Run the signed interpreter through the app's real startup import
+          # chain (librarian -> pydantic -> pydantic_core native extension).
+          # Signing is what applies the hardened runtime and entitlements, so a
+          # code-signing mistake that blocks loading third-party native
+          # extensions (e.g. hardened runtime WITHOUT
+          # com.apple.security.cs.disable-library-validation) only surfaces
+          # here. The pre-sign OCR/connectivity checks run against the unsigned
+          # bundle and cannot catch it. Runs for both ad-hoc and Developer ID
+          # builds so neither can ship an engine that won't boot.
+          PY="dist/Librarian.app/Contents/Resources/backend/python/bin/python3"
+          "$PY" -m librarian version
+
       - name: Create DMG
         working-directory: apps/macos
         run: scripts/make_dmg.sh --app dist/Librarian.app --output "dist/${{ matrix.artifact }}.dmg"

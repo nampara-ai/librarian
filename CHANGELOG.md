@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.8.2 - 2026-07-20
+
+macOS app fix — **no engine or Python changes**.
+
+- Fix "Engine didn't start" on the 1.8.0/1.8.1 macOS app. The 1.8.0 signing change enabled the
+  hardened runtime for ad-hoc (unsigned) builds — which is what CI ships when no Developer ID
+  certificate is configured — but only attached the `disable-library-validation` entitlement to
+  Developer ID builds. The hardened runtime then enforced library validation with nothing to
+  satisfy it, so the bundled Python could not load its third-party native extensions (pydantic-core,
+  Pillow, PDFium, …) and the backend crashed on startup. Ad-hoc builds no longer enable the
+  hardened runtime (restoring the 1.7.1 behavior), so the embedded interpreter loads its extensions
+  normally; Developer ID builds keep the hardened runtime plus the entitlement for notarization.
+- Add a post-signing smoke test to the macOS build: it runs the signed interpreter through the
+  app's real startup import chain (`librarian` → `pydantic` → `pydantic_core`), so a signing
+  regression that blocks native extensions fails CI instead of shipping. The previous OCR and
+  connectivity checks ran only against the unsigned bundle and could not catch this.
+
 ## 1.8.1 - 2026-07-09
 
 Re-release of 1.8.0 with a dependency security patch — **no application code changes**.

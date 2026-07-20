@@ -32,20 +32,34 @@ done
 #     executable memory. Applying them to every nested binary — including the
 #     bundled OCR tools (tesseract/pdftoppm/...) — needlessly widens the attack
 #     surface.
-#   - Every Mach-O still gets the hardened runtime (--options runtime) for
-#     notarization; the OCR tools are signed WITHOUT the broad entitlements.
+#   - For a Developer ID identity every Mach-O gets the hardened runtime
+#     (--options runtime) for notarization; the OCR tools are signed WITHOUT
+#     the broad entitlements. Ad-hoc builds get no hardened runtime (see below).
 #
-# Always apply --options runtime so the hardened runtime is consistent across
-# ad-hoc and Developer ID signing. Entitlements/timestamp only apply for a real
-# Developer ID identity (ad-hoc "-" signing cannot carry them meaningfully).
+# Hardened runtime turns on library validation, which refuses to load any
+# native library not signed by the process's own Team ID. The embedded CPython
+# loads dozens of third-party C-extension .so files (pydantic_core, Pillow,
+# numpy, PDFium, ...) that carry their upstream signatures, so a hardened
+# process MUST also carry com.apple.security.cs.disable-library-validation or
+# it cannot import them and the backend dies on startup ("Engine didn't start").
+#
+# For a real Developer ID identity we apply BOTH (hardened runtime for
+# notarization + the entitlement so libraries still load). For an ad-hoc build
+# ("-", what CI ships when no signing cert is configured) we deliberately do
+# NOT enable the hardened runtime: without it, library validation is not
+# enforced and the third-party extensions load normally. Enabling hardened
+# runtime on an ad-hoc build without the entitlement is exactly the regression
+# that broke the engine — do not "consistency-fix" this back.
 
-# Base flags for every binary: hardened runtime, no broad entitlements.
-BASE_FLAGS=(--force --sign "$IDENTITY" --options runtime)
-# Flags for the Python interpreter: base + the broad entitlements.
-PY_FLAGS=(--force --sign "$IDENTITY" --options runtime)
+# Base flags for every binary. Hardened runtime + entitlements are added below
+# only for a real Developer ID identity.
+BASE_FLAGS=(--force --sign "$IDENTITY")
+# Flags for the Python interpreter and the app bundle (the processes that load
+# the extensions): base + the broad entitlements when hardened.
+PY_FLAGS=(--force --sign "$IDENTITY")
 if [[ "$IDENTITY" != "-" ]]; then
-  BASE_FLAGS+=(--timestamp)
-  PY_FLAGS+=(--timestamp --entitlements "$ENTITLEMENTS")
+  BASE_FLAGS+=(--options runtime --timestamp)
+  PY_FLAGS+=(--options runtime --timestamp --entitlements "$ENTITLEMENTS")
 fi
 
 # The interpreter binaries that legitimately need the broad entitlements. These
