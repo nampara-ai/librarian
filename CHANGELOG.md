@@ -17,6 +17,11 @@ Dependency security patch plus a figure-vision fix.
   - **cryptography 48.0.1 → 50.0.0** — resolves 3 advisories (PYSEC-2026-3552/3553/3554).
 - `pip install`/source users on 1.8.2 already resolved the fixed versions via the `>=` ranges; this
   release matters most for the pinned macOS app and Docker bundles.
+- **The native macOS app is now Apple Silicon only; the Intel (x86_64) DMG is discontinued.**
+  cryptography (pulled in by `markitdown[pdf]` via pdfminer-six) dropped Intel macOS wheels at
+  49.0.0 — the same release that fixed the advisories above — so a self-contained, security-patched
+  Intel app can no longer be built from prebuilt wheels. Intel Mac users should install with
+  `pip install "nampara-librarian[all]"` or run the Docker image; both stay patched.
 
 ## 1.8.2 - 2026-07-20
 

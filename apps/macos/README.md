@@ -36,13 +36,19 @@ to Applications, double-click, done.
 
 ## Install (for users)
 
-1. Download the DMG for your Mac from the assets of the
-   [latest release](https://github.com/nampara-ai/librarian/releases/latest):
-   - **Librarian-AppleSilicon.dmg** for M1/M2/M3/M4 Macs
-   - **Librarian-Intel.dmg** for Intel Macs
+1. Download **Librarian-AppleSilicon.dmg** (Apple Silicon — M1/M2/M3/M4 Macs)
+   from the assets of the
+   [latest release](https://github.com/nampara-ai/librarian/releases/latest).
 
    (Apple menu → About This Mac shows which chip you have. DMGs are attached
    to releases from v1.1.0 onward.)
+
+   **Intel Macs:** the native app is Apple Silicon only as of v1.8.3. A bundled
+   dependency (cryptography, via `markitdown[pdf]`) dropped Intel macOS wheels
+   at the same release that fixed its security advisories, so a self-contained
+   Intel app can no longer be built without shipping a vulnerable version.
+   Intel users should install via `pip install "nampara-librarian[all]"` or run
+   the Docker image — both stay patched.
 2. Open the DMG and drag **Librarian** into **Applications**.
 3. Launch Librarian and drop a file anywhere in the window.
 
@@ -166,14 +172,17 @@ make dmg                # dist/Librarian.dmg
 `make bundled-app` accepts `WHEEL=...` (wheel path or PyPI requirement),
 `BUNDLE_ARCH=arm64|x86_64`, and `IDENTITY="Developer ID Application: ..."` for
 real signing. The bundled Python version is pinned in
-`scripts/bundle_backend.sh`.
+`scripts/bundle_backend.sh`. (`BUNDLE_ARCH=x86_64` still works for local Intel
+builds, but note that some pinned dependencies no longer publish Intel macOS
+wheels, so such a build may not resolve against the release constraints.)
 
 ## Release pipeline (CI)
 
-`.github/workflows/macapp.yml` builds both DMGs on a macOS runner for every
-`v*` tag (and on demand via workflow dispatch) and attaches them to the GitHub
-release as `Librarian-AppleSilicon.dmg` and `Librarian-Intel.dmg` — which is
-what the stable `releases/latest/download/...` links point at.
+`.github/workflows/macapp.yml` builds the Apple Silicon DMG on a macOS runner
+for every `v*` tag (and on demand via workflow dispatch) and attaches it to the
+GitHub release as `Librarian-AppleSilicon.dmg` — which is what the stable
+`releases/latest/download/...` link points at. (The Intel DMG was dropped in
+v1.8.3; see the Install section above.)
 
 Builds are ad-hoc signed by default. To ship notarized builds that open with
 zero Gatekeeper friction, add these repository secrets (requires an Apple

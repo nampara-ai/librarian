@@ -129,7 +129,6 @@ jobs:
             sleep 30
           done
           test -f dmgs/Librarian-AppleSilicon/Librarian-AppleSilicon.dmg
-          test -f dmgs/Librarian-Intel/Librarian-Intel.dmg
       - name: Verify DMG app version matches tag
         run: |
           # Mirror the tag-vs-package check for the built macOS app: mount each
@@ -142,8 +141,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends p7zip-full
           EXPECTED="${GITHUB_REF_NAME#v}"
-          for dmg in dmgs/Librarian-AppleSilicon/Librarian-AppleSilicon.dmg \
-                     dmgs/Librarian-Intel/Librarian-Intel.dmg; do
+          for dmg in dmgs/Librarian-AppleSilicon/Librarian-AppleSilicon.dmg; do
             workdir="$(mktemp -d)"
             # Extract the app's Info.plist out of the DMG (UDZO -> HFS payload).
             7z x -y -o"$workdir" "$dmg" >/dev/null
@@ -261,7 +259,6 @@ jobs:
           gh release create "${{ github.ref_name }}" \
             dist/* sbom.json constraints.txt SHA256SUMS.txt \
             dmgs/Librarian-AppleSilicon/Librarian-AppleSilicon.dmg \
-            dmgs/Librarian-Intel/Librarian-Intel.dmg \
             --repo "${{ github.repository }}" \
             --title "${{ github.ref_name }}" \
             --notes-file release-notes.md \
