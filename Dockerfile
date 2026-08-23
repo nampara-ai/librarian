@@ -29,12 +29,20 @@ COPY src ./src
 # src to build the package, but keeping pip upgrade + the install here (after the
 # dependency files are in place) lets Docker reuse the layer across source-only
 # changes that leave pyproject.toml/constraints.txt untouched.
-RUN python -m pip install --no-cache-dir --upgrade pip \
+RUN python -m pip install --no-cache-dir --upgrade pip setuptools \
     && if [ -f constraints.txt ]; then \
          python -m pip install --no-cache-dir -c constraints.txt ".[all]"; \
        else \
          python -m pip install --no-cache-dir ".[all]"; \
-       fi
+       fi \
+    # Harden the runtime image: it runs `librarian api` and never installs
+    # packages again. Remove pip afterwards so its vendored msgpack copy
+    # (bundled for pip's own HTTP cache, pinned at 1.1.2 —
+    # GHSA-6v7p-g79w-8964) is not shipped in the image; the application's own
+    # msgpack dependency is separately resolved to a fixed version. setuptools
+    # is upgraded in place (>=78.1.1, clearing CVE-2025-47273) rather than
+    # removed, because some dependencies still import pkg_resources at runtime.
+    && python -m pip uninstall -y pip
 
 USER librarian
 VOLUME ["/data"]
