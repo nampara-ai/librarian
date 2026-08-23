@@ -21,7 +21,7 @@ own machine.
 > exportable library. The extractor is best-in-class; the **clean-up and organization are what make
 > it Librarian**.
 
-Version `1.8.2` is the stable production release. Everything runs locally by default — source files
+Version `1.8.3` is the stable production release. Everything runs locally by default — source files
 and generated outputs live in a SQLite-backed workspace on your disk, and text leaves your machine
 only when *you* point cleaning, classification, or OCR-correction at an external model provider.
 
@@ -44,10 +44,13 @@ All three run the **same engine** and the **same local SQLite library**.
 ### The Mac app (no terminal, nothing to set up)
 
 1. Download [**Librarian-AppleSilicon.dmg**](https://github.com/nampara-ai/librarian/releases/latest/download/Librarian-AppleSilicon.dmg)
-   (M-series) or [**Librarian-Intel.dmg**](https://github.com/nampara-ai/librarian/releases/latest/download/Librarian-Intel.dmg)
-   (Intel). If a direct link doesn't resolve, grab the DMG from the [latest release](https://github.com/nampara-ai/librarian/releases/latest) assets.
+   (Apple Silicon — M-series). If a direct link doesn't resolve, grab the DMG from the [latest release](https://github.com/nampara-ai/librarian/releases/latest) assets.
 2. Open the DMG and drag **Librarian** to **Applications**. First launch: right-click → **Open** once to clear Gatekeeper.
 3. Drop files anywhere in the window.
+
+> **Intel Macs:** the native app is Apple Silicon only — a security-patched
+> self-contained Intel build is no longer possible (a bundled dependency
+> dropped Intel macOS wheels). Install via `pip` or Docker below instead.
 
 The app bundles the high-fidelity extraction engine **and** its OCR — scanned PDFs are read fully
 offline, no Homebrew, no `PATH` setup, no first-run downloads. See [apps/macos](apps/macos/README.md)
@@ -61,7 +64,7 @@ pip install "nampara-librarian[all]"      # [all] pulls every optional capabilit
 librarian doctor                          # confirm what's available
 ```
 
-> From a release wheel: `pip install "nampara_librarian-1.8.2-py3-none-any.whl[all]"` ·
+> From a release wheel: `pip install "nampara_librarian-1.8.3-py3-none-any.whl[all]"` ·
 > From a checkout: `pip install -e ".[dev,all]"`
 
 ---

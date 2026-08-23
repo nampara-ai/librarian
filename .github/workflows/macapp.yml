@@ -31,16 +31,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Both DMGs build on plentiful Apple Silicon runners. The arm64
-          # binaries come from the native Homebrew; the x86_64 binaries come
-          # from an x86_64 Homebrew installed under Rosetta, so releases never
-          # wait on (increasingly scarce) native Intel runners.
+          # Apple Silicon only. We used to also cross-build an Intel (x86_64)
+          # DMG under Rosetta, but cryptography (pulled in by markitdown[pdf]
+          # via pdfminer-six) dropped Intel macOS wheels at 49.0.0 — the same
+          # release that fixed the CVEs the bundle must ship. A self-contained
+          # Intel app therefore can't be built from prebuilt wheels without
+          # shipping a vulnerable cryptography, so we no longer publish it.
+          # Intel Mac users install via pip or Docker, which stay patched.
           - arch: arm64
             artifact: Librarian-AppleSilicon
             brew_prefix: /opt/homebrew
-          - arch: x86_64
-            artifact: Librarian-Intel
-            brew_prefix: /usr/local
     steps:
       - uses: actions/checkout@v7
         with:
@@ -61,10 +61,6 @@ jobs:
         # pinned/reproducible rather than resolved to latest at build time.
         run: python .github/scripts/export_constraints.py --output constraints.txt
 
-      - name: Ensure Rosetta 2 (x86_64 build on Apple Silicon)
-        if: matrix.arch == 'x86_64'
-        run: sudo softwareupdate --install-rosetta --agree-to-license
-
       - name: Build app bundle
         working-directory: apps/macos
         run: make app ARCH_FLAGS="--arch ${{ matrix.arch }}"
@@ -79,28 +75,7 @@ jobs:
             --constraints ../../constraints.txt
 
       - name: Install OCR tools (arm64 native Homebrew)
-        if: matrix.arch == 'arm64'
         run: brew install tesseract poppler dylibbundler
-
-      - name: Install OCR tools (x86_64 Homebrew under Rosetta)
-        if: matrix.arch == 'x86_64'
-        run: |
-          # Bootstrap an x86_64 Homebrew at /usr/local (the installer picks the
-          # prefix from the running architecture, so run it under Rosetta), then
-          # install the Intel OCR binaries there.
-          # Pin the Homebrew installer to an immutable commit SHA instead of the
-          # moving HEAD ref, so a compromised or changed upstream install.sh
-          # cannot be pulled into the build. Pinned to Homebrew/install commit
-          # 184a7bce ("Fix DNF group advice", 2026-06-21); the script at this
-          # SHA was fetched and reviewed before pinning. To bump:
-          #   gh api 'repos/Homebrew/install/commits?path=install.sh&per_page=1' --jq '.[0].sha'
-          # then re-review the fetched script before updating the value.
-          HOMEBREW_INSTALL_SHA="184a7bce1569b711ecb5451f5e9a3d30cb444242"
-          if [ ! -x /usr/local/bin/brew ]; then
-            NONINTERACTIVE=1 arch -x86_64 /bin/bash -c \
-              "$(curl -fsSL "https://raw.githubusercontent.com/Homebrew/install/${HOMEBREW_INSTALL_SHA}/install.sh")" </dev/null
-          fi
-          arch -x86_64 /usr/local/bin/brew install tesseract poppler dylibbundler
 
       - name: Bundle OCR tools
         working-directory: apps/macos
@@ -166,9 +141,8 @@ jobs:
       - name: Verify bundled runtime can reach AI providers
         working-directory: apps/macos
         run: |
-          # The x86_64 interpreter runs under Rosetta here, same as during
-          # bundling. A 401 proves DNS, TCP, and TLS all work from the
-          # bundled runtime; certificate failures or timeouts fail the build.
+          # A 401 proves DNS, TCP, and TLS all work from the bundled runtime;
+          # certificate failures or timeouts fail the build.
           PY="dist/Librarian.app/Contents/Resources/backend/python/bin/python3"
           "$PY" <<'CHECK'
           import urllib.error

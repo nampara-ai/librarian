@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.8.3 - 2026-08-23
+
+Dependency security patch plus a figure-vision fix.
+
+- Fix figure-vision enrichment silently doing nothing with liteparse 2.2.x. liteparse emits image
+  placeholders as `![](img_p1_1.png)` at runtime, but Librarian only looked for the older
+  `![](image_...)` form (liteparse's own type docstring still shows the old form), so no placeholder
+  ever matched and no figure was described even with `LIBRARIAN_FIGURE_VISION_ENABLED=true`.
+  Enrichment now matches either form, so a future placeholder-format shift can't disable it again.
+- Ship the pinned dependency security updates that missed the 1.8.2 cut. 1.8.2 was tagged before
+  these bumps merged, so its bundled runtime (macOS app + Docker image) still pinned the vulnerable
+  versions. 1.8.3 releases from current `main`, so the fixes are in the bundle:
+  - **pillow 12.2.0 → 12.3.0** — resolves 12 advisories (PYSEC-2026-2253/2254/2255/2256,
+    3451–3454, 3493–3496).
+  - **cryptography 48.0.1 → 50.0.0** — resolves 3 advisories (PYSEC-2026-3552/3553/3554).
+- `pip install`/source users on 1.8.2 already resolved the fixed versions via the `>=` ranges; this
+  release matters most for the pinned macOS app and Docker bundles.
+- **The native macOS app is now Apple Silicon only; the Intel (x86_64) DMG is discontinued.**
+  cryptography (pulled in by `markitdown[pdf]` via pdfminer-six) dropped Intel macOS wheels at
+  49.0.0 — the same release that fixed the advisories above — so a self-contained, security-patched
+  Intel app can no longer be built from prebuilt wheels. Intel Mac users should install with
+  `pip install "nampara-librarian[all]"` or run the Docker image; both stay patched.
+
 ## 1.8.2 - 2026-07-20
 
 macOS app fix — **no engine or Python changes**.

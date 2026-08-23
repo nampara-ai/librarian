@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Any, cast
 
 import httpx
 import openai
@@ -10,21 +10,33 @@ from librarian.llm.openai_compatible import OpenAICompatibleProvider, is_retriab
 from librarian.observability import MetricsRecorder
 
 
+# openai's exception constructors are type-stubbed against httpx2, while the
+# tests build real httpx objects; the httpx/httpx2 split otherwise trips
+# pyright on every dependency bump (CI resolves latest). Typing these as Any
+# keeps pyright stable while runtime still uses genuine httpx objects.
+def _fake_request() -> Any:
+    return httpx.Request("POST", "https://api.example.test")
+
+
+def _fake_response(status_code: int, request: Any) -> Any:
+    return httpx.Response(status_code, request=request)
+
+
 def test_openai_retry_classification() -> None:
-    request = httpx.Request("POST", "https://api.example.test")
+    request = _fake_request()
     assert is_retriable_openai_error(openai.APITimeoutError(request))
     assert is_retriable_openai_error(openai.APIConnectionError(request=request))
     assert is_retriable_openai_error(
         openai.RateLimitError(
             "rate limited",
-            response=httpx.Response(429, request=request),
+            response=_fake_response(429, request),
             body=None,
         )
     )
     assert is_retriable_openai_error(
         openai.APIStatusError(
             "server failed",
-            response=httpx.Response(503, request=request),
+            response=_fake_response(503, request),
             body=None,
         )
     )
@@ -32,14 +44,14 @@ def test_openai_retry_classification() -> None:
     assert not is_retriable_openai_error(
         openai.BadRequestError(
             "bad request",
-            response=httpx.Response(400, request=request),
+            response=_fake_response(400, request),
             body=None,
         )
     )
     assert not is_retriable_openai_error(
         openai.AuthenticationError(
             "bad auth",
-            response=httpx.Response(401, request=request),
+            response=_fake_response(401, request),
             body=None,
         )
     )
@@ -59,7 +71,7 @@ def test_openai_provider_fast_fails_when_api_key_missing(monkeypatch: pytest.Mon
 
 @pytest.mark.asyncio
 async def test_openai_provider_retries_transient_errors(monkeypatch: pytest.MonkeyPatch) -> None:
-    request = httpx.Request("POST", "https://api.example.test")
+    request = _fake_request()
     calls = 0
 
     class FakeChoice:
@@ -80,7 +92,7 @@ async def test_openai_provider_retries_transient_errors(monkeypatch: pytest.Monk
             if calls == 1:
                 raise openai.RateLimitError(
                     "rate limited",
-                    response=httpx.Response(429, request=request),
+                    response=_fake_response(429, request),
                     body=None,
                 )
             return FakeCompletion()
@@ -123,14 +135,14 @@ async def test_openai_provider_retries_transient_errors(monkeypatch: pytest.Monk
 async def test_openai_provider_redacts_non_retriable_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    request = httpx.Request("POST", "https://api.example.test")
+    request = _fake_request()
 
     class FakeCompletions:
         async def create(self, **kwargs: object) -> object:
             del kwargs
             raise openai.AuthenticationError(
                 "bad auth api_key=abc123 sk-testSECRET123",
-                response=httpx.Response(401, request=request),
+                response=_fake_response(401, request),
                 body=None,
             )
 
@@ -174,14 +186,14 @@ async def test_openai_provider_redacts_non_retriable_errors(
 async def test_openai_provider_redacts_retry_exhaustion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    request = httpx.Request("POST", "https://api.example.test")
+    request = _fake_request()
 
     class FakeCompletions:
         async def create(self, **kwargs: object) -> object:
             del kwargs
             raise openai.RateLimitError(
                 "rate limited token=abc123 sk-testSECRET123",
-                response=httpx.Response(429, request=request),
+                response=_fake_response(429, request),
                 body=None,
             )
 

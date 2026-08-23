@@ -828,9 +828,27 @@ class FigureImage:
     data: bytes
 
     @property
-    def placeholder(self) -> str:
-        """The markdown placeholder liteparse emits for this image."""
-        return f"![](image_{self.id}.png)"
+    def placeholder_candidates(self) -> tuple[str, ...]:
+        """Markdown image references liteparse may emit for this image.
+
+        liteparse 2.2.x emits ``![](img_{id}.png)`` at runtime, while its own
+        type docstring still shows the older ``![](image_{id}.png)`` form.
+        Match either so a liteparse placeholder-format shift can't silently
+        disable figure enrichment again (it already regressed once, matching
+        only ``image_`` while the engine emitted ``img_``).
+        """
+        return (f"![](img_{self.id}.png)", f"![](image_{self.id}.png)")
+
+    def find_placeholder(self, markdown: str) -> str | None:
+        """Return this image's placeholder exactly as it appears in ``markdown``.
+
+        Returns ``None`` when no known placeholder form is present, so the
+        caller skips an image liteparse did not actually reference.
+        """
+        for candidate in self.placeholder_candidates:
+            if candidate in markdown:
+                return candidate
+        return None
 
 
 _FIGURE_MEDIA_TYPES = {
@@ -876,14 +894,15 @@ async def enrich_markdown_figures(
     # placeholder, keep the first so the replace(count=1) loop can't append the
     # second figure's description into the first figure's (now re-introduced)
     # placeholder text.
-    eligible: list[FigureImage] = []
+    eligible: list[tuple[FigureImage, str]] = []
     seen_placeholders: set[str] = set()
     for figure in figures:
-        if figure.placeholder in seen_placeholders:
+        placeholder = figure.find_placeholder(markdown)
+        if placeholder is None or placeholder in seen_placeholders:
             continue
-        if figure.placeholder in markdown and min_bytes <= len(figure.data) <= max_bytes:
-            eligible.append(figure)
-            seen_placeholders.add(figure.placeholder)
+        if min_bytes <= len(figure.data) <= max_bytes:
+            eligible.append((figure, placeholder))
+            seen_placeholders.add(placeholder)
         if len(eligible) >= max_figures:
             break
     if not eligible:
@@ -898,7 +917,9 @@ async def enrich_markdown_figures(
     vision_max_tokens = min(_MAX_FIGURE_VISION_TOKENS, max(256, math.ceil(max_response_chars / 3)))
     semaphore = asyncio.Semaphore(max(1, max_concurrency))
 
-    async def describe(figure: FigureImage) -> tuple[FigureImage, str | None]:
+    async def describe(
+        figure: FigureImage, placeholder: str
+    ) -> tuple[FigureImage, str, str | None]:
         async with semaphore:
             try:
                 description = await provider.describe_image(
@@ -911,18 +932,20 @@ async def enrich_markdown_figures(
                     temperature=temperature,
                 )
             except Exception:  # noqa: BLE001 - one figure must not fail the document
-                return figure, None
-        return figure, description.strip()[:max_response_chars] or None
+                return figure, placeholder, None
+        return figure, placeholder, description.strip()[:max_response_chars] or None
 
-    described = await asyncio.gather(*(describe(figure) for figure in eligible))
+    described = await asyncio.gather(
+        *(describe(figure, placeholder) for figure, placeholder in eligible)
+    )
 
     enriched = markdown
     count = 0
-    for figure, description in described:
+    for figure, placeholder, description in described:
         if not description:
             continue
-        block = f"{figure.placeholder}\n\n**Figure (page {figure.page}):** {description}"
-        enriched = enriched.replace(figure.placeholder, block, 1)
+        block = f"{placeholder}\n\n**Figure (page {figure.page}):** {description}"
+        enriched = enriched.replace(placeholder, block, 1)
         count += 1
     return enriched, count
 
