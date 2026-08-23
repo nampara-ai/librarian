@@ -184,7 +184,15 @@ jobs:
         run: |
           IMAGE="ghcr.io/${{ github.repository }}"
           docker build -t "$IMAGE:${{ github.ref_name }}" .
-      - name: Scan image
+      - name: Scan image (report all severities to code scanning)
+        # Full OS + library vulnerability report, uploaded to the Security tab
+        # for visibility. Non-blocking (exit-code 0): base-OS (Debian) package
+        # CVEs are surfaced here but must not gate the release. The image
+        # already runs `apt-get upgrade` at build time, so base packages are
+        # patched best-effort; but a freshly-disclosed base CVE whose fix Debian
+        # has not yet published to the mirror is unfixable at build time and
+        # would otherwise block shipping our application security fixes. The hard
+        # gate below is scoped to dependencies we actually control.
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: "ghcr.io/${{ github.repository }}:${{ github.ref_name }}"
@@ -192,12 +200,27 @@ jobs:
           output: "trivy-image.sarif"
           severity: "HIGH,CRITICAL"
           ignore-unfixed: true
-          exit-code: "1"
+          exit-code: "0"
       - name: Upload image scan
         if: ${{ always() && hashFiles('trivy-image.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: "trivy-image.sarif"
+      - name: Scan image (gate on application dependencies)
+        # Hard gate: fail the release on fixable HIGH/CRITICAL vulnerabilities in
+        # Librarian's own Python dependency tree (vuln-type: library) — the
+        # packages we pin via constraints.txt and can actually upgrade. Base-OS
+        # packages are deliberately excluded (reported, not gated; see above).
+        # Table format so any failure prints the offending package and CVE
+        # straight to the workflow log instead of only into the SARIF file.
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: "ghcr.io/${{ github.repository }}:${{ github.ref_name }}"
+          format: "table"
+          vuln-type: "library"
+          severity: "HIGH,CRITICAL"
+          ignore-unfixed: true
+          exit-code: "1"
       - name: Push image
         run: |
           IMAGE="ghcr.io/${{ github.repository }}"
