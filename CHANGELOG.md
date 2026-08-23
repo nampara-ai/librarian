@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.8.3 - 2026-08-23
+
+Dependency security patch — **no engine or Python code changes**.
+
+- Ship the pinned dependency security updates that missed the 1.8.2 cut. 1.8.2 was tagged before
+  these bumps merged, so its bundled runtime (macOS app + Docker image) still pinned the vulnerable
+  versions. 1.8.3 releases from current `main`, so the fixes are in the bundle:
+  - **pillow 12.2.0 → 12.3.0** — resolves 12 advisories (PYSEC-2026-2253/2254/2255/2256,
+    3451–3454, 3493–3496).
+  - **cryptography 48.0.1 → 50.0.0** — resolves 3 advisories (PYSEC-2026-3552/3553/3554).
+- `pip install`/source users on 1.8.2 already resolved the fixed versions via the `>=` ranges; this
+  release matters most for the pinned macOS app and Docker bundles.
+
 ## 1.8.2 - 2026-07-20
 
 macOS app fix — **no engine or Python changes**.

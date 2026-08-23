@@ -1048,7 +1048,7 @@ wheels = [
 
 [[package]]
 name = "nampara-librarian"
-version = "1.8.2"
+version = "1.8.3"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
