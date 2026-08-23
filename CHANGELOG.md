@@ -2,8 +2,13 @@
 
 ## 1.8.3 - 2026-08-23
 
-Dependency security patch — **no engine or Python code changes**.
+Dependency security patch plus a figure-vision fix.
 
+- Fix figure-vision enrichment silently doing nothing with liteparse 2.2.x. liteparse emits image
+  placeholders as `![](img_p1_1.png)` at runtime, but Librarian only looked for the older
+  `![](image_...)` form (liteparse's own type docstring still shows the old form), so no placeholder
+  ever matched and no figure was described even with `LIBRARIAN_FIGURE_VISION_ENABLED=true`.
+  Enrichment now matches either form, so a future placeholder-format shift can't disable it again.
 - Ship the pinned dependency security updates that missed the 1.8.2 cut. 1.8.2 was tagged before
   these bumps merged, so its bundled runtime (macOS app + Docker image) still pinned the vulnerable
   versions. 1.8.3 releases from current `main`, so the fixes are in the bundle:

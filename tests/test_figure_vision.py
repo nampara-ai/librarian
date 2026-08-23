@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import re
 import zlib
 from pathlib import Path
 
@@ -150,8 +151,17 @@ def test_figure_media_type_mapping() -> None:
     assert figure_media_type("tiff") == "image/png"  # unknown -> default png
 
 
-def test_figure_image_placeholder_property() -> None:
-    assert _fig("p3_1", 3, 10).placeholder == "![](image_p3_1.png)"
+def test_figure_image_placeholder_matching() -> None:
+    fig = _fig("p3_1", 3, 10)
+    # Both liteparse forms are candidates (runtime img_, docstring image_).
+    assert fig.placeholder_candidates == (
+        "![](img_p3_1.png)",
+        "![](image_p3_1.png)",
+    )
+    # find_placeholder returns whichever form is actually present.
+    assert fig.find_placeholder("a ![](img_p3_1.png) b") == "![](img_p3_1.png)"
+    assert fig.find_placeholder("a ![](image_p3_1.png) b") == "![](image_p3_1.png)"
+    assert fig.find_placeholder("no image here") is None
 
 
 @pytest.mark.asyncio
@@ -250,7 +260,10 @@ def test_liteparse_extractor_without_vision_leaves_placeholder(tmp_path: Path) -
     markdown = asyncio.run(extractor.extract(source))
 
     assert "**Figure (page" not in markdown
-    assert "![](image_" in markdown  # placeholder retained, unenriched
+    # Placeholder retained, unenriched. Match liteparse's real runtime form
+    # (img_) or its docstring form (image_) so this doesn't re-break on a
+    # placeholder-format shift.
+    assert re.search(r"!\[\]\(img(?:age)?_p\d+_\d+\.png\)", markdown)
 
 
 @requires_liteparse
