@@ -54,10 +54,21 @@ to Applications, double-click, done.
 
 macOS 14 (Sonoma) or newer is required.
 
-**First launch on an unsigned build:** macOS Gatekeeper will warn about an
-unidentified developer. Right-click the app → **Open** → **Open**, or allow it
-under **System Settings → Privacy & Security → Open Anyway**. Notarized
-releases (built with a Developer ID, see below) open without any warning.
+**First launch on an ad-hoc-signed build:** release DMGs built without a
+Developer ID certificate are *ad-hoc* signed. macOS Gatekeeper rejects an
+ad-hoc-signed app that carries the browser's quarantine flag with the message
+*"Librarian" is damaged and can't be opened* — the app is not actually damaged
+(CI boots the exact signed bundle before it ships). Because it reports
+"damaged" rather than "unidentified developer", neither right-click → **Open**
+nor **System Settings → Privacy & Security → Open Anyway** is offered. Clear
+the quarantine flag once, then launch normally:
+
+```bash
+xattr -cr /Applications/Librarian.app
+```
+
+Notarized releases (built with a Developer ID, see below) open without any
+warning and need none of this.
 
 ## How it works
 

@@ -45,8 +45,15 @@ All three run the **same engine** and the **same local SQLite library**.
 
 1. Download [**Librarian-AppleSilicon.dmg**](https://github.com/nampara-ai/librarian/releases/latest/download/Librarian-AppleSilicon.dmg)
    (Apple Silicon — M-series). If a direct link doesn't resolve, grab the DMG from the [latest release](https://github.com/nampara-ai/librarian/releases/latest) assets.
-2. Open the DMG and drag **Librarian** to **Applications**. First launch: right-click → **Open** once to clear Gatekeeper.
-3. Drop files anywhere in the window.
+2. Open the DMG and drag **Librarian** to **Applications**.
+3. **First launch — one-time step.** Current builds aren't yet notarized, so macOS will claim
+   *"Librarian" is damaged and can't be opened* — it isn't; that's Gatekeeper reacting to an
+   unnotarized download (the old right-click → Open trick does not clear this one). Run this once
+   in Terminal, then open the app normally:
+   ```bash
+   xattr -cr /Applications/Librarian.app
+   ```
+4. Drop files anywhere in the window.
 
 > **Intel Macs:** the native app is Apple Silicon only — a security-patched
 > self-contained Intel build is no longer possible (a bundled dependency
