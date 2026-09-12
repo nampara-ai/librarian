@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Fix every LLM request failing against current OpenAI models — `Unsupported parameter:
+  'max_tokens'` (GPT-5.x, GPT-6, o-series) and `Unsupported value: 'temperature'` (reasoning
+  models) — which surfaced in the Mac app as "Couldn't process this file" on every chunk. The
+  OpenAI-compatible provider now negotiates the request dialect per model: it starts with the
+  classic `max_tokens`/`temperature` form (still the only form Ollama, LM Studio, DeepSeek and older
+  gateways accept), switches to `max_completion_tokens` and/or drops `temperature` when the server
+  rejects them, and remembers the result so a run of many chunks pays at most one extra round-trip
+  per parameter rather than one per chunk. Applies to every provider preset (Anthropic, OpenAI,
+  DeepSeek, Ollama, LM Studio, Custom), all of which route through this provider.
+
 ## 1.8.3 - 2026-08-23
 
 Dependency security patch plus a figure-vision fix.

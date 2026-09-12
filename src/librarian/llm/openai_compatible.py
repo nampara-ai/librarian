@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import os
 import random
+import re
+from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
 from openai import (
@@ -38,6 +40,59 @@ def _content_or_raise(response: ChatCompletion) -> str:
             "increase max_tokens (LIBRARIAN_LLM_MAX_OUTPUT_TOKENS)"
         )
     return choice.message.content or ""
+
+
+@dataclass(slots=True)
+class ModelParamPrefs:
+    """Request-parameter dialect learned from the server, per model.
+
+    Newer OpenAI models reject ``max_tokens`` and require
+    ``max_completion_tokens``; reasoning models (o-series, GPT-5+) additionally
+    reject any non-default ``temperature``. Other OpenAI-compatible servers
+    (Ollama, LM Studio, DeepSeek, older gateways) accept only the classic
+    parameters. Rather than hardcode either dialect, start with the classic
+    form and adapt when a 400 names the offending parameter, remembering the
+    result per model so a run of many chunks pays at most one extra round-trip
+    per parameter instead of one per chunk.
+    """
+
+    use_max_completion_tokens: bool = False
+    omit_temperature: bool = False
+
+
+_UNSUPPORTED_HINT = re.compile(r"unsupported|not supported|does not support", re.I)
+_MAX_TOKENS_HINT = re.compile(r"max_completion_tokens|max_tokens", re.I)
+_TEMPERATURE_HINT = re.compile(r"\btemperature\b", re.I)
+
+
+def unsupported_parameter(exc: Exception) -> str | None:
+    """Return ``"max_tokens"`` or ``"temperature"`` when a 400 rejects that parameter.
+
+    Prefers the structured ``param`` field the OpenAI API sets; falls back to
+    the error message for compatible servers that omit it, but only when the
+    message actually says the parameter is unsupported, so an unrelated 400
+    that merely mentions the word is never mistaken for a dialect mismatch.
+    """
+    if not isinstance(exc, APIStatusError) or int(exc.status_code) != 400:
+        return None
+    param = getattr(exc, "param", None)
+    if param == "max_tokens":
+        return "max_tokens"
+    if param == "temperature":
+        return "temperature"
+    if param is not None:
+        return None
+    body = getattr(exc, "body", None)
+    message = str(exc)
+    if isinstance(body, dict):
+        message = f"{message} {body.get('message', '')}"
+    if not _UNSUPPORTED_HINT.search(message):
+        return None
+    if _MAX_TOKENS_HINT.search(message):
+        return "max_tokens"
+    if _TEMPERATURE_HINT.search(message):
+        return "temperature"
+    return None
 
 
 class LLMUsageMetrics(Protocol):
@@ -86,6 +141,8 @@ class OpenAICompatibleProvider:
         self._metrics = metrics
         self._prompt_cost_per_1k_tokens_usd = prompt_cost_per_1k_tokens_usd
         self._completion_cost_per_1k_tokens_usd = completion_cost_per_1k_tokens_usd
+        # Parameter dialect learned per model (see ModelParamPrefs).
+        self._param_prefs: dict[str, ModelParamPrefs] = {}
 
     async def complete(
         self,
@@ -144,6 +201,24 @@ class OpenAICompatibleProvider:
         self._record_usage(response, model=model)
         return _content_or_raise(response)
 
+    def _request_kwargs(
+        self,
+        *,
+        prefs: ModelParamPrefs,
+        messages: list[Any],
+        model: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {"model": model, "messages": cast("Any", messages)}
+        if prefs.use_max_completion_tokens:
+            kwargs["max_completion_tokens"] = max_tokens
+        else:
+            kwargs["max_tokens"] = max_tokens
+        if not prefs.omit_temperature:
+            kwargs["temperature"] = temperature
+        return kwargs
+
     async def _chat_with_retries(
         self,
         *,
@@ -152,25 +227,48 @@ class OpenAICompatibleProvider:
         max_tokens: int,
         temperature: float,
     ) -> ChatCompletion:
-        last_error: Exception | None = None
-        for attempt in range(self._max_retries + 1):
+        prefs = self._param_prefs.setdefault(model, ModelParamPrefs())
+        # One adaptation per parameter at most; a dialect mismatch is resolved
+        # by resending immediately (no backoff, no transient-retry budget
+        # consumed). Anything the server still rejects afterwards is a genuine
+        # request error and surfaces as such.
+        max_adaptations = 2
+        adaptations = 0
+        attempt = 0
+        while True:
+            kwargs = self._request_kwargs(
+                prefs=prefs,
+                messages=messages,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
             try:
-                return await self._client.chat.completions.create(
-                    model=model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    messages=cast("Any", messages),
+                # Kwargs are assembled dynamically (dialect varies per model),
+                # which defeats the SDK's typed overloads; the API contract
+                # is still a ChatCompletion.
+                return cast(
+                    "ChatCompletion",
+                    await self._client.chat.completions.create(**kwargs),
                 )
             except Exception as exc:  # noqa: BLE001 - provider errors feed retry policy
+                rejected = unsupported_parameter(exc)
+                if adaptations < max_adaptations:
+                    if rejected == "max_tokens" and not prefs.use_max_completion_tokens:
+                        prefs.use_max_completion_tokens = True
+                        adaptations += 1
+                        continue
+                    if rejected == "temperature" and not prefs.omit_temperature:
+                        prefs.omit_temperature = True
+                        adaptations += 1
+                        continue
                 if not is_retriable_openai_error(exc):
                     raise RuntimeError(
                         f"LLM provider request failed: {sanitize_error_message(exc)}"
                     ) from None
-                last_error = exc
                 if attempt >= self._max_retries:
                     raise RuntimeError(
-                        "LLM provider request failed after retries: "
-                        f"{sanitize_error_message(exc)}"
+                        f"LLM provider request failed after retries: {sanitize_error_message(exc)}"
                     ) from None
                 delay = min(
                     self._retry_base_delay_seconds * (2**attempt),
@@ -178,13 +276,7 @@ class OpenAICompatibleProvider:
                 )
                 jitter = random.uniform(0, delay * 0.1)  # noqa: S311
                 await asyncio.sleep(delay + jitter)
-
-        if last_error is not None:
-            raise RuntimeError(
-                "LLM provider request failed after retries: "
-                f"{sanitize_error_message(last_error)}"
-            ) from None
-        raise RuntimeError("LLM completion failed without an exception")
+                attempt += 1
 
     def _record_usage(self, response: ChatCompletion, *, model: str) -> None:
         if self._metrics is None or response.usage is None:

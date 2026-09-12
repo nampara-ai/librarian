@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Any, cast
 
 import httpx
@@ -6,7 +7,11 @@ import pytest
 
 from librarian.config import Settings
 from librarian.llm import build_provider
-from librarian.llm.openai_compatible import OpenAICompatibleProvider, is_retriable_openai_error
+from librarian.llm.openai_compatible import (
+    OpenAICompatibleProvider,
+    is_retriable_openai_error,
+    unsupported_parameter,
+)
 from librarian.observability import MetricsRecorder
 
 
@@ -321,3 +326,261 @@ async def test_build_provider_rejects_oversized_prompts_before_provider_call() -
 
 async def _no_sleep(_: float) -> None:
     return None
+
+
+# --- request-dialect negotiation ---------------------------------------------
+#
+# Newer OpenAI models reject `max_tokens` (requiring `max_completion_tokens`)
+# and reasoning models reject any non-default `temperature`; other
+# OpenAI-compatible servers accept only the classic form. The provider must
+# adapt on a 400 that names the parameter and remember the answer per model.
+
+_MAX_TOKENS_MSG = (
+    "Unsupported parameter: 'max_tokens' is not supported with this model. "
+    "Use 'max_completion_tokens' instead."
+)
+_TEMPERATURE_MSG = (
+    "Unsupported value: 'temperature' does not support 0 with this model. "
+    "Only the default (1) value is supported."
+)
+
+
+def _bad_request(*, param: str | None, code: str, message: str) -> Any:
+    body = {"message": message, "type": "invalid_request_error", "param": param, "code": code}
+    return openai.BadRequestError(message, response=_fake_response(400, _fake_request()), body=body)
+
+
+def _install_scripted_client(
+    monkeypatch: pytest.MonkeyPatch,
+    script: Callable[[dict[str, Any]], None],
+) -> list[dict[str, Any]]:
+    """Fake AsyncOpenAI whose create() records its kwargs, then runs `script`.
+
+    `script(kwargs)` raises to fail that call or returns to succeed. The
+    returned list holds every kwargs dict sent, so tests can assert exactly
+    which parameters went over the wire on each attempt.
+    """
+    sent: list[dict[str, Any]] = []
+
+    class FakeChoice:
+        class Message:
+            content = "ok"
+
+        message = Message()
+
+    class FakeCompletion:
+        choices = [FakeChoice()]
+        usage = None
+
+    class FakeCompletions:
+        async def create(self, **kwargs: Any) -> Any:
+            sent.append(dict(kwargs))
+            script(kwargs)
+            return FakeCompletion()
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeClient:
+        chat = FakeChat()
+
+    def fake_async_openai(**kwargs: object) -> FakeClient:
+        del kwargs
+        return FakeClient()
+
+    monkeypatch.setenv("LIBRARIAN_TEST_API_KEY", "test")
+    monkeypatch.setattr("librarian.llm.openai_compatible.AsyncOpenAI", fake_async_openai)
+    monkeypatch.setattr("librarian.llm.openai_compatible.asyncio.sleep", _no_sleep)
+    return sent
+
+
+def _scripted_provider() -> OpenAICompatibleProvider:
+    return OpenAICompatibleProvider(
+        api_key_env="LIBRARIAN_TEST_API_KEY",
+        base_url=None,
+        timeout_seconds=1,
+        max_concurrency=1,
+        max_retries=0,
+    )
+
+
+async def _complete(provider: OpenAICompatibleProvider, model: str) -> str:
+    return await provider.complete(
+        system_prompt="system",
+        user_prompt="user",
+        model=model,
+        max_tokens=8,
+        temperature=0,
+    )
+
+
+def test_unsupported_parameter_classification() -> None:
+    # The structured `param` field the OpenAI API sets is authoritative.
+    assert (
+        unsupported_parameter(
+            _bad_request(param="max_tokens", code="unsupported_parameter", message=_MAX_TOKENS_MSG)
+        )
+        == "max_tokens"
+    )
+    assert (
+        unsupported_parameter(
+            _bad_request(param="temperature", code="unsupported_value", message=_TEMPERATURE_MSG)
+        )
+        == "temperature"
+    )
+    # Compatible servers that omit `param` are classified from the message...
+    assert (
+        unsupported_parameter(_bad_request(param=None, code="invalid", message=_MAX_TOKENS_MSG))
+        == "max_tokens"
+    )
+    assert (
+        unsupported_parameter(_bad_request(param=None, code="invalid", message=_TEMPERATURE_MSG))
+        == "temperature"
+    )
+    # ...but only when it actually says the parameter is unsupported: a 400
+    # that merely mentions max_tokens (a range error) must not trigger a
+    # dialect switch.
+    assert (
+        unsupported_parameter(
+            _bad_request(param=None, code="invalid", message="max_tokens must be at least 1")
+        )
+        is None
+    )
+    # A 400 naming an unrelated parameter is a genuine request error.
+    assert (
+        unsupported_parameter(
+            _bad_request(
+                param="model", code="model_not_found", message="The model `nope` does not exist"
+            )
+        )
+        is None
+    )
+    # Non-400 failures are never dialect mismatches.
+    assert (
+        unsupported_parameter(
+            openai.RateLimitError(
+                "rate limited", response=_fake_response(429, _fake_request()), body=None
+            )
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_adapts_max_tokens_to_max_completion_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def script(kwargs: dict[str, Any]) -> None:
+        if "max_tokens" in kwargs:
+            raise _bad_request(
+                param="max_tokens", code="unsupported_parameter", message=_MAX_TOKENS_MSG
+            )
+
+    sent = _install_scripted_client(monkeypatch, script)
+    provider = _scripted_provider()
+
+    assert await _complete(provider, "gpt-5") == "ok"
+
+    # First send used the classic parameter; the immediate resend switched.
+    assert "max_tokens" in sent[0] and "max_completion_tokens" not in sent[0]
+    assert sent[1]["max_completion_tokens"] == 8 and "max_tokens" not in sent[1]
+    assert len(sent) == 2
+
+    # The dialect is remembered: the next call goes straight to the accepted form.
+    assert await _complete(provider, "gpt-5") == "ok"
+    assert len(sent) == 3
+    assert sent[2]["max_completion_tokens"] == 8 and "max_tokens" not in sent[2]
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_omits_temperature_when_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def script(kwargs: dict[str, Any]) -> None:
+        if "temperature" in kwargs:
+            raise _bad_request(
+                param="temperature", code="unsupported_value", message=_TEMPERATURE_MSG
+            )
+
+    sent = _install_scripted_client(monkeypatch, script)
+    provider = _scripted_provider()
+
+    assert await _complete(provider, "o4-mini") == "ok"
+    assert "temperature" in sent[0]
+    assert "temperature" not in sent[1]
+    assert len(sent) == 2
+
+    assert await _complete(provider, "o4-mini") == "ok"
+    assert len(sent) == 3 and "temperature" not in sent[2]
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_adapts_both_params_for_reasoning_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A reasoning model rejects max_tokens first and, once that is fixed,
+    # temperature — the provider converges in two adaptations, no backoff.
+    def script(kwargs: dict[str, Any]) -> None:
+        if "max_tokens" in kwargs:
+            raise _bad_request(
+                param="max_tokens", code="unsupported_parameter", message=_MAX_TOKENS_MSG
+            )
+        if "temperature" in kwargs:
+            raise _bad_request(
+                param="temperature", code="unsupported_value", message=_TEMPERATURE_MSG
+            )
+
+    sent = _install_scripted_client(monkeypatch, script)
+    provider = _scripted_provider()
+
+    assert await _complete(provider, "gpt-5") == "ok"
+    assert len(sent) == 3
+    final = sent[2]
+    assert final["max_completion_tokens"] == 8
+    assert "max_tokens" not in final and "temperature" not in final
+
+    # Both learned: a follow-up is a single, correctly-shaped request.
+    assert await _complete(provider, "gpt-5") == "ok"
+    assert len(sent) == 4
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_does_not_adapt_unrelated_bad_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def script(kwargs: dict[str, Any]) -> None:
+        del kwargs
+        raise _bad_request(
+            param="model", code="model_not_found", message="The model `nope` does not exist"
+        )
+
+    sent = _install_scripted_client(monkeypatch, script)
+    provider = _scripted_provider()
+
+    with pytest.raises(RuntimeError, match="LLM provider request failed"):
+        await _complete(provider, "nope")
+    # No adaptation loop for a genuine request error: it fails fast on the
+    # first attempt exactly like any other non-retriable 400.
+    assert len(sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_param_adaptation_is_per_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def script(kwargs: dict[str, Any]) -> None:
+        if kwargs["model"] == "gpt-5" and "max_tokens" in kwargs:
+            raise _bad_request(
+                param="max_tokens", code="unsupported_parameter", message=_MAX_TOKENS_MSG
+            )
+
+    sent = _install_scripted_client(monkeypatch, script)
+    provider = _scripted_provider()
+
+    await _complete(provider, "gpt-5")
+    # gpt-5 learned the new dialect; an older model on the same provider must
+    # still receive the classic parameter it expects.
+    await _complete(provider, "gpt-4.1-mini")
+    last = sent[-1]
+    assert last["model"] == "gpt-4.1-mini"
+    assert "max_tokens" in last and "max_completion_tokens" not in last
