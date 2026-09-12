@@ -87,6 +87,11 @@ jobs:
 
       - name: Verify bundled OCR works end to end
         working-directory: apps/macos
+        env:
+          # Keep the bundled interpreter from writing __pycache__ into the
+          # bundle during checks; the bundle is sealed by signing below and
+          # must carry only what the build installed.
+          PYTHONDONTWRITEBYTECODE: "1"
         run: |
           # Exercise the exact production path — pdf2image (poppler) +
           # pytesseract (tesseract) + bundled tessdata + relocated dylibs —
@@ -140,6 +145,8 @@ jobs:
 
       - name: Verify bundled runtime can reach AI providers
         working-directory: apps/macos
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
         run: |
           # A 401 proves DNS, TCP, and TLS all work from the bundled runtime;
           # certificate failures or timeouts fail the build.
@@ -183,6 +190,15 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: \
             -s -k "$KEYCHAIN_PASSWORD" build.keychain
 
+      - name: Prune bytecode caches before sealing
+        working-directory: apps/macos
+        run: |
+          # bundle_backend.sh prunes the caches from its own smoke run, and the
+          # checks above run with PYTHONDONTWRITEBYTECODE, so this should find
+          # nothing — it is a safety net so the sealed bundle deterministically
+          # carries only what the build installed, whatever ran before signing.
+          find dist/Librarian.app/Contents/Resources/backend -type d -name "__pycache__" -prune -exec rm -rf {} +
+
       - name: Sign app (Developer ID)
         if: steps.signing.outputs.enabled == 'true'
         working-directory: apps/macos
@@ -197,6 +213,14 @@ jobs:
 
       - name: Verify the SIGNED app starts
         working-directory: apps/macos
+        env:
+          # The bundle is sealed at this point. Python must NOT write
+          # __pycache__ into it: any new file under Contents/Resources after
+          # sealing invalidates the code-signature resource seal, and Apple's
+          # notary then rejects the whole bundle as "Invalid". That is exactly
+          # what broke the first notarized build — this very step wrote 406
+          # .pyc files into the freshly sealed bundle.
+          PYTHONDONTWRITEBYTECODE: "1"
         run: |
           # Run the signed interpreter through the app's real startup import
           # chain (librarian -> pydantic -> pydantic_core native extension).
@@ -210,6 +234,15 @@ jobs:
           PY="dist/Librarian.app/Contents/Resources/backend/python/bin/python3"
           "$PY" -m librarian version
 
+      - name: Verify the sealed bundle was not modified by the smoke test
+        working-directory: apps/macos
+        run: |
+          # Guard against ANY post-signing mutation of the bundle (bytecode
+          # caches, temp files, ...). A strict deep verify fails right here
+          # with a clear "resources modified" message instead of surfacing
+          # minutes later as an opaque notarization "Invalid".
+          codesign --verify --deep --strict --verbose=2 dist/Librarian.app
+
       - name: Create DMG
         working-directory: apps/macos
         run: scripts/make_dmg.sh --app dist/Librarian.app --output "dist/${{ matrix.artifact }}.dmg"
@@ -222,12 +255,42 @@ jobs:
           TEAM_ID: ${{ secrets.MACOS_NOTARIZATION_TEAM_ID }}
           APP_PASSWORD: ${{ secrets.MACOS_NOTARIZATION_APP_PASSWORD }}
         run: |
-          xcrun notarytool submit "dist/${{ matrix.artifact }}.dmg" \
+          set -euo pipefail
+          DMG="dist/${{ matrix.artifact }}.dmg"
+          # Submit and wait, capturing the machine-readable result. Apple
+          # reports a rejection as a bare status of "Invalid" — the per-file
+          # reasons live in a separate log keyed by submission id — so on any
+          # non-Accepted status fetch and print that log. Without this a
+          # notarization failure in CI is undiagnosable except by re-running
+          # notarytool by hand with the credentials.
+          # --timeout bounds the wait: Apple's notary occasionally leaves a
+          # submission "In Progress" far longer than its usual few minutes,
+          # and without a bound the step silently burns the whole 60-minute
+          # job budget. On timeout notarytool exits non-zero with the
+          # submission id still recorded, so the log below shows Apple's
+          # status and the job fails fast enough to simply re-run.
+          xcrun notarytool submit "$DMG" \
             --apple-id "$APPLE_ID" \
             --team-id "$TEAM_ID" \
             --password "$APP_PASSWORD" \
-            --wait
-          xcrun stapler staple "dist/${{ matrix.artifact }}.dmg"
+            --wait --timeout 30m --output-format json > notarize-result.json || true
+          echo "notarytool result:"
+          cat notarize-result.json || true
+          echo
+          SUBMISSION_ID="$(jq -r '.id // "-"' notarize-result.json 2>/dev/null || echo "-")"
+          STATUS="$(jq -r '.status // "-"' notarize-result.json 2>/dev/null || echo "-")"
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "::error::Notarization status '$STATUS' (submission $SUBMISSION_ID)"
+            if [ "$SUBMISSION_ID" != "-" ]; then
+              echo "Apple notarization log (per-file issues):"
+              xcrun notarytool log "$SUBMISSION_ID" \
+                --apple-id "$APPLE_ID" \
+                --team-id "$TEAM_ID" \
+                --password "$APP_PASSWORD" || true
+            fi
+            exit 1
+          fi
+          xcrun stapler staple "$DMG"
 
       # Releases are immutable once published, so DMGs cannot be attached
       # after the fact. Tag builds publish the DMG as a workflow artifact;
