@@ -28,5 +28,20 @@ ln -s /Applications "$STAGING/Applications"
 
 mkdir -p "$(dirname "$OUTPUT")"
 rm -f "$OUTPUT"
-hdiutil create -volname "Librarian" -srcfolder "$STAGING" -ov -format UDZO "$OUTPUT"
+# hdiutil intermittently fails on CI runners with "create failed - Resource
+# busy" (a wedged diskimages-helper left over from an earlier mount). It is
+# transient, so retry a few times with a short pause instead of failing a
+# release build on a runner hiccup.
+for attempt in 1 2 3 4; do
+  if hdiutil create -volname "Librarian" -srcfolder "$STAGING" -ov -format UDZO "$OUTPUT"; then
+    break
+  fi
+  if [[ "$attempt" -eq 4 ]]; then
+    echo "hdiutil create failed after $attempt attempts" >&2
+    exit 1
+  fi
+  echo "hdiutil create failed (attempt $attempt); retrying in $((attempt * 5))s..." >&2
+  rm -f "$OUTPUT"
+  sleep $((attempt * 5))
+done
 echo "Created $OUTPUT"
