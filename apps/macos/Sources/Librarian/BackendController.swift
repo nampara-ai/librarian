@@ -304,6 +304,10 @@ final class BackendController: ObservableObject {
         // Lets the backend detect an orphaned launch (app gone) and exit.
         environment["LIBRARIAN_PARENT_PID"] = String(ProcessInfo.processInfo.processIdentifier)
         environment["PYTHONUNBUFFERED"] = "1"
+        // Never write __pycache__ into the app bundle at runtime: new files
+        // under Contents/Resources invalidate the code-signature resource seal
+        // of a signed/notarized app. (The Docker image sets the same.)
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
         // Provider API keys live in the Keychain, not on disk; hand them to
         // the backend through its environment.
         for (name, value) in ProviderCredentials.environmentOverlay() {
