@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **The macOS app is now signed with a Developer ID and notarized**, so it opens with no
+  Gatekeeper warning and no `xattr` workaround. Getting there fixed a real defect in the build:
+  the post-signing smoke test ran the bundled interpreter inside the freshly sealed bundle, and
+  Python wrote hundreds of `__pycache__` files into it, silently invalidating the code-signature
+  resource seal — harmless for ad-hoc builds, but Apple's notary rejects such a bundle as
+  "Invalid". The build now runs every in-bundle check with `PYTHONDONTWRITEBYTECODE`, prunes
+  bytecode caches immediately before sealing, and strictly re-verifies the seal after the smoke
+  test so any future post-signing mutation fails CI with a clear message. The app also sets
+  `PYTHONDONTWRITEBYTECODE` for the backend it launches, so a notarized bundle is not modified
+  on first run. A rejected notarization now prints Apple's per-file reasons in the CI log.
 - Fix every LLM request failing against current OpenAI models — `Unsupported parameter:
   'max_tokens'` (GPT-5.x, GPT-6, o-series) and `Unsupported value: 'temperature'` (reasoning
   models) — which surfaced in the Mac app as "Couldn't process this file" on every chunk. The
