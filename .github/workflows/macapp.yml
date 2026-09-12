@@ -263,11 +263,17 @@ jobs:
           # non-Accepted status fetch and print that log. Without this a
           # notarization failure in CI is undiagnosable except by re-running
           # notarytool by hand with the credentials.
+          # --timeout bounds the wait: Apple's notary occasionally leaves a
+          # submission "In Progress" far longer than its usual few minutes,
+          # and without a bound the step silently burns the whole 60-minute
+          # job budget. On timeout notarytool exits non-zero with the
+          # submission id still recorded, so the log below shows Apple's
+          # status and the job fails fast enough to simply re-run.
           xcrun notarytool submit "$DMG" \
             --apple-id "$APPLE_ID" \
             --team-id "$TEAM_ID" \
             --password "$APP_PASSWORD" \
-            --wait --output-format json > notarize-result.json || true
+            --wait --timeout 30m --output-format json > notarize-result.json || true
           echo "notarytool result:"
           cat notarize-result.json || true
           echo
