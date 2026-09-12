@@ -222,12 +222,36 @@ jobs:
           TEAM_ID: ${{ secrets.MACOS_NOTARIZATION_TEAM_ID }}
           APP_PASSWORD: ${{ secrets.MACOS_NOTARIZATION_APP_PASSWORD }}
         run: |
-          xcrun notarytool submit "dist/${{ matrix.artifact }}.dmg" \
+          set -euo pipefail
+          DMG="dist/${{ matrix.artifact }}.dmg"
+          # Submit and wait, capturing the machine-readable result. Apple
+          # reports a rejection as a bare status of "Invalid" — the per-file
+          # reasons live in a separate log keyed by submission id — so on any
+          # non-Accepted status fetch and print that log. Without this a
+          # notarization failure in CI is undiagnosable except by re-running
+          # notarytool by hand with the credentials.
+          xcrun notarytool submit "$DMG" \
             --apple-id "$APPLE_ID" \
             --team-id "$TEAM_ID" \
             --password "$APP_PASSWORD" \
-            --wait
-          xcrun stapler staple "dist/${{ matrix.artifact }}.dmg"
+            --wait --output-format json > notarize-result.json || true
+          echo "notarytool result:"
+          cat notarize-result.json || true
+          echo
+          SUBMISSION_ID="$(jq -r '.id // "-"' notarize-result.json 2>/dev/null || echo "-")"
+          STATUS="$(jq -r '.status // "-"' notarize-result.json 2>/dev/null || echo "-")"
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "::error::Notarization status '$STATUS' (submission $SUBMISSION_ID)"
+            if [ "$SUBMISSION_ID" != "-" ]; then
+              echo "Apple notarization log (per-file issues):"
+              xcrun notarytool log "$SUBMISSION_ID" \
+                --apple-id "$APPLE_ID" \
+                --team-id "$TEAM_ID" \
+                --password "$APP_PASSWORD" || true
+            fi
+            exit 1
+          fi
+          xcrun stapler staple "$DMG"
 
       # Releases are immutable once published, so DMGs cannot be attached
       # after the fact. Tag builds publish the DMG as a workflow artifact;
