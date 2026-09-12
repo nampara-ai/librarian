@@ -54,21 +54,21 @@ to Applications, double-click, done.
 
 macOS 14 (Sonoma) or newer is required.
 
-**First launch on an ad-hoc-signed build:** release DMGs built without a
-Developer ID certificate are *ad-hoc* signed. macOS Gatekeeper rejects an
-ad-hoc-signed app that carries the browser's quarantine flag with the message
-*"Librarian" is damaged and can't be opened* — the app is not actually damaged
-(CI boots the exact signed bundle before it ships). Because it reports
-"damaged" rather than "unidentified developer", neither right-click → **Open**
-nor **System Settings → Privacy & Security → Open Anyway** is offered. Clear
-the quarantine flag once, then launch normally:
+**First launch:** release DMGs (v1.8.4 and later) are signed with a Developer
+ID and notarized by Apple, so they open with no Gatekeeper warning at all.
+
+**Only if you built the app yourself without a signing certificate** (a local
+`make` or a fork without the signing secrets below): such a build is *ad-hoc*
+signed, and macOS Gatekeeper rejects an ad-hoc-signed app that carries the
+browser's quarantine flag with *"Librarian" is damaged and can't be opened* —
+the app is not actually damaged. Because it reports "damaged" rather than
+"unidentified developer", neither right-click → **Open** nor **Privacy &
+Security → Open Anyway** is offered. Clear the quarantine flag once, then
+launch normally:
 
 ```bash
 xattr -cr /Applications/Librarian.app
 ```
-
-Notarized releases (built with a Developer ID, see below) open without any
-warning and need none of this.
 
 ## How it works
 

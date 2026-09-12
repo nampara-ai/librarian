@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 1.8.4 - 2026-09-12
+
+The first signed and notarized macOS app, plus the LLM provider fix for current OpenAI models.
 
 - **The macOS app is now signed with a Developer ID and notarized**, so it opens with no
   Gatekeeper warning and no `xattr` workaround. Getting there fixed a real defect in the build:
