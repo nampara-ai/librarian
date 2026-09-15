@@ -79,6 +79,7 @@ _FIDELITY_WARNINGS = frozenset(
         "missing-markdown-heading",
         "missing-markdown-list",
         "missing-markdown-table",
+        "missing-verbatim-number",
         "repeated-tail",
         "substantial-content-loss",
         "suspiciously-short-output",
@@ -258,23 +259,37 @@ class CleanChunks:
                 f"({len(raw)} > {self.max_response_chars})"
             )
         raw, stripped_context = strip_repeated_context(raw, previous_context)
-        validated = validate_cleaned_text(
-            raw,
-            input_size=len(chunk.text),
-            source_text=chunk.text,
+        extra_warnings = ("repeated-context-stripped",) if stripped_context else ()
+        return self.revalidate(
+            CleanedChunk(
+                chunk=chunk,
+                text=raw,
+                warnings=extra_warnings,
+            )
         )
-        warnings = list(validated.warnings)
-        if stripped_context:
-            warnings.append("repeated-context-stripped")
+
+    def revalidate(self, cleaned: CleanedChunk) -> CleanedChunk:
+        """Apply current output and fidelity rules to a fresh or cached chunk.
+
+        Cached provider output can outlive validation-policy changes. Running
+        it through the current guardrail prevents a stale cache entry from
+        bypassing a newly added fidelity check.
+        """
+        validated = validate_cleaned_text(
+            cleaned.text,
+            input_size=len(cleaned.chunk.text),
+            source_text=cleaned.chunk.text,
+        )
+        warnings = list(dict.fromkeys((*cleaned.warnings, *validated.warnings)))
         if _FIDELITY_WARNINGS.intersection(warnings):
             warnings.append("source-preserved-after-fidelity-check")
             return CleanedChunk(
-                chunk=chunk,
-                text=chunk.text.strip(),
+                chunk=cleaned.chunk,
+                text=cleaned.chunk.text.strip(),
                 warnings=tuple(dict.fromkeys(warnings)),
             )
         return CleanedChunk(
-            chunk=chunk,
+            chunk=cleaned.chunk,
             text=validated.text,
             warnings=tuple(dict.fromkeys(warnings)),
         )

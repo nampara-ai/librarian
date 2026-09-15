@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from librarian.application.clean_chunks import CleanChunks, strip_repeated_context
+from librarian.application.clean_chunks import CleanChunks, CleanedChunk, strip_repeated_context
 from librarian.config import Settings
 from librarian.domain.ids import ChunkId, DocumentId
 from librarian.domain.models import Chunk, RunStage
@@ -155,6 +155,69 @@ async def test_cleaner_preserves_source_when_model_loses_a_figure() -> None:
 
     assert result.text == source
     assert "changed-markdown-images" in result.warnings
+    assert "source-preserved-after-fidelity-check" in result.warnings
+
+
+@pytest.mark.asyncio
+async def test_cleaner_preserves_source_when_model_loses_a_number() -> None:
+    source = "Keep the timeout at 120 seconds for all production requests."
+
+    class DropsNumberProvider:
+        name = "drops-number"
+
+        async def complete(self, **_: object) -> str:
+            return "Keep the timeout for all production requests."
+
+    chunk = Chunk(
+        id=ChunkId("chunk_numeric_fidelity"),
+        document_id=DocumentId("doc_numeric_fidelity"),
+        ordinal=0,
+        text=source,
+        start_char=0,
+        end_char=len(source),
+        sha256="a" * 64,
+    )
+    cleaner = CleanChunks(
+        provider=DropsNumberProvider(),  # type: ignore[arg-type]
+        prompt_catalog=PromptCatalog(),
+        prompt_version="cmos_v5",
+        model="test",
+    )
+
+    result = (await cleaner.execute([chunk]))[0]
+
+    assert result.text == source
+    assert "missing-verbatim-number" in result.warnings
+    assert "source-preserved-after-fidelity-check" in result.warnings
+
+
+def test_cleaner_revalidates_stale_cached_output() -> None:
+    source = "The reference contains sections 67, 69, and 99-109."
+    chunk = Chunk(
+        id=ChunkId("chunk_cached_fidelity"),
+        document_id=DocumentId("doc_cached_fidelity"),
+        ordinal=0,
+        text=source,
+        start_char=0,
+        end_char=len(source),
+        sha256="b" * 64,
+    )
+    cleaner = CleanChunks(
+        provider=object(),  # type: ignore[arg-type]
+        prompt_catalog=PromptCatalog(),
+        prompt_version="cmos_v5",
+        model="test",
+    )
+    stale = CleanedChunk(
+        chunk=chunk,
+        text="The reference contains sections 99-109.",
+        warnings=(),
+    )
+
+    result = cleaner.revalidate(stale)
+
+    assert result.text == source
+    assert "missing-verbatim-number" in result.warnings
     assert "source-preserved-after-fidelity-check" in result.warnings
 
 

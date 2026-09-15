@@ -143,12 +143,24 @@ class ProcessDocument:
                 )
                 await self.runs.save_run(run)
                 await self._raise_if_canceled(run_id)
-                cached_chunks = await self.outputs.get_cached_cleaned_chunks(
+                loaded_cached_chunks = await self.outputs.get_cached_cleaned_chunks(
                     chunked,
                     prompt_version=self.cleaner.prompt_version,
                     model_provider=self.cleaner.provider.name,
                     model_name=self.cleaner.model,
                 )
+                cached_chunks = [
+                    self.cleaner.revalidate(chunk) for chunk in loaded_cached_chunks
+                ]
+                if cached_chunks != loaded_cached_chunks:
+                    # Upgrade stale cache entries to the current validation
+                    # policy once, then reuse the safe result on later runs.
+                    await self.outputs.save_cleaned_chunk_cache(
+                        cached_chunks,
+                        prompt_version=self.cleaner.prompt_version,
+                        model_provider=self.cleaner.provider.name,
+                        model_name=self.cleaner.model,
+                    )
                 cached_ids = {chunk.chunk.id for chunk in cached_chunks}
                 missing_chunks = [chunk for chunk in chunked if chunk.id not in cached_ids]
                 # Persist live per-chunk progress so clients can render a
