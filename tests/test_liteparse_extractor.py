@@ -13,6 +13,7 @@ from librarian.ingest.extractors import (
     FallbackExtractor,
     LiteParseExtractor,
     liteparse_available,
+    normalize_spatial_markdown,
     reflow_multicolumn_markdown,
 )
 
@@ -56,6 +57,162 @@ def test_multicolumn_reflow_leaves_ordinary_prose_untouched() -> None:
     )
 
     assert reflow_multicolumn_markdown(result) == (source, 0)
+
+
+def test_spatial_normalization_repairs_collapsed_outline() -> None:
+    items = [SimpleNamespace(text="Contents", x=50, y=25, width=60, height=10)]
+    labels: list[str] = []
+    locators: list[str] = []
+    for row in range(12):
+        y = 70 + row * 18
+        label = f"Topic {row}"
+        locator = str(row + 3)
+        labels.append(label)
+        locators.append(locator)
+        items.extend(
+            [
+                SimpleNamespace(text=label, x=50, y=y, width=120, height=10),
+                *(
+                    [SimpleNamespace(text="~~", x=260, y=y, width=12, height=10)]
+                    if row == 0
+                    else []
+                ),
+                SimpleNamespace(text=locator, x=310, y=y, width=18, height=10),
+            ]
+        )
+    items.append(SimpleNamespace(text="iv", x=520, y=475, width=12, height=10))
+    page = SimpleNamespace(width=600, height=500, text_items=items)
+    collapsed = "\n\n".join([" ".join(labels), " ".join(locators)])
+    result = SimpleNamespace(text=collapsed, pages=[page])
+
+    output, multicolumn_count, outline_count, table_count = normalize_spatial_markdown(result)
+
+    assert multicolumn_count == 0
+    assert outline_count == 1
+    assert table_count == 0
+    assert output.startswith("## Contents")
+    assert "- Topic 0 3" in output
+    assert "- Topic 11 14" in output
+    assert "~~" not in output
+    assert "\niv\n" not in f"\n{output}\n"
+
+
+def test_spatial_normalization_keeps_reference_rows_together() -> None:
+    items = []
+    table_rows: list[str] = []
+    for row in range(12):
+        y = 70 + row * 18
+        identifier = f"Figure 2-{row + 1}"
+        caption = f"Example interface {row + 1}"
+        locator = str(row + 40)
+        items.extend(
+            [
+                SimpleNamespace(text=identifier, x=50, y=y, width=75, height=10),
+                SimpleNamespace(text=caption, x=350, y=y, width=110, height=10),
+                SimpleNamespace(text=locator, x=520, y=y, width=18, height=10),
+            ]
+        )
+        table_rows.append(f"| {identifier} | {caption} | {locator} |")
+    page = SimpleNamespace(width=600, height=500, text_items=items)
+    result = SimpleNamespace(
+        text="\n".join([table_rows[0], "|---|---|---|", *table_rows[1:]]),
+        pages=[page],
+    )
+
+    output, multicolumn_count, outline_count, table_count = normalize_spatial_markdown(result)
+
+    assert multicolumn_count == 0
+    assert outline_count == 1
+    assert table_count == 0
+    assert "- Figure 2-1 Example interface 1 40" in output
+    assert "- Figure 2-12 Example interface 12 51" in output
+    assert "|---|" not in output
+
+
+def test_spatial_normalization_joins_wrapped_outline_entry() -> None:
+    items = []
+    for row in range(10):
+        y = 70 + row * 25
+        if row == 2:
+            items.extend(
+                [
+                    SimpleNamespace(text="A long topic that", x=50, y=y, width=130, height=10),
+                    SimpleNamespace(text="wraps cleanly", x=90, y=y + 10, width=90, height=10),
+                    SimpleNamespace(text="12", x=310, y=y + 10, width=18, height=10),
+                ]
+            )
+        else:
+            items.extend(
+                [
+                    SimpleNamespace(text=f"Topic {row}", x=50, y=y, width=100, height=10),
+                    SimpleNamespace(text=str(row + 10), x=310, y=y, width=18, height=10),
+                ]
+            )
+    page = SimpleNamespace(width=600, height=500, text_items=items)
+    result = SimpleNamespace(
+        text="Topics\n\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19",
+        pages=[page],
+    )
+
+    output, _multicolumn_count, outline_count, _table_count = normalize_spatial_markdown(result)
+
+    assert outline_count == 1
+    assert "- A long topic that wraps cleanly 12" in output
+
+
+def test_spatial_normalization_reads_lopsided_final_index_column_last() -> None:
+    items = [SimpleNamespace(text="I N D E X", x=50, y=20, width=60, height=10)]
+    for row in range(24):
+        items.append(
+            SimpleNamespace(
+                text=f"word {row} {row + 10}",
+                x=50,
+                y=70 + row * 15,
+                width=120,
+                height=10,
+            )
+        )
+    items.extend(
+        [
+            SimpleNamespace(text="Z", x=350, y=85, width=10, height=10),
+            SimpleNamespace(text="zoom boxes 99", x=350, y=100, width=100, height=10),
+        ]
+    )
+    page = SimpleNamespace(width=600, height=500, text_items=items)
+    collapsed_items = " ".join(str(item.text) for item in items)
+    result = SimpleNamespace(
+        text=f"| I N D E X | |\n|---|---|\n| {collapsed_items} | |",
+        pages=[page],
+    )
+
+    output, multicolumn_count, outline_count, table_count = normalize_spatial_markdown(result)
+
+    assert multicolumn_count == 1
+    assert outline_count == 0
+    assert table_count == 0
+    assert output.index("word 23 33") < output.index("zoom boxes 99")
+
+
+def test_spatial_normalization_repairs_collapsed_prose_and_preserves_image() -> None:
+    clean_prose = (
+        "A readable paragraph stays in its original word order.\n"
+        "The following sentence remains attached to it."
+    )
+    image = "![](image_p7_0.png)"
+    scrambled = " ".join(reversed(clean_prose.split()))
+    result = SimpleNamespace(
+        text=f"| {scrambled * 4} | {clean_prose} {image} |\n|---|---|",
+        pages=[SimpleNamespace(width=600, height=500, text_items=[], text=clean_prose)],
+    )
+
+    output, multicolumn_count, outline_count, table_count = normalize_spatial_markdown(result)
+
+    assert multicolumn_count == 0
+    assert outline_count == 0
+    assert table_count == 1
+    assert output.startswith(clean_prose)
+    assert output.count(image) == 1
+    assert "|---|" not in output
 
 
 def _table_pdf_bytes() -> bytes:

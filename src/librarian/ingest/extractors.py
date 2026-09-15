@@ -143,6 +143,29 @@ class _ColumnLayout:
     body_bottom: float
 
 
+@dataclass(frozen=True, slots=True)
+class _SpatialLine:
+    text: str
+    x: float
+    y: float
+    height: float
+
+
+_PAGE_LOCATOR_RE = re.compile(
+    r"(?:\b\d{1,4}(?:\s*[-–—,]\s*\d{1,4})*|\b[ivxlcdm]{1,10})[.)]?\s*$",
+    re.IGNORECASE,
+)
+_LOCATOR_ONLY_RE = re.compile(
+    r"(?:\d{1,4}(?:\s*[-–—,]\s*\d{1,4})*|[ivxlcdm]{1,10})[.)]?",
+    re.IGNORECASE,
+)
+_DETACHED_ARABIC_LOCATORS_RE = re.compile(r"(?:\s*\d{1,4}[\s,;]*)+")
+_REFERENCE_ENTRY_RE = re.compile(
+    r"(?:figure|fig\.?|table|chart|diagram|plate|exhibit)\s+\S+",
+    re.IGNORECASE,
+)
+
+
 def _group_text_items_into_lines(items: Sequence[Any]) -> list[list[Any]]:
     """Group spatial text items by baseline without depending on liteparse types."""
     ordered = sorted((item for item in items if str(item.text).strip()), key=lambda x: (x.y, x.x))
@@ -167,7 +190,170 @@ def _group_text_items_into_lines(items: Sequence[Any]) -> list[list[Any]]:
     return [sorted(line, key=lambda item: item.x) for line in lines]
 
 
-def _detect_two_column_layout(page: Any) -> _ColumnLayout | None:
+def _spatial_lines(items: Sequence[Any]) -> list[_SpatialLine]:
+    lines: list[_SpatialLine] = []
+    for line in _group_text_items_into_lines(items):
+        text = " ".join(str(item.text).strip() for item in line if str(item.text).strip())
+        if not text:
+            continue
+        lines.append(
+            _SpatialLine(
+                text=re.sub(r"\s+", " ", text),
+                x=min(float(item.x) for item in line),
+                y=sum(float(item.y) for item in line) / len(line),
+                height=max(float(item.height) for item in line),
+            )
+        )
+    return lines
+
+
+def _ends_with_page_locator(text: str) -> bool:
+    return _PAGE_LOCATOR_RE.search(text.strip()) is not None
+
+
+def _looks_like_outline_page(page: Any) -> bool:
+    """Identify dense contents, figure-list, and similar locator pages."""
+    height = float(page.height)
+    lines = [
+        line
+        for line in _spatial_lines(page.text_items)
+        if line.y <= height * 0.92 and re.search(r"[A-Za-z]", line.text)
+    ]
+    if len(lines) < 8:
+        return False
+    located = sum(_ends_with_page_locator(line.text) for line in lines)
+    return located >= 8 and located / len(lines) >= 0.65
+
+
+def _looks_like_reference_list(page: Any) -> bool:
+    """Detect lists whose rows use repeated figure/table-style identifiers."""
+    height = float(page.height)
+    lines = [
+        line
+        for line in _spatial_lines(page.text_items)
+        if line.y <= height * 0.92 and re.search(r"[A-Za-z]", line.text)
+    ]
+    references = sum(_REFERENCE_ENTRY_RE.match(line.text) is not None for line in lines)
+    return references >= 6 and references / max(len(lines), 1) >= 0.2
+
+
+def _looks_like_index_page(page: Any) -> bool:
+    """Recognize an index heading even when its letters are widely spaced."""
+    height = float(page.height)
+    for line in _spatial_lines(page.text_items):
+        if line.y > height * 0.18:
+            break
+        heading = re.sub(r"[^A-Za-z]", "", line.text).lower()
+        if heading == "index":
+            return True
+    return False
+
+
+def _looks_like_corrupted_outline_block(markdown: str) -> bool:
+    """Find renderer failures that collapse labels or detach their locators."""
+    detached_locators = sum(
+        len(re.findall(r"\d{1,4}", line))
+        for line in markdown.splitlines()
+        if _DETACHED_ARABIC_LOCATORS_RE.fullmatch(line.strip())
+    )
+    return _looks_like_collapsed_table_block(markdown) or detached_locators >= 6
+
+
+def _looks_like_collapsed_table_block(markdown: str) -> bool:
+    """Detect a table renderer collapsing most of a page into one giant row."""
+    table_lines = [line for line in markdown.splitlines() if line.strip().startswith("|")]
+    return bool(table_lines) and max(map(len, table_lines)) > 240
+
+
+def _merge_outline_continuations(lines: Sequence[_SpatialLine]) -> list[_SpatialLine]:
+    """Join wrapped outline labels and page locators using their vertical spacing."""
+    if not lines:
+        return []
+    heights = sorted(line.height for line in lines if line.height > 0)
+    median_height = heights[len(heights) // 2] if heights else 9.0
+    max_wrap_gap = max(12.0, median_height * 1.6)
+    merged: list[_SpatialLine] = []
+    current = lines[0]
+    for following in lines[1:]:
+        gap = following.y - current.y
+        can_continue = (
+            not _ends_with_page_locator(current.text)
+            and gap <= max_wrap_gap
+            and following.x >= current.x - 2
+        )
+        if can_continue:
+            current = _SpatialLine(
+                text=f"{current.text} {following.text}",
+                x=current.x,
+                y=following.y,
+                height=max(current.height, following.height),
+            )
+            continue
+        merged.append(current)
+        current = following
+    merged.append(current)
+    return merged
+
+
+def _render_outline_page(page: Any) -> str:
+    """Render one outline page as stable Markdown from positioned PDF text."""
+    height = float(page.height)
+    lines = [
+        line
+        for line in _spatial_lines(page.text_items)
+        if not (line.y > height * 0.92 and _LOCATOR_ONLY_RE.fullmatch(line.text))
+    ]
+    lines = _merge_outline_continuations(lines)
+    if not lines:
+        return ""
+    base_x = min(line.x for line in lines)
+    rendered: list[str] = []
+    for line in lines:
+        # OCR can read a dotted leader between an entry and its locator as a
+        # standalone pair of tildes. It carries no source meaning and would be
+        # interpreted as broken strikethrough syntax in Markdown.
+        text = re.sub(r"(?:^|(?<=\s))~{2,}(?=\s|$)", "", line.text)
+        text = re.sub(r"\s+", " ", text).strip()
+        if _ends_with_page_locator(text):
+            indent = "  " if line.x > base_x + 6 else ""
+            rendered.append(f"{indent}- {text}")
+        else:
+            rendered.append(f"## {text}")
+    return "\n".join(rendered)
+
+
+def _render_plain_page_with_images(page: Any, markdown: str) -> str:
+    """Use the intact page text when table inference corrupts prose layout."""
+    raw_text = str(getattr(page, "text", ""))
+    lines: list[str] = []
+    previous_blank = False
+    for raw_line in raw_text.splitlines():
+        line = re.sub(r"\s+", " ", raw_line.strip())
+        if line:
+            lines.append(line)
+            previous_blank = False
+        elif lines and not previous_blank:
+            lines.append("")
+            previous_blank = True
+    text = "\n".join(lines).strip()
+
+    # The native per-page text does not contain LiteParse's image tokens. Keep
+    # every local reference in source order so asset extraction and optional
+    # vision descriptions remain lossless even when their exact inline anchor
+    # cannot be recovered from the broken table row.
+    image_tokens = list(
+        dict.fromkeys(match.group(0) for match in _LOCAL_MARKDOWN_IMAGE_RE.finditer(markdown))
+    )
+    sections = [text, *image_tokens]
+    return "\n\n".join(section for section in sections if section)
+
+
+def _detect_two_column_layout(
+    page: Any,
+    *,
+    min_column_items: int = 12,
+    min_paired_lines: int = 10,
+) -> _ColumnLayout | None:
     """Detect a strong, repeated central gutter in a page's spatial text items."""
     width = float(page.width)
     height = float(page.height)
@@ -195,7 +381,7 @@ def _detect_two_column_layout(page: Any) -> _ColumnLayout | None:
                 paired_y.append(sum(float(item.y) for item in line) / len(line))
         left_count = sum(float(item.x) + float(item.width) <= split for item in body)
         right_count = sum(float(item.x) >= split for item in body)
-        if min(left_count, right_count) < 12:
+        if min(left_count, right_count) < min_column_items:
             continue
         candidate = (crossing, -len(paired_y), abs(left_count - right_count), split, paired_y)
         if best is None or candidate[:3] < best[:3]:
@@ -204,7 +390,7 @@ def _detect_two_column_layout(page: Any) -> _ColumnLayout | None:
         return None
     crossing, negative_pairs, _balance, split, paired_y = best
     paired_count = -negative_pairs
-    if paired_count < 10 or crossing > max(2, len(body) // 30):
+    if paired_count < min_paired_lines or crossing > max(2, len(body) // 30):
         return None
     return _ColumnLayout(
         split_x=split,
@@ -233,7 +419,9 @@ def _reflow_two_column_page(page: Any, layout: _ColumnLayout) -> str:
     header = [item for item in items if float(item.y) < layout.body_top]
     footer = [item for item in items if float(item.y) > layout.body_bottom]
     body = [item for item in items if layout.body_top <= float(item.y) <= layout.body_bottom]
-    left = [item for item in body if float(item.x) + float(item.width) <= layout.split_x]
+    # The detector tolerates a tiny number of items that cross the gutter.
+    # Assign those by their starting edge instead of dropping them entirely.
+    left = [item for item in body if float(item.x) < layout.split_x]
     right = [item for item in body if float(item.x) >= layout.split_x]
     left_x = min((float(item.x) for item in left), default=0.0)
     right_x = min((float(item.x) for item in right), default=layout.split_x)
@@ -246,31 +434,79 @@ def _reflow_two_column_page(page: Any, layout: _ColumnLayout) -> str:
     return "\n\n".join(section for section in sections if section.strip())
 
 
-def reflow_multicolumn_markdown(result: Any) -> tuple[str, int]:
-    """Replace strongly detected two-column page blocks with column-order text.
+def normalize_spatial_markdown(result: Any) -> tuple[str, int, int, int]:
+    """Repair outline and multicolumn pages from their positioned PDF text.
 
     LiteParse's document renderer can interleave columns row by row. Its page
     text items retain coordinates, so dense pages with a clear central gutter
-    can be reconstructed deterministically. Pages containing image references
-    stay untouched to preserve the renderer's figure placement.
+    can be reconstructed deterministically. It can also mistake contents and
+    figure lists for tables, collapsing labels into one block and page locators
+    into another. Those pages are rebuilt as Markdown outlines. A collapsed
+    prose table falls back to the intact page text while retaining every image
+    reference; other pages with figures keep the renderer's original placement.
     """
     blocks = re.split(r"\n\s*-{5,}\s*\n", str(result.text))
     raw_pages = getattr(result, "pages", None)
     if raw_pages is None:
-        return str(result.text), 0
+        return str(result.text), 0, 0, 0
     pages = list(raw_pages)
     if len(blocks) != len(pages):
-        return str(result.text), 0
-    reflowed = 0
+        return str(result.text), 0, 0, 0
+    multicolumn_reflowed = 0
+    outlines_normalized = 0
+    collapsed_tables_normalized = 0
     for index, (block, page) in enumerate(zip(blocks, pages, strict=True)):
+        outline_page = _looks_like_outline_page(page)
+        if outline_page and _looks_like_reference_list(page):
+            blocks[index] = _render_outline_page(page)
+            outlines_normalized += 1
+            continue
+        corrupted_outline = outline_page and _looks_like_corrupted_outline_block(block)
+        index_page = outline_page and _looks_like_index_page(page)
+        if corrupted_outline and not index_page:
+            blocks[index] = _render_outline_page(page)
+            outlines_normalized += 1
+            continue
         if _has_local_image_references(block):
+            if _looks_like_collapsed_table_block(block):
+                blocks[index] = _render_plain_page_with_images(page, block)
+                collapsed_tables_normalized += 1
             continue
         layout = _detect_two_column_layout(page)
-        if layout is None:
+        if layout is not None:
+            blocks[index] = _reflow_two_column_page(page, layout)
+            multicolumn_reflowed += 1
             continue
-        blocks[index] = _reflow_two_column_page(page, layout)
-        reflowed += 1
-    return "\n\n-----\n\n".join(blocks), reflowed
+        if corrupted_outline:
+            # A final index page can have one nearly empty column, so it does
+            # not satisfy the balanced-column detector used for normal pages.
+            # Its explicit heading plus a clean gutter is enough evidence to
+            # use a deliberately lopsided column reconstruction.
+            if index_page:
+                layout = _detect_two_column_layout(page, min_column_items=2, min_paired_lines=2)
+            if layout is not None:
+                blocks[index] = _reflow_two_column_page(page, layout)
+                multicolumn_reflowed += 1
+                continue
+        if _looks_like_collapsed_table_block(block):
+            blocks[index] = _render_plain_page_with_images(page, block)
+            collapsed_tables_normalized += 1
+            continue
+        if corrupted_outline:
+            blocks[index] = _render_outline_page(page)
+            outlines_normalized += 1
+    return (
+        "\n\n-----\n\n".join(blocks),
+        multicolumn_reflowed,
+        outlines_normalized,
+        collapsed_tables_normalized,
+    )
+
+
+def reflow_multicolumn_markdown(result: Any) -> tuple[str, int]:
+    """Compatibility wrapper returning the multicolumn reflow count."""
+    text, reflowed, _outlines, _tables = normalize_spatial_markdown(result)
+    return text, reflowed
 
 
 class TextFamilyExtractor:
@@ -787,12 +1023,8 @@ class PdfExtractor:
     ) -> OcrCorrectionResult:
         if self.ocr_correction_mode == "never":
             return OcrCorrectionResult(text=text)
-        if (
-            self.ocr_correction_mode == "low-confidence"
-            and (
-                confidence is None
-                or confidence >= self.ocr_low_confidence_threshold
-            )
+        if self.ocr_correction_mode == "low-confidence" and (
+            confidence is None or confidence >= self.ocr_low_confidence_threshold
         ):
             return OcrCorrectionResult(text=text)
         provider = self.ocr_correction_provider
@@ -1158,7 +1390,13 @@ class LiteParseExtractor:
     async def extract_with_assets(self, path: Path) -> ExtractionPayload:
         """Extract Markdown together with the figures referenced by it."""
         _validate_input_size(path, self.max_input_bytes, "LiteParse extraction input")
-        text, figures, reflowed_pages = await asyncio.to_thread(self._extract_sync, path)
+        (
+            text,
+            figures,
+            reflowed_pages,
+            normalized_outlines,
+            normalized_tables,
+        ) = await asyncio.to_thread(self._extract_sync, path)
         if not text.strip():
             raise ValueError(f"No extractable content found: {path}")
         metadata: dict[str, object] = {
@@ -1166,6 +1404,8 @@ class LiteParseExtractor:
             "engine": "liteparse",
             "source_file": path.name,
             "multicolumn_pages_reflowed": reflowed_pages,
+            "outline_pages_normalized": normalized_outlines,
+            "collapsed_table_pages_normalized": normalized_tables,
         }
         if self.vision_provider is not None and figures:
             text, described = await enrich_markdown_figures(
@@ -1203,11 +1443,12 @@ class LiteParseExtractor:
         metadata["figures_extracted"] = len(assets)
         return ExtractionPayload(text=text, assets=tuple(assets))
 
-    def _extract_sync(self, path: Path) -> tuple[str, list[FigureImage], int]:
+    def _extract_sync(self, path: Path) -> tuple[str, list[FigureImage], int, int, int]:
         try:
             liteparse = importlib.import_module("liteparse")
         except ImportError as exc:  # pragma: no cover - guarded by liteparse_available
             raise RuntimeError("PDF/image extraction requires the 'liteparse' extra") from exc
+
         def parser(*, image_mode: str, target_pages: str | None = None) -> Any:
             return liteparse.LiteParse(
                 output_format="markdown",
@@ -1222,13 +1463,19 @@ class LiteParseExtractor:
                 quiet=True,
             )
 
-        def parse(source: Path) -> tuple[str, list[FigureImage], int]:
+        def parse(source: Path) -> tuple[str, list[FigureImage], int, int, int]:
             # A whole-document embed parse can retain every decoded image in
             # native memory at once. Parse text cheaply, then fetch only pages
             # that produced local references in bounded batches.
             text_mode = "off" if self.image_mode == "off" else "placeholder"
             result = parser(image_mode=text_mode).parse(str(source))
-            text, _unused_figures, reflowed_pages = self._collect_result(result)
+            (
+                text,
+                _unused_figures,
+                reflowed_pages,
+                normalized_outlines,
+                normalized_tables,
+            ) = self._collect_result(result)
             referenced_pages = sorted(
                 {int(match) for match in _LITEPARSE_IMAGE_PAGE_RE.findall(text)}
             )
@@ -1238,7 +1485,7 @@ class LiteParseExtractor:
                 selected = ",".join(str(page) for page in page_batch)
                 embedded = parser(image_mode="embed", target_pages=selected).parse(str(source))
                 figures.extend(self._figures_from_result(embedded))
-            return text, figures, reflowed_pages
+            return text, figures, reflowed_pages, normalized_outlines, normalized_tables
 
         # liteparse parses PDFs natively but converts loose images to PDF first,
         # which needs ImageMagick. Do that conversion ourselves with Pillow (after
@@ -1268,10 +1515,12 @@ class LiteParseExtractor:
             for image in result.images
         ]
 
-    def _collect_result(self, result: Any) -> tuple[str, list[FigureImage], int]:
+    def _collect_result(self, result: Any) -> tuple[str, list[FigureImage], int, int, int]:
         figures = self._figures_from_result(result)
-        text, reflowed_pages = reflow_multicolumn_markdown(result)
-        return text, figures, reflowed_pages
+        text, reflowed_pages, normalized_outlines, normalized_tables = normalize_spatial_markdown(
+            result
+        )
+        return text, figures, reflowed_pages, normalized_outlines, normalized_tables
 
 
 class FallbackExtractor:
@@ -1343,7 +1592,7 @@ def _extractor_metadata(extractor: object) -> dict[str, object] | None:
 
 # Bump when extraction output for a given config could change materially, to
 # invalidate every cached entry without a data migration.
-_EXTRACTION_CACHE_VERSION = 1
+_EXTRACTION_CACHE_VERSION = 2
 
 
 def extraction_config_signature(params: Mapping[str, object]) -> str:
@@ -1834,9 +2083,7 @@ def _run_tesseract_to_files(
         text=True,
         timeout=timeout_seconds,
     )
-    return {
-        fmt: output_base.with_suffix(f".{fmt}").read_text(encoding="utf-8") for fmt in formats
-    }
+    return {fmt: output_base.with_suffix(f".{fmt}").read_text(encoding="utf-8") for fmt in formats}
 
 
 _OSD_ROTATE_RE = re.compile(r"^Rotate:\s*(\d+)", re.MULTILINE)
