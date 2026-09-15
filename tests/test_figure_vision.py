@@ -257,13 +257,18 @@ def test_liteparse_extractor_without_vision_leaves_placeholder(tmp_path: Path) -
     source.write_bytes(_embedded_image_pdf())
     extractor = LiteParseExtractor()  # no vision provider
 
-    markdown = asyncio.run(extractor.extract(source))
+    payload = asyncio.run(extractor.extract_with_assets(source))
+    markdown = payload.text
 
     assert "**Figure (page" not in markdown
     # Placeholder retained, unenriched. Match liteparse's real runtime form
     # (img_) or its docstring form (image_) so this doesn't re-break on a
     # placeholder-format shift.
     assert re.search(r"!\[\]\((?:img|image)_p\d+_\d+\.png\)", markdown)
+    assert len(payload.assets) == 1
+    assert payload.assets[0].filename in markdown
+    assert payload.assets[0].media_type == "image/png"
+    assert payload.assets[0].data
 
 
 @requires_liteparse

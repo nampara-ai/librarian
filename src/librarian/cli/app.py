@@ -10,6 +10,7 @@ import sys
 import tempfile
 import uuid
 import zipfile
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Annotated, cast
@@ -29,6 +30,7 @@ from librarian.application.convert_document import (
 from librarian.application.export_document import (
     ExportedDocument,
     ExportFormat,
+    rewrite_document_asset_references,
     transcript_citation_for_document,
 )
 from librarian.application.export_okf import OKF_VERSION, build_bundle, collect_sources
@@ -53,7 +55,7 @@ from librarian.application.transcripts import (
 )
 from librarian.config import Settings
 from librarian.domain.ids import DocumentId, RunId, digest_text
-from librarian.domain.models import DocumentStatus, RunStage, RunStatus
+from librarian.domain.models import DocumentAsset, DocumentStatus, RunStage, RunStatus
 from librarian.ingest.extractors import CompositeExtractor
 from librarian.llm import LazyLLMProvider
 from librarian.observability import sanitize_error_message
@@ -1566,6 +1568,18 @@ def export(
             transcript_citation=transcript_citation,
         ).render(export_format)
         if output:
+            if export_format == "md":
+                assets = await container.repository.list_document_assets(DocumentId(document_id))
+                if assets:
+                    asset_directory = f"{output.stem}.assets"
+                    rendered = rewrite_document_asset_references(
+                        rendered,
+                        asset_directory=asset_directory,
+                        filenames={asset.filename for asset in assets},
+                    )
+                    await asyncio.to_thread(
+                        _write_cli_assets, output.parent / asset_directory, assets
+                    )
             await asyncio.to_thread(_write_cli_output_atomic, output, rendered)
             console.print(f"Exported {document.id} to {output}")
         else:
@@ -2100,6 +2114,23 @@ def _write_cli_output_atomic(path: Path, payload: str) -> None:
     except Exception:
         temporary_path.unlink(missing_ok=True)
         raise
+
+
+def _write_cli_assets(asset_directory: Path, assets: Sequence[DocumentAsset]) -> None:
+    _reject_symlinked_cli_output_path(asset_directory)
+    asset_directory.mkdir(parents=True, exist_ok=True)
+    for asset in assets:
+        filename = str(asset.filename)
+        if not filename or Path(filename).name != filename or filename in {".", ".."}:
+            raise ValueError(f"Invalid document asset filename: {filename!r}")
+        target = asset_directory / filename
+        temporary_path = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temporary_path.write_bytes(asset.data)
+            temporary_path.replace(target)
+        except Exception:
+            temporary_path.unlink(missing_ok=True)
+            raise
 
 
 def _reject_symlinked_cli_output_path(path: Path) -> None:

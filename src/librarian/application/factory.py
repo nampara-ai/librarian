@@ -109,6 +109,7 @@ async def build_ingest_container(
         documents=repository,
         content=repository,
         extractor=ingest_extractor,
+        assets=repository,
         max_source_bytes=resolved_settings.max_source_bytes,
     )
     return IngestContainer(

@@ -162,7 +162,12 @@ struct APIClient {
         )
         let stem = response.value(forHTTPHeaderField: "X-Librarian-Export-Stem")?
             .removingPercentEncoding
-        return RawExport(data: data, suggestedStem: stem)
+        var assets: [ExportAsset] = []
+        if format == .markdown {
+            let (assetData, _) = try await send("GET", "/documents/\(documentId)/assets")
+            assets = try Self.decoder.decode(DocumentAssetsResponse.self, from: assetData).assets
+        }
+        return RawExport(data: data, suggestedStem: stem, assets: assets)
     }
 
     /// The whole processed corpus rendered as an Open Knowledge Format bundle

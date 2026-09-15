@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Literal
 
@@ -16,6 +17,21 @@ ExportFormat = Literal["txt", "md", "json"]
 # by construction.
 _STEM_SAFE_PUNCTUATION = " .,&'()-"
 _MAX_STEM_CHARS = 100
+_LOCAL_IMAGE_REFERENCE_RE = re.compile(r"(!\[[^\]]*\]\()([^)]+)(\))")
+
+
+def rewrite_document_asset_references(
+    markdown: str, *, asset_directory: str, filenames: set[str]
+) -> str:
+    """Point known local Markdown image references at a sibling asset directory."""
+
+    def replace(match: re.Match[str]) -> str:
+        target = match.group(2)
+        if target not in filenames:
+            return match.group(0)
+        return f"{match.group(1)}{asset_directory}/{target}{match.group(3)}"
+
+    return _LOCAL_IMAGE_REFERENCE_RE.sub(replace, markdown)
 
 
 @dataclass(frozen=True, slots=True)

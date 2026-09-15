@@ -13,6 +13,7 @@ from librarian.domain.models import (
     Classification,
     CleanedOutput,
     Document,
+    DocumentAsset,
     DocumentStatus,
     ProcessingRun,
     RunStage,
@@ -79,6 +80,18 @@ class ContentStore(Protocol):
     async def put_text(self, key: str, text: str) -> str: ...
 
     async def get_text(self, key: str) -> str: ...
+
+
+class AssetStore(Protocol):
+    """Storage port for binary assets referenced by extracted documents."""
+
+    async def replace_document_assets(
+        self, document_id: DocumentId, assets: Sequence[DocumentAsset]
+    ) -> None: ...
+
+    async def list_document_assets(self, document_id: DocumentId) -> Sequence[DocumentAsset]: ...
+
+    async def document_assets_initialized(self, document_id: DocumentId) -> bool: ...
 
 
 class TextExtractor(Protocol):

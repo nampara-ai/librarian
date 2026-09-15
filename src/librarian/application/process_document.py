@@ -198,6 +198,10 @@ class ProcessDocument:
                 await self.outputs.save_cleaned_chunks(run_id, cleaned_chunks)
                 failed_chunks = sum(1 for chunk in cleaned_chunks if not chunk.text.strip())
                 completed_chunks = len(cleaned_chunks) - failed_chunks
+                fidelity_fallbacks = sum(
+                    "source-preserved-after-fidelity-check" in chunk.warnings
+                    for chunk in cleaned_chunks
+                )
             await self._raise_if_canceled(run_id)
             await self.runs.update_run_progress(
                 run_id,
@@ -211,6 +215,13 @@ class ProcessDocument:
                 f"cleaned {completed_chunks}/{len(chunked)} chunk(s) "
                 f"({len(cached_chunks)} cache hit(s))",
             )
+            if fidelity_fallbacks:
+                await self.events.emit(
+                    run_id,
+                    RunStage.VALIDATE,
+                    f"preserved source text for {fidelity_fallbacks} chunk(s) that failed "
+                    "fidelity checks",
+                )
             await self._raise_if_canceled(run_id)
 
             async with self._timed_stage(RunStage.ASSEMBLE, run_id, document_id):

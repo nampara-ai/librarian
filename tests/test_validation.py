@@ -1,9 +1,12 @@
 import pytest
 from pydantic import ValidationError
 
+from librarian.application.clean_chunks import CleanChunks, strip_repeated_context
 from librarian.config import Settings
-from librarian.domain.models import RunStage
+from librarian.domain.ids import ChunkId, DocumentId
+from librarian.domain.models import Chunk, RunStage
 from librarian.pipeline.validation import validate_cleaned_text
+from librarian.prompts import PromptCatalog
 
 
 def test_validation_filters_artifact_lines() -> None:
@@ -93,6 +96,66 @@ def test_validation_repeated_tail_ignores_normal_short_repetition() -> None:
     )
 
     assert "repeated-tail" not in result.warnings
+
+
+def test_validation_detects_lost_images_numbers_and_substantial_content() -> None:
+    source = "![](image_p1_0.png)\n\n" + " ".join(
+        f"Detail {number}" for number in range(250)
+    )
+    output = " ".join(f"Detail {number}" for number in range(100))
+
+    result = validate_cleaned_text(output, input_size=len(source), source_text=source)
+
+    assert "changed-markdown-images" in result.warnings
+    assert "missing-verbatim-number" in result.warnings
+    assert "substantial-content-loss" in result.warnings
+
+
+def test_strip_repeated_context_handles_markdown_punctuation_changes() -> None:
+    repeated = "A glossary entry with enough meaningful words to detect copied continuity context."
+    context = f"Earlier text. {repeated} It ends with fifteen stable tokens for the next section."
+    output = (
+        f"{repeated} It ends with fifteen stable tokens for the next section!\n\n"
+        "Actual new section text."
+    )
+
+    cleaned, changed = strip_repeated_context(output, context)
+
+    assert changed is True
+    assert cleaned == "Actual new section text."
+
+
+@pytest.mark.asyncio
+async def test_cleaner_preserves_source_when_model_loses_a_figure() -> None:
+    source = "Figure 1\n\n![](image_p1_0.png)\n\nDetailed caption text."
+
+    class DropsFigureProvider:
+        name = "drops-figure"
+
+        async def complete(self, **_: object) -> str:
+            return "Figure 1\n\nDetailed caption text."
+
+    chunk = Chunk(
+        id=ChunkId("chunk_fidelity"),
+        document_id=DocumentId("doc_fidelity"),
+        ordinal=0,
+        text=source,
+        start_char=0,
+        end_char=len(source),
+        sha256="f" * 64,
+    )
+    cleaner = CleanChunks(
+        provider=DropsFigureProvider(),  # type: ignore[arg-type]
+        prompt_catalog=PromptCatalog(),
+        prompt_version="cmos_v5",
+        model="test",
+    )
+
+    result = (await cleaner.execute([chunk]))[0]
+
+    assert result.text == source
+    assert "changed-markdown-images" in result.warnings
+    assert "source-preserved-after-fidelity-check" in result.warnings
 
 
 def test_settings_reject_invalid_coherence_mode(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -18,7 +18,7 @@ import subprocess
 import tempfile
 import time
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +29,7 @@ from librarian.application.transcripts import (
     parse_transcript,
     render_transcript,
 )
+from librarian.domain.models import ExtractedAsset, ExtractionPayload
 from librarian.observability import sanitize_error_message
 from librarian.pipeline.validation import validate_cleaned_text
 
@@ -51,6 +52,11 @@ ARCHIVE_SIGNATURES = (
 TAR_USTAR_OFFSET = 257
 _ARCHIVE_SIGNATURE_SAMPLE_BYTES = 4096
 _MAX_PDF_PAGE_MANIFEST_BYTES = 256 * 1024 * 1024
+_LOCAL_MARKDOWN_IMAGE_RE = re.compile(
+    r"!\[[^\]]*\]\((?![a-z][a-z0-9+.-]*:|/|#)([^)\s]+)\)", re.IGNORECASE
+)
+_LITEPARSE_IMAGE_PAGE_RE = re.compile(r"(?:img|image)_p(\d+)_\d+\.[A-Za-z0-9]+")
+_LITEPARSE_ASSET_PAGE_BATCH = 50
 OcrCorrectionMode = Literal["always", "never", "low-confidence"]
 OcrPreprocessMode = Literal["none", "grayscale", "threshold", "deskew"]
 
@@ -124,6 +130,147 @@ class OcrCorrectionResult:
 
     text: str
     warnings: tuple[str, ...] = ()
+
+
+def _has_local_image_references(markdown: str) -> bool:
+    return _LOCAL_MARKDOWN_IMAGE_RE.search(markdown) is not None
+
+
+@dataclass(frozen=True, slots=True)
+class _ColumnLayout:
+    split_x: float
+    body_top: float
+    body_bottom: float
+
+
+def _group_text_items_into_lines(items: Sequence[Any]) -> list[list[Any]]:
+    """Group spatial text items by baseline without depending on liteparse types."""
+    ordered = sorted((item for item in items if str(item.text).strip()), key=lambda x: (x.y, x.x))
+    if not ordered:
+        return []
+    heights = sorted(float(item.height) for item in ordered if float(item.height) > 0)
+    tolerance = max(1.5, (heights[len(heights) // 2] if heights else 8.0) * 0.45)
+    lines: list[list[Any]] = []
+    baselines: list[float] = []
+    for item in ordered:
+        best = next(
+            (index for index, y in enumerate(baselines) if abs(float(item.y) - y) <= tolerance),
+            None,
+        )
+        if best is None:
+            lines.append([item])
+            baselines.append(float(item.y))
+        else:
+            lines[best].append(item)
+            count = len(lines[best])
+            baselines[best] = (baselines[best] * (count - 1) + float(item.y)) / count
+    return [sorted(line, key=lambda item: item.x) for line in lines]
+
+
+def _detect_two_column_layout(page: Any) -> _ColumnLayout | None:
+    """Detect a strong, repeated central gutter in a page's spatial text items."""
+    width = float(page.width)
+    height = float(page.height)
+    body = [
+        item
+        for item in page.text_items
+        if height * 0.07 <= float(item.y) <= height * 0.92
+        and str(item.text).strip()
+        and float(item.width) < width * 0.55
+    ]
+    if len(body) < 20:
+        return None
+    lines = _group_text_items_into_lines(body)
+    best: tuple[int, int, int, float, list[float]] | None = None
+    for step in range(36, 65):
+        split = width * step / 100
+        crossing = sum(
+            float(item.x) + 1 < split < float(item.x) + float(item.width) - 1 for item in body
+        )
+        paired_y: list[float] = []
+        for line in lines:
+            left = any(float(item.x) + float(item.width) <= split for item in line)
+            right = any(float(item.x) >= split for item in line)
+            if left and right:
+                paired_y.append(sum(float(item.y) for item in line) / len(line))
+        left_count = sum(float(item.x) + float(item.width) <= split for item in body)
+        right_count = sum(float(item.x) >= split for item in body)
+        if min(left_count, right_count) < 12:
+            continue
+        candidate = (crossing, -len(paired_y), abs(left_count - right_count), split, paired_y)
+        if best is None or candidate[:3] < best[:3]:
+            best = candidate
+    if best is None:
+        return None
+    crossing, negative_pairs, _balance, split, paired_y = best
+    paired_count = -negative_pairs
+    if paired_count < 10 or crossing > max(2, len(body) // 30):
+        return None
+    return _ColumnLayout(
+        split_x=split,
+        # Once the repeated gutter proves the layout, include unilateral rows
+        # near the top and bottom in their respective columns as well. The
+        # outer bands retain running titles and page numbers.
+        body_top=height * 0.07,
+        body_bottom=height * 0.92,
+    )
+
+
+def _render_spatial_lines(items: Sequence[Any], *, base_x: float | None = None) -> str:
+    rendered: list[str] = []
+    for line in _group_text_items_into_lines(items):
+        text = " ".join(str(item.text).strip() for item in line if str(item.text).strip())
+        if not text:
+            continue
+        line_x = min(float(item.x) for item in line)
+        indent = "  " if base_x is not None and line_x > base_x + 6 else ""
+        rendered.append(indent + text)
+    return "\n".join(rendered)
+
+
+def _reflow_two_column_page(page: Any, layout: _ColumnLayout) -> str:
+    items = [item for item in page.text_items if str(item.text).strip()]
+    header = [item for item in items if float(item.y) < layout.body_top]
+    footer = [item for item in items if float(item.y) > layout.body_bottom]
+    body = [item for item in items if layout.body_top <= float(item.y) <= layout.body_bottom]
+    left = [item for item in body if float(item.x) + float(item.width) <= layout.split_x]
+    right = [item for item in body if float(item.x) >= layout.split_x]
+    left_x = min((float(item.x) for item in left), default=0.0)
+    right_x = min((float(item.x) for item in right), default=layout.split_x)
+    sections = [
+        _render_spatial_lines(header),
+        _render_spatial_lines(left, base_x=left_x),
+        _render_spatial_lines(right, base_x=right_x),
+        _render_spatial_lines(footer),
+    ]
+    return "\n\n".join(section for section in sections if section.strip())
+
+
+def reflow_multicolumn_markdown(result: Any) -> tuple[str, int]:
+    """Replace strongly detected two-column page blocks with column-order text.
+
+    LiteParse's document renderer can interleave columns row by row. Its page
+    text items retain coordinates, so dense pages with a clear central gutter
+    can be reconstructed deterministically. Pages containing image references
+    stay untouched to preserve the renderer's figure placement.
+    """
+    blocks = re.split(r"\n\s*-{5,}\s*\n", str(result.text))
+    raw_pages = getattr(result, "pages", None)
+    if raw_pages is None:
+        return str(result.text), 0
+    pages = list(raw_pages)
+    if len(blocks) != len(pages):
+        return str(result.text), 0
+    reflowed = 0
+    for index, (block, page) in enumerate(zip(blocks, pages, strict=True)):
+        if _has_local_image_references(block):
+            continue
+        layout = _detect_two_column_layout(page)
+        if layout is None:
+            continue
+        blocks[index] = _reflow_two_column_page(page, layout)
+        reflowed += 1
+    return "\n\n-----\n\n".join(blocks), reflowed
 
 
 class TextFamilyExtractor:
@@ -1005,14 +1152,20 @@ class LiteParseExtractor:
         return self.vision_provider is not None
 
     async def extract(self, path: Path) -> str:
+        """Extract Markdown for callers that do not persist document assets."""
+        return (await self.extract_with_assets(path)).text
+
+    async def extract_with_assets(self, path: Path) -> ExtractionPayload:
+        """Extract Markdown together with the figures referenced by it."""
         _validate_input_size(path, self.max_input_bytes, "LiteParse extraction input")
-        text, figures = await asyncio.to_thread(self._extract_sync, path)
+        text, figures, reflowed_pages = await asyncio.to_thread(self._extract_sync, path)
         if not text.strip():
             raise ValueError(f"No extractable content found: {path}")
         metadata: dict[str, object] = {
             "artifact_type": "liteparse-extraction",
             "engine": "liteparse",
             "source_file": path.name,
+            "multicolumn_pages_reflowed": reflowed_pages,
         }
         if self.vision_provider is not None and figures:
             text, described = await enrich_markdown_figures(
@@ -1029,27 +1182,64 @@ class LiteParseExtractor:
             if described:
                 metadata["figures_described"] = described
         self.last_metadata = metadata
-        return text
+        assets: list[ExtractedAsset] = []
+        seen_asset_names: set[str] = set()
+        for figure in figures:
+            placeholder = figure.find_placeholder(text)
+            if placeholder is None:
+                continue
+            filename = placeholder.removeprefix("![](").removesuffix(")")
+            if Path(filename).name != filename or filename in seen_asset_names:
+                continue
+            seen_asset_names.add(filename)
+            assets.append(
+                ExtractedAsset(
+                    filename=filename,
+                    media_type=figure.media_type,
+                    data=figure.data,
+                    sha256=hashlib.sha256(figure.data).hexdigest(),
+                )
+            )
+        metadata["figures_extracted"] = len(assets)
+        return ExtractionPayload(text=text, assets=tuple(assets))
 
-    def _extract_sync(self, path: Path) -> tuple[str, list[FigureImage]]:
+    def _extract_sync(self, path: Path) -> tuple[str, list[FigureImage], int]:
         try:
             liteparse = importlib.import_module("liteparse")
         except ImportError as exc:  # pragma: no cover - guarded by liteparse_available
             raise RuntimeError("PDF/image extraction requires the 'liteparse' extra") from exc
-        # Vision enrichment needs the raw image bytes, which liteparse only
-        # populates in "embed" mode; the markdown placeholders are identical.
-        image_mode = "embed" if self.vision_provider is not None else self.image_mode
-        parser = liteparse.LiteParse(
-            output_format="markdown",
-            ocr_enabled=True,
-            ocr_server_url=self.ocr_server_url,
-            ocr_language=self.ocr_language,
-            tessdata_path=self.tessdata_path,
-            image_mode=image_mode,
-            dpi=self.dpi,
-            max_pages=self.max_pages,
-            quiet=True,
-        )
+        def parser(*, image_mode: str, target_pages: str | None = None) -> Any:
+            return liteparse.LiteParse(
+                output_format="markdown",
+                ocr_enabled=target_pages is None,
+                ocr_server_url=self.ocr_server_url,
+                ocr_language=self.ocr_language,
+                tessdata_path=self.tessdata_path,
+                image_mode=image_mode,
+                dpi=self.dpi,
+                max_pages=self.max_pages,
+                target_pages=target_pages,
+                quiet=True,
+            )
+
+        def parse(source: Path) -> tuple[str, list[FigureImage], int]:
+            # A whole-document embed parse can retain every decoded image in
+            # native memory at once. Parse text cheaply, then fetch only pages
+            # that produced local references in bounded batches.
+            text_mode = "off" if self.image_mode == "off" else "placeholder"
+            result = parser(image_mode=text_mode).parse(str(source))
+            text, _unused_figures, reflowed_pages = self._collect_result(result)
+            referenced_pages = sorted(
+                {int(match) for match in _LITEPARSE_IMAGE_PAGE_RE.findall(text)}
+            )
+            figures: list[FigureImage] = []
+            for start in range(0, len(referenced_pages), _LITEPARSE_ASSET_PAGE_BATCH):
+                page_batch = referenced_pages[start : start + _LITEPARSE_ASSET_PAGE_BATCH]
+                selected = ",".join(str(page) for page in page_batch)
+                embedded = parser(image_mode="embed", target_pages=selected).parse(str(source))
+                figures.extend(self._figures_from_result(embedded))
+            return text, figures, reflowed_pages
+
         # liteparse parses PDFs natively but converts loose images to PDF first,
         # which needs ImageMagick. Do that conversion ourselves with Pillow (after
         # orienting the image upright) so images get the full liteparse pipeline
@@ -1063,22 +1253,25 @@ class LiteParseExtractor:
                     ocr_timeout_seconds=self.ocr_timeout_seconds,
                     fallback_dpi=self.dpi,
                 )
-                return self._collect_result(parser.parse(str(pdf_path)))
-        return self._collect_result(parser.parse(str(path)))
+                return parse(pdf_path)
+        return parse(path)
 
-    def _collect_result(self, result: Any) -> tuple[str, list[FigureImage]]:
-        figures: list[FigureImage] = []
-        if self.vision_provider is not None:
-            for image in result.images:
-                figures.append(
-                    FigureImage(
-                        id=str(image.id),
-                        page=int(image.page),
-                        media_type=figure_media_type(str(image.format)),
-                        data=bytes(image.bytes),
-                    )
-                )
-        return cast(str, result.text), figures
+    @staticmethod
+    def _figures_from_result(result: Any) -> list[FigureImage]:
+        return [
+            FigureImage(
+                id=str(image.id),
+                page=int(image.page),
+                media_type=figure_media_type(str(image.format)),
+                data=bytes(image.bytes),
+            )
+            for image in result.images
+        ]
+
+    def _collect_result(self, result: Any) -> tuple[str, list[FigureImage], int]:
+        figures = self._figures_from_result(result)
+        text, reflowed_pages = reflow_multicolumn_markdown(result)
+        return text, figures, reflowed_pages
 
 
 class FallbackExtractor:
@@ -1102,10 +1295,13 @@ class FallbackExtractor:
         self.last_metadata: dict[str, object] | None = None
 
     async def extract(self, path: Path) -> str:
+        return (await self.extract_with_assets(path)).text
+
+    async def extract_with_assets(self, path: Path) -> ExtractionPayload:
         try:
-            text = await self._primary.extract(path)
+            payload = await _extract_payload(self._primary, path)
             self.last_metadata = _extractor_metadata(self._primary)
-            return text
+            return payload
         except Exception as exc:  # noqa: BLE001 - intentional fallback to the legacy extractor
             # A silent engine downgrade (e.g. a permanently broken liteparse
             # install) is otherwise undiagnosable, so record why we fell back.
@@ -1113,12 +1309,12 @@ class FallbackExtractor:
             _LOGGER.warning(
                 "primary extractor failed for %s; falling back: %s", path.name, primary_error
             )
-            text = await self._fallback.extract(path)
+            payload = await _extract_payload(self._fallback, path)
             metadata = dict(_extractor_metadata(self._fallback) or {})
             metadata["fallback_from_primary"] = True
             metadata["primary_error"] = primary_error
             self.last_metadata = metadata
-            return text
+            return payload
 
     def set_page_manifest_path(self, path: Path | None) -> None:
         _page_manifest_path_var.set(path)
@@ -1128,6 +1324,14 @@ class TextExtractorLike(Protocol):
     supported_extensions: frozenset[str]
 
     async def extract(self, path: Path) -> str: ...
+
+
+async def _extract_payload(extractor: TextExtractorLike, path: Path) -> ExtractionPayload:
+    rich_extract = getattr(extractor, "extract_with_assets", None)
+    if callable(rich_extract):
+        typed_extract = cast("Callable[[Path], Awaitable[ExtractionPayload]]", rich_extract)
+        return await typed_extract(path)
+    return ExtractionPayload(text=await extractor.extract(path))
 
 
 def _extractor_metadata(extractor: object) -> dict[str, object] | None:
@@ -1206,6 +1410,9 @@ class CachingExtractor:
         self.last_cache_hit: bool | None = None
 
     async def extract(self, path: Path) -> str:
+        return (await self.extract_with_assets(path)).text
+
+    async def extract_with_assets(self, path: Path) -> ExtractionPayload:
         # Cache composes with the page-manifest/sidecar flow: on a hit we return
         # the cached Markdown (no OCR runs, so no per-page manifest is needed);
         # on a miss the real extraction runs with the manifest active and the
@@ -1218,31 +1425,37 @@ class CachingExtractor:
         signature = f"{self._config_signature}:{extension}"
         content_sha256 = await asyncio.to_thread(_file_sha256, path)
         cached = await self._cache.get_extraction(content_sha256, signature)
-        if cached is not None:
+        # The original text-only cache cannot prove that local image references
+        # have matching binary assets. Reuse it for text-only output; otherwise
+        # re-extract once and let the document asset store retain the figures.
+        if cached is not None and not _has_local_image_references(cached):
             self.last_cache_hit = True
             self.last_metadata = {
                 "artifact_type": "extraction-cache-hit",
                 "engine": "cache",
                 "content_sha256": content_sha256,
             }
-            return cached
+            return ExtractionPayload(text=cached)
 
-        text = await self._extract_uncached(path)
+        payload = await self._extract_uncached_payload(path)
         await self._cache.put_extraction(
             ExtractionCacheEntry(
                 content_sha256=content_sha256,
                 config_signature=signature,
                 source_extension=extension,
-                text=text,
+                text=payload.text,
             )
         )
-        return text
+        return payload
 
     async def _extract_uncached(self, path: Path) -> str:
-        text = await self._inner.extract(path)
+        return (await self._extract_uncached_payload(path)).text
+
+    async def _extract_uncached_payload(self, path: Path) -> ExtractionPayload:
+        payload = await _extract_payload(self._inner, path)
         self.last_cache_hit = False
         self.last_metadata = _extractor_metadata(self._inner)
-        return text
+        return payload
 
     def set_page_manifest_path(self, path: Path | None) -> None:
         _page_manifest_path_var.set(path)
@@ -1425,16 +1638,37 @@ class CompositeExtractor:
         )
 
     async def extract(self, path: Path) -> str:
+        return (await self.extract_with_assets(path)).text
+
+    async def extract_with_assets(self, path: Path) -> ExtractionPayload:
         extension = path.suffix.lower()
         if extension in ARCHIVE_EXTENSIONS:
             raise ValueError(f"Archive inputs are not supported by default: {extension}")
         extractor = self._extractors.get(extension)
         if extractor is None:
             raise ValueError(f"Unsupported file extension: {extension}")
-        text = await self._extract_with_timeout(extractor, path)
+        payload = await self._extract_payload_with_timeout(extractor, path)
         metadata = getattr(extractor, "last_metadata", None)
         self.last_metadata = metadata if isinstance(metadata, dict) else None
-        return text
+        return payload
+
+    async def _extract_payload_with_timeout(
+        self, extractor: TextExtractorLike, path: Path
+    ) -> ExtractionPayload:
+        if self._extraction_timeout_seconds <= 0:
+            return await _extract_payload(extractor, path)
+        try:
+            return await asyncio.wait_for(
+                _extract_payload(extractor, path), timeout=self._extraction_timeout_seconds
+            )
+        except TimeoutError as exc:
+            _LOGGER.warning(
+                "extraction_timeout",
+                extra={"path": path.name, "timeout_seconds": self._extraction_timeout_seconds},
+            )
+            raise ExtractionTimeoutError(
+                f"Extraction exceeded {self._extraction_timeout_seconds}s: {path.name}"
+            ) from exc
 
     async def _extract_with_timeout(self, extractor: TextExtractorLike, path: Path) -> str:
         """Bound how long the caller waits for an extraction.

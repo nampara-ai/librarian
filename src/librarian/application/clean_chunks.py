@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -65,6 +66,47 @@ class CleanedChunk:
 
 
 ChunkCleanedCallback = Callable[[CleanedChunk], Awaitable[None]]
+
+_FIDELITY_WARNINGS = frozenset(
+    {
+        "collapsed-paragraphs",
+        "context-marker-leak",
+        "changed-markdown-images",
+        "empty-after-artifact-filter",
+        "empty-output",
+        "malformed-markdown-table",
+        "missing-citation-marker",
+        "missing-markdown-heading",
+        "missing-markdown-list",
+        "missing-markdown-table",
+        "repeated-tail",
+        "substantial-content-loss",
+        "suspiciously-short-output",
+    }
+)
+_CONTEXT_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
+_MIN_DUPLICATED_CONTEXT_TOKENS = 15
+
+
+def strip_repeated_context(text: str, previous_context: str) -> tuple[str, bool]:
+    """Remove a context suffix copied by the model onto the next chunk.
+
+    Matching token sequences makes this robust to punctuation and Markdown
+    changes while retaining exact character boundaries in the model output.
+    """
+    if not previous_context or not text:
+        return text, False
+    context_tokens = [
+        match.group(0).casefold() for match in _CONTEXT_TOKEN_RE.finditer(previous_context)
+    ]
+    output_matches = list(_CONTEXT_TOKEN_RE.finditer(text))
+    output_tokens = [match.group(0).casefold() for match in output_matches]
+    maximum = min(len(context_tokens), len(output_tokens))
+    for count in range(maximum, _MIN_DUPLICATED_CONTEXT_TOKENS - 1, -1):
+        if context_tokens[-count:] == output_tokens[:count]:
+            remainder = text[output_matches[count - 1].end() :]
+            return remainder.lstrip(" \t\r\n.,;:!?—–-*_").lstrip(), True
+    return text, False
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,9 +257,24 @@ class CleanChunks:
                 "cleaning provider response exceeded configured character limit "
                 f"({len(raw)} > {self.max_response_chars})"
             )
+        raw, stripped_context = strip_repeated_context(raw, previous_context)
         validated = validate_cleaned_text(
             raw,
             input_size=len(chunk.text),
             source_text=chunk.text,
         )
-        return CleanedChunk(chunk=chunk, text=validated.text, warnings=validated.warnings)
+        warnings = list(validated.warnings)
+        if stripped_context:
+            warnings.append("repeated-context-stripped")
+        if _FIDELITY_WARNINGS.intersection(warnings):
+            warnings.append("source-preserved-after-fidelity-check")
+            return CleanedChunk(
+                chunk=chunk,
+                text=chunk.text.strip(),
+                warnings=tuple(dict.fromkeys(warnings)),
+            )
+        return CleanedChunk(
+            chunk=chunk,
+            text=validated.text,
+            warnings=tuple(dict.fromkeys(warnings)),
+        )

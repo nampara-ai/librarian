@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import hashlib
 import json
 import sqlite3
@@ -16,7 +17,8 @@ from librarian.application.ingest_document import raw_text_key
 from librarian.application.jobs import QueueWorker
 from librarian.config import Settings
 from librarian.domain.ids import DocumentId
-from librarian.storage.sqlite import SQLiteDatabase, SQLiteRunQueue
+from librarian.domain.models import DocumentAsset
+from librarian.storage.sqlite import SQLiteDatabase, SQLiteRepository, SQLiteRunQueue
 
 
 def test_api_upload_run_and_get_content(tmp_path: Path) -> None:
@@ -217,6 +219,33 @@ def test_api_upload_run_and_get_content(tmp_path: Path) -> None:
         assert "Classification: 636.1 - Horses & Equines" in exported_md.text
         assert "Tags: horses, equines" in exported_md.text
         assert "\n---\n" in exported_md.text
+
+        image = b"figure-bytes"
+        repository = SQLiteRepository(SQLiteDatabase(settings.database_path))
+        asyncio.run(
+            repository.replace_document_assets(
+                DocumentId(document_id),
+                [
+                    DocumentAsset(
+                        document_id=DocumentId(document_id),
+                        filename="image_p1_0.png",
+                        media_type="image/png",
+                        data=image,
+                        sha256=hashlib.sha256(image).hexdigest(),
+                    )
+                ],
+            )
+        )
+        assets = client.get(f"/documents/{document_id}/assets")
+        assert assets.status_code == 200
+        assert assets.json()["assets"] == [
+            {
+                "filename": "image_p1_0.png",
+                "media_type": "image/png",
+                "data_base64": base64.b64encode(image).decode("ascii"),
+                "sha256": hashlib.sha256(image).hexdigest(),
+            }
+        ]
 
 
 def test_api_search_results_include_transcript_citation(tmp_path: Path) -> None:
@@ -1456,7 +1485,7 @@ def test_api_config_exposes_operational_controls(tmp_path: Path) -> None:
     assert payload["ocr_threshold"] == 160
     assert payload["ocr_preserve_page_images"] is True
     assert payload["ocr_rotation_retry"] is True
-    assert payload["cleaning_prompt_version"] == "cmos_v4"
+    assert payload["cleaning_prompt_version"] == "cmos_v5"
     assert payload["classification_prompt_version"] == "dewey_v5"
     assert payload["universal_timeout_seconds"] == 77
     assert payload["llm_max_retries"] == settings.llm_max_retries

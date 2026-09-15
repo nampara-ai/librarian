@@ -61,6 +61,18 @@ struct ExportedDocument: Codable {
 struct RawExport {
     let data: Data
     let suggestedStem: String?
+    let assets: [ExportAsset]
+}
+
+struct ExportAsset: Codable {
+    let filename: String
+    let mediaType: String
+    let dataBase64: String
+    let sha256: String
+}
+
+struct DocumentAssetsResponse: Codable {
+    let assets: [ExportAsset]
 }
 
 struct SearchResult: Codable, Identifiable, Hashable {

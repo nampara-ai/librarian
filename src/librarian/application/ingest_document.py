@@ -9,9 +9,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from librarian.application.ports import ContentStore, DocumentRepository, TextExtractor
+from librarian.application.ports import (
+    AssetStore,
+    ContentStore,
+    DocumentRepository,
+    TextExtractor,
+)
 from librarian.domain.ids import DocumentId
-from librarian.domain.models import Document, SourceFile
+from librarian.domain.models import (
+    Document,
+    DocumentAsset,
+    ExtractionPayload,
+    SourceFile,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +40,7 @@ class IngestDocument:
     documents: DocumentRepository
     content: ContentStore
     extractor: TextExtractor
+    assets: AssetStore | None = None
     max_source_bytes: int | None = None
 
     async def execute(self, path: Path) -> IngestedDocument:
@@ -41,8 +52,21 @@ class IngestDocument:
             try:
                 raw_text = await self.content.get_text(raw_text_key(document_id))
             except KeyError:
-                raw_text = await self.extractor.extract(source_path)
+                extracted = await _extract_payload(self.extractor, source_path)
+                raw_text = extracted.text
                 await self.content.put_text(raw_text_key(document_id), raw_text)
+                await self._save_assets(document_id, extracted)
+            else:
+                # Databases created before asset persistence need one fresh
+                # extraction. The durable marker also distinguishes a valid
+                # empty asset set from an interrupted migration/re-extraction.
+                if self.assets is not None and not await self.assets.document_assets_initialized(
+                    document_id
+                ):
+                    extracted = await _extract_payload(self.extractor, source_path)
+                    raw_text = extracted.text
+                    await self.content.put_text(raw_text_key(document_id), raw_text)
+                    await self._save_assets(document_id, extracted)
             return IngestedDocument(document=existing, raw_text=raw_text, duplicate=True)
 
         media_type = mimetypes.guess_type(source_path.name)[0] or "application/octet-stream"
@@ -56,7 +80,8 @@ class IngestDocument:
                 sha256=digest,
             ),
         )
-        raw_text = await self.extractor.extract(source_path)
+        extracted = await _extract_payload(self.extractor, source_path)
+        raw_text = extracted.text
         # Persist the document row and its raw text atomically when the backend
         # supports it, so a crash can't leave a document with no extractable text
         # (which would fail processing with a KeyError).
@@ -67,12 +92,36 @@ class IngestDocument:
         else:
             await self.documents.save_document(document)
             await self.content.put_text(raw_text_key(document_id), raw_text)
+        await self._save_assets(document_id, extracted)
         return IngestedDocument(document=document, raw_text=raw_text)
+
+    async def _save_assets(self, document_id: DocumentId, payload: ExtractionPayload) -> None:
+        if self.assets is None:
+            return
+        converted = [
+            DocumentAsset(
+                document_id=document_id,
+                filename=asset.filename,
+                media_type=asset.media_type,
+                data=asset.data,
+                sha256=asset.sha256,
+            )
+            for asset in payload.assets
+        ]
+        await self.assets.replace_document_assets(document_id, converted)
 
 
 def raw_text_key(document_id: DocumentId) -> str:
     """Content key for a document's extracted source text."""
     return f"raw:{document_id}"
+
+
+async def _extract_payload(extractor: TextExtractor, path: Path) -> ExtractionPayload:
+    rich_extract = getattr(extractor, "extract_with_assets", None)
+    if callable(rich_extract):
+        typed_extract = cast("Callable[[Path], Awaitable[ExtractionPayload]]", rich_extract)
+        return await typed_extract(path)
+    return ExtractionPayload(text=await extractor.extract(path))
 
 
 async def _read_source(path: Path, *, max_source_bytes: int | None = None) -> tuple[Path, bytes]:

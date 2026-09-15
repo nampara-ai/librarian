@@ -505,7 +505,7 @@ final class AppModel: ObservableObject {
                 stem: stem,
                 fileExtension: format.fileExtension
             )
-            try export.data.write(to: destination)
+            try Self.writeExport(export, to: destination)
             if keepOriginals {
                 let originalCopy = collisionFreeURL(
                     in: folder,
@@ -575,8 +575,52 @@ final class AppModel: ObservableObject {
             stem: stem,
             fileExtension: format.fileExtension
         )
-        try export.data.write(to: destination)
+        try Self.writeExport(export, to: destination)
         return destination
+    }
+
+    /// Write a Markdown export and its referenced figures as one portable
+    /// sibling asset directory. Text and JSON exports have no assets and take
+    /// the direct path. Asset names are treated as untrusted API data.
+    nonisolated private static func writeExport(_ export: RawExport, to destination: URL) throws {
+        guard !export.assets.isEmpty,
+              var markdown = String(data: export.data, encoding: .utf8) else {
+            try export.data.write(to: destination, options: .atomic)
+            return
+        }
+
+        let manager = FileManager.default
+        let baseAssetStem = destination.deletingPathExtension().lastPathComponent + ".assets"
+        var assetFolder = destination.deletingLastPathComponent()
+            .appendingPathComponent(baseAssetStem, isDirectory: true)
+        var suffix = 2
+        while manager.fileExists(atPath: assetFolder.path) {
+            assetFolder = destination.deletingLastPathComponent()
+                .appendingPathComponent("\(baseAssetStem)-\(suffix)", isDirectory: true)
+            suffix += 1
+        }
+
+        try manager.createDirectory(at: assetFolder, withIntermediateDirectories: true)
+        do {
+            for asset in export.assets {
+                guard !asset.filename.isEmpty,
+                      URL(fileURLWithPath: asset.filename).lastPathComponent == asset.filename,
+                      asset.filename != ".", asset.filename != "..",
+                      let bytes = Data(base64Encoded: asset.dataBase64) else {
+                    throw APIClientError(message: "The engine returned an invalid document asset")
+                }
+                let target = assetFolder.appendingPathComponent(asset.filename)
+                try bytes.write(to: target, options: .atomic)
+                markdown = markdown.replacingOccurrences(
+                    of: "](\(asset.filename))",
+                    with: "](\(assetFolder.lastPathComponent)/\(asset.filename))"
+                )
+            }
+            try Data(markdown.utf8).write(to: destination, options: .atomic)
+        } catch {
+            try? manager.removeItem(at: assetFolder)
+            throw error
+        }
     }
 
     /// Delete a document (and its cleaned output) from the engine's corpus.

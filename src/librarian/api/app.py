@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import ipaddress
 import json
@@ -142,6 +143,17 @@ class DocumentsResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class DocumentAssetResponse(BaseModel):
+    filename: str
+    media_type: str
+    data_base64: str
+    sha256: str
+
+
+class DocumentAssetsResponse(BaseModel):
+    assets: list[DocumentAssetResponse]
 
 
 class ErrorResponse(BaseModel):
@@ -1171,6 +1183,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             transcript_citation=transcript_citation,
         )
         return _export_response(exported, export_format)
+
+    @app.get(
+        "/documents/{document_id}/assets", response_model=DocumentAssetsResponse
+    )
+    async def get_document_assets(document_id: str) -> DocumentAssetsResponse:
+        container = await build_ingest_container(settings)
+        document = await container.repository.get_document(DocumentId(document_id))
+        if document is None:
+            raise HTTPException(status_code=404, detail="Document not found")
+        assets = await container.repository.list_document_assets(DocumentId(document_id))
+        return DocumentAssetsResponse(
+            assets=[
+                DocumentAssetResponse(
+                    filename=asset.filename,
+                    media_type=asset.media_type,
+                    data_base64=base64.b64encode(asset.data).decode("ascii"),
+                    sha256=asset.sha256,
+                )
+                for asset in assets
+            ]
+        )
 
     @app.get("/export/okf", response_model=OkfBundleResponse)
     async def export_okf_bundle(

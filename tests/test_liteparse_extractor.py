@@ -3,6 +3,7 @@
 import asyncio
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,11 +13,49 @@ from librarian.ingest.extractors import (
     FallbackExtractor,
     LiteParseExtractor,
     liteparse_available,
+    reflow_multicolumn_markdown,
 )
 
 requires_liteparse = pytest.mark.skipif(
     not liteparse_available(), reason="liteparse extra not installed"
 )
+
+
+def test_multicolumn_reflow_uses_spatial_column_order() -> None:
+    items = [SimpleNamespace(text="Index", x=50, y=20, width=40, height=10)]
+    for row in range(12):
+        y = 100 + row * 20
+        items.extend(
+            [
+                SimpleNamespace(text=f"left {row}", x=50, y=y, width=70, height=10),
+                SimpleNamespace(text=f"right {row}", x=350, y=y, width=75, height=10),
+            ]
+        )
+    page = SimpleNamespace(width=600, height=500, text_items=items)
+    result = SimpleNamespace(
+        text="\n".join(f"left {row} right {row}" for row in range(12)), pages=[page]
+    )
+
+    output, count = reflow_multicolumn_markdown(result)
+
+    assert count == 1
+    assert output.index("left 11") < output.index("right 0")
+
+
+def test_multicolumn_reflow_leaves_ordinary_prose_untouched() -> None:
+    items = [
+        SimpleNamespace(
+            text=f"A full width prose line {row}", x=50, y=80 + row * 15, width=450, height=10
+        )
+        for row in range(14)
+    ]
+    source = "\n".join(item.text for item in items)
+    result = SimpleNamespace(
+        text=source,
+        pages=[SimpleNamespace(width=600, height=500, text_items=items)],
+    )
+
+    assert reflow_multicolumn_markdown(result) == (source, 0)
 
 
 def _table_pdf_bytes() -> bytes:

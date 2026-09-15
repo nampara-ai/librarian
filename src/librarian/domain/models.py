@@ -64,6 +64,24 @@ class SourceFile:
 
 
 @dataclass(frozen=True, slots=True)
+class ExtractedAsset:
+    """A portable binary asset emitted alongside extracted document text."""
+
+    filename: str
+    media_type: str
+    data: bytes
+    sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class ExtractionPayload:
+    """Extracted text and every local asset it references."""
+
+    text: str
+    assets: tuple[ExtractedAsset, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class Document:
     """A logical library document."""
 
@@ -72,6 +90,17 @@ class Document:
     status: DocumentStatus = DocumentStatus.INGESTED
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentAsset:
+    """A binary asset referenced by a document's extracted Markdown."""
+
+    document_id: DocumentId
+    filename: str
+    media_type: str
+    data: bytes
+    sha256: str
 
 
 @dataclass(frozen=True, slots=True)

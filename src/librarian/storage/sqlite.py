@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import json
 import re
@@ -24,6 +25,7 @@ from librarian.domain.models import (
     Classification,
     CleanedOutput,
     Document,
+    DocumentAsset,
     DocumentStatus,
     ProcessingRun,
     RunEvent,
@@ -49,6 +51,11 @@ _FTS_HIGHLIGHT_END = "\x1f/H\x1f"
 _SEARCH_TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
 _SEARCH_TERM_RE = re.compile(r"[\w]+(?:[-\u2010-\u2015/][\w]+)+|[\w]+", re.UNICODE)
 _SEARCH_POSSESSIVE_RE = re.compile(r"(?<=\w)['\u2019]s\b", re.UNICODE)
+
+
+def _validate_asset_filename(filename: str) -> None:
+    if not filename or Path(filename).name != filename or filename in {".", ".."}:
+        raise ValueError(f"invalid document asset filename: {filename!r}")
 
 
 def _path_crosses_symlink(path: Path) -> bool:
@@ -567,6 +574,20 @@ class SQLiteRepository:
     async def get_text(self, key: str) -> str:
         """Read text content by key."""
         return await asyncio.to_thread(self._get_text_sync, key)
+
+    async def replace_document_assets(
+        self, document_id: DocumentId, assets: Sequence[DocumentAsset]
+    ) -> None:
+        """Atomically replace all binary assets for one document."""
+        await asyncio.to_thread(self._replace_document_assets_sync, document_id, assets)
+
+    async def list_document_assets(self, document_id: DocumentId) -> Sequence[DocumentAsset]:
+        """Return binary assets for a document in stable filename order."""
+        return await asyncio.to_thread(self._list_document_assets_sync, document_id)
+
+    async def document_assets_initialized(self, document_id: DocumentId) -> bool:
+        """Return whether asset extraction has completed, including an empty result."""
+        return await asyncio.to_thread(self._document_assets_initialized_sync, document_id)
 
     async def get_extraction(self, content_sha256: str, config_signature: str) -> str | None:
         """Return cached extracted text for a content digest + config signature."""
@@ -1107,6 +1128,78 @@ class SQLiteRepository:
         if row is None:
             raise KeyError(key)
         return str(row["text"])
+
+    def _replace_document_assets_sync(
+        self, document_id: DocumentId, assets: Sequence[DocumentAsset]
+    ) -> None:
+        raw_document_id = str(document_id)
+        for asset in assets:
+            if asset.document_id != document_id:
+                raise ValueError("document asset belongs to a different document")
+            _validate_asset_filename(asset.filename)
+            if hashlib.sha256(asset.data).hexdigest() != asset.sha256:
+                raise ValueError(f"document asset digest does not match: {asset.filename}")
+        now = utc_now().isoformat()
+        with self.database.connect() as connection:
+            connection.execute(
+                "DELETE FROM document_assets WHERE document_id = ?", (raw_document_id,)
+            )
+            connection.executemany(
+                """
+                INSERT INTO document_assets (
+                  document_id, filename, media_type, data, sha256, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        raw_document_id,
+                        asset.filename,
+                        asset.media_type,
+                        asset.data,
+                        asset.sha256,
+                        now,
+                    )
+                    for asset in assets
+                ],
+            )
+            connection.execute(
+                """
+                INSERT INTO document_asset_sets (document_id, created_at)
+                VALUES (?, ?)
+                ON CONFLICT(document_id) DO UPDATE SET created_at = excluded.created_at
+                """,
+                (raw_document_id, now),
+            )
+
+    def _list_document_assets_sync(self, document_id: DocumentId) -> list[DocumentAsset]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT filename, media_type, data, sha256
+                FROM document_assets
+                WHERE document_id = ?
+                ORDER BY filename
+                """,
+                (str(document_id),),
+            ).fetchall()
+        return [
+            DocumentAsset(
+                document_id=document_id,
+                filename=str(row["filename"]),
+                media_type=str(row["media_type"]),
+                data=bytes(row["data"]),
+                sha256=str(row["sha256"]),
+            )
+            for row in rows
+        ]
+
+    def _document_assets_initialized_sync(self, document_id: DocumentId) -> bool:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM document_asset_sets WHERE document_id = ?",
+                (str(document_id),),
+            ).fetchone()
+        return row is not None
 
     def _get_extraction_sync(self, content_sha256: str, config_signature: str) -> str | None:
         with self.database.connect() as connection:

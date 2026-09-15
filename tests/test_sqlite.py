@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 import sqlite3
 import time
@@ -15,6 +16,7 @@ from librarian.domain.ids import DocumentId, RunId
 from librarian.domain.models import (
     Classification,
     Document,
+    DocumentAsset,
     DocumentStatus,
     ProcessingRun,
     RunStage,
@@ -123,10 +125,45 @@ async def test_sqlite_initializes_schema(tmp_path: Path) -> None:
         "0009_extraction_cache.sql",
         "0010_performance_indexes.sql",
         "0011_fts_porter_stemming.sql",
+        "0012_document_assets.sql",
     ]
     assert busy_timeout == 5000
     assert str(journal_mode).lower() == "wal"
     assert synchronous == 1
+
+
+@pytest.mark.asyncio
+async def test_sqlite_document_assets_round_trip_and_cascade(tmp_path: Path) -> None:
+    database = SQLiteDatabase(tmp_path / "librarian.sqlite")
+    await database.initialize()
+    repository = SQLiteRepository(database)
+    document = Document(
+        id=DocumentId("doc_assets"),
+        source=SourceFile(
+            path=tmp_path / "guide.pdf",
+            filename="guide.pdf",
+            media_type="application/pdf",
+            byte_size=10,
+            sha256="a" * 64,
+        ),
+    )
+    await repository.save_document(document)
+    assert await repository.document_assets_initialized(document.id) is False
+    image = b"portable-figure"
+    asset = DocumentAsset(
+        document_id=document.id,
+        filename="image_p1_0.png",
+        media_type="image/png",
+        data=image,
+        sha256=hashlib.sha256(image).hexdigest(),
+    )
+
+    await repository.replace_document_assets(document.id, [asset])
+
+    assert await repository.document_assets_initialized(document.id) is True
+    assert list(await repository.list_document_assets(document.id)) == [asset]
+    await repository.delete_document(document.id)
+    assert list(await repository.list_document_assets(document.id)) == []
 
 
 @pytest.mark.asyncio

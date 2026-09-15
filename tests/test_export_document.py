@@ -1,7 +1,10 @@
 import json
 from pathlib import Path
 
-from librarian.application.export_document import ExportedDocument
+from librarian.application.export_document import (
+    ExportedDocument,
+    rewrite_document_asset_references,
+)
 from librarian.domain.ids import DocumentId, RunId
 from librarian.domain.models import Classification, CleanedOutput, Document, SourceFile
 
@@ -121,3 +124,19 @@ def test_export_stem_caps_length_and_never_returns_empty() -> None:
     assert len(capped.export_stem()) <= 100
     assert not capped.export_stem().endswith(" ")
     assert hostile.export_stem() == "document"
+
+
+def test_rewrite_document_asset_references_only_rewrites_known_local_images() -> None:
+    markdown = (
+        "![](image_1.png)\n"
+        "![](missing.png)\n"
+        "![remote](https://example.test/image_1.png)"
+    )
+
+    rendered = rewrite_document_asset_references(
+        markdown, asset_directory="Guide.assets", filenames={"image_1.png"}
+    )
+
+    assert "![](Guide.assets/image_1.png)" in rendered
+    assert "![](missing.png)" in rendered
+    assert "https://example.test/image_1.png" in rendered

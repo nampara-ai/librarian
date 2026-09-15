@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass
 
 ARTIFACT_PATTERNS = [
@@ -34,6 +35,10 @@ MARKDOWN_TABLE_ROW_REGEX = re.compile(r"(?m)^\s*\|.+\|\s*$")
 CITATION_MARKER_REGEX = re.compile(
     r"(?:\[[0-9A-Za-z][0-9A-Za-z .:-]{0,20}\]|\([A-Z][A-Za-z-]+,\s*\d{4}\))"
 )
+LOCAL_IMAGE_REFERENCE_REGEX = re.compile(
+    r"!\[[^\]]*\]\((?![a-z][a-z0-9+.-]*:|/|#)([^)\s]+)\)", re.IGNORECASE
+)
+VERBATIM_NUMBER_REGEX = re.compile(r"(?<![\w])\d+(?:[.,]\d+)*(?![\w])")
 REPEATED_TAIL_MIN_PATTERN_CHARS = 12
 REPEATED_TAIL_MAX_PATTERN_CHARS = 240
 REPEATED_TAIL_MIN_REPEATS = 8
@@ -111,6 +116,18 @@ def _markdown_quality_warnings(text: str, *, source_text: str | None) -> list[st
         warnings.append("missing-markdown-table")
     if CITATION_MARKER_REGEX.search(source_text) and CITATION_MARKER_REGEX.search(text) is None:
         warnings.append("missing-citation-marker")
+    source_images = Counter(LOCAL_IMAGE_REFERENCE_REGEX.findall(source_text))
+    output_images = Counter(LOCAL_IMAGE_REFERENCE_REGEX.findall(text))
+    if source_images != output_images:
+        warnings.append("changed-markdown-images")
+    source_numbers = Counter(VERBATIM_NUMBER_REGEX.findall(source_text))
+    output_numbers = Counter(VERBATIM_NUMBER_REGEX.findall(text))
+    if source_numbers - output_numbers:
+        warnings.append("missing-verbatim-number")
+    source_words = re.findall(r"\b\w+\b", source_text)
+    output_words = re.findall(r"\b\w+\b", text)
+    if len(source_words) >= 200 and len(output_words) < len(source_words) * 0.8:
+        warnings.append("substantial-content-loss")
     return warnings
 
 
