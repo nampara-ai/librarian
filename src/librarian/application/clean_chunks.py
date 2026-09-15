@@ -69,6 +69,7 @@ ChunkCleanedCallback = Callable[[CleanedChunk], Awaitable[None]]
 
 _FIDELITY_WARNINGS = frozenset(
     {
+        "added-verbatim-number",
         "collapsed-paragraphs",
         "context-marker-leak",
         "changed-markdown-images",

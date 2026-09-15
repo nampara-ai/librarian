@@ -111,6 +111,18 @@ def test_validation_detects_lost_images_numbers_and_substantial_content() -> Non
     assert "substantial-content-loss" in result.warnings
 
 
+def test_validation_detects_added_numbers() -> None:
+    source = "Keep the timeout at 120 seconds."
+
+    result = validate_cleaned_text(
+        "Keep the timeout at 120 seconds and retry 7 times.",
+        input_size=len(source),
+        source_text=source,
+    )
+
+    assert "added-verbatim-number" in result.warnings
+
+
 def test_strip_repeated_context_handles_markdown_punctuation_changes() -> None:
     repeated = "A glossary entry with enough meaningful words to detect copied continuity context."
     context = f"Earlier text. {repeated} It ends with fifteen stable tokens for the next section."
@@ -188,6 +200,39 @@ async def test_cleaner_preserves_source_when_model_loses_a_number() -> None:
 
     assert result.text == source
     assert "missing-verbatim-number" in result.warnings
+    assert "source-preserved-after-fidelity-check" in result.warnings
+
+
+@pytest.mark.asyncio
+async def test_cleaner_preserves_source_when_model_adds_a_number() -> None:
+    source = "Keep the timeout at 120 seconds for all production requests."
+
+    class AddsNumberProvider:
+        name = "adds-number"
+
+        async def complete(self, **_: object) -> str:
+            return "Keep the timeout at 120 seconds and retry 7 times."
+
+    chunk = Chunk(
+        id=ChunkId("chunk_added_numeric_fidelity"),
+        document_id=DocumentId("doc_added_numeric_fidelity"),
+        ordinal=0,
+        text=source,
+        start_char=0,
+        end_char=len(source),
+        sha256="c" * 64,
+    )
+    cleaner = CleanChunks(
+        provider=AddsNumberProvider(),  # type: ignore[arg-type]
+        prompt_catalog=PromptCatalog(),
+        prompt_version="cmos_v5",
+        model="test",
+    )
+
+    result = (await cleaner.execute([chunk]))[0]
+
+    assert result.text == source
+    assert "added-verbatim-number" in result.warnings
     assert "source-preserved-after-fidelity-check" in result.warnings
 
 

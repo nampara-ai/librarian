@@ -124,6 +124,8 @@ def _markdown_quality_warnings(text: str, *, source_text: str | None) -> list[st
     output_numbers = Counter(VERBATIM_NUMBER_REGEX.findall(text))
     if source_numbers - output_numbers:
         warnings.append("missing-verbatim-number")
+    if output_numbers - source_numbers:
+        warnings.append("added-verbatim-number")
     source_words = re.findall(r"\b\w+\b", source_text)
     output_words = re.findall(r"\b\w+\b", text)
     if len(source_words) >= 200 and len(output_words) < len(source_words) * 0.8:
