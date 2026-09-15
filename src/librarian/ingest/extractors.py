@@ -18,6 +18,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+from collections import Counter
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -348,6 +349,166 @@ def _render_plain_page_with_images(page: Any, markdown: str) -> str:
     return "\n\n".join(section for section in sections if section)
 
 
+def _page_furniture_key(text: str) -> str:
+    """Normalize a rendered or spatial line for page-furniture matching."""
+    text = re.sub(r"^\s{0,3}#{1,6}\s+", "", text.strip())
+    text = re.sub(r"[*_`~]+", "", text)
+    return re.sub(r"[^\w]+", " ", text.casefold()).strip()
+
+
+def _looks_like_footer_furniture(text: str) -> bool:
+    """Recognize a page locator alone or attached to a running section title."""
+    collapsed = re.sub(r"\s+", " ", text).strip()
+    if _LOCATOR_ONLY_RE.fullmatch(collapsed):
+        return True
+    return bool(
+        re.match(r"^(?:\d{1,4}|[ivxlcdm]{1,10})\b.*[A-Za-z]", collapsed, re.IGNORECASE)
+        or _PAGE_LOCATOR_RE.search(collapsed)
+    )
+
+
+def _footer_label_key(text: str) -> str | None:
+    """Return a footer label after removing a page locator at either edge."""
+    collapsed = re.sub(r"[*_`~]+", "", text)
+    collapsed = re.sub(r"\s+", " ", collapsed).strip()
+    locator = r"(?:\d{1,4}(?:\s*[-–—,]\s*\d{1,4})*|[ivxlcdm]{1,10})[.)]?"
+    without_prefix, prefix_count = re.subn(rf"^{locator}\s+", "", collapsed, count=1)
+    without_locator, suffix_count = re.subn(
+        rf"\s+{locator}$", "", without_prefix, count=1, flags=re.IGNORECASE
+    )
+    if not (prefix_count or suffix_count) or not re.search(r"[A-Za-z]", without_locator):
+        return None
+    return _page_furniture_key(without_locator)
+
+
+def _page_furniture_quotas(pages: Sequence[Any]) -> list[tuple[Counter[str], Counter[str]]]:
+    """Find repeated top headers and locator-bearing bottom footers by geometry."""
+    top_lines: list[list[str]] = []
+    bottom_lines: list[list[str]] = []
+    top_page_counts: Counter[str] = Counter()
+    bottom_page_counts: Counter[str] = Counter()
+    bottom_label_page_counts: Counter[str] = Counter()
+    for page in pages:
+        height = float(page.height)
+        spatial = _spatial_lines(page.text_items)
+        top = [
+            key
+            for line in spatial
+            if line.y < height * 0.085 and (key := _page_furniture_key(line.text))
+        ]
+        bottom = [
+            key
+            for line in spatial
+            if line.y > height * 0.92 and (key := _page_furniture_key(line.text))
+        ]
+        top_lines.append(top)
+        bottom_lines.append(bottom)
+        top_page_counts.update(set(top))
+        bottom_page_counts.update(set(bottom))
+        bottom_label_page_counts.update(
+            {
+                label
+                for line in spatial
+                if line.y > height * 0.92 and (label := _footer_label_key(line.text))
+            }
+        )
+
+    quotas: list[tuple[Counter[str], Counter[str]]] = []
+    for index, (top, bottom, page) in enumerate(zip(top_lines, bottom_lines, pages, strict=True)):
+        # Preserve the first page's opening material even when the same title
+        # is reused as a header later. Subsequent repeated top lines are page
+        # furniture rather than document content.
+        top_quota = Counter(key for key in top if index > 0 and top_page_counts[key] >= 2)
+        height = float(page.height)
+        spatial_bottom_by_key = {
+            _page_furniture_key(line.text): line.text
+            for line in _spatial_lines(page.text_items)
+            if line.y > height * 0.92 and _page_furniture_key(line.text)
+        }
+        bottom_quota = Counter(
+            key
+            for key in bottom
+            if bottom_page_counts[key] >= 2
+            or _LOCATOR_ONLY_RE.fullmatch(spatial_bottom_by_key[key])
+            or (
+                (label := _footer_label_key(spatial_bottom_by_key[key])) is not None
+                and bottom_label_page_counts[label] >= 2
+            )
+        )
+        quotas.append((top_quota, bottom_quota))
+    return quotas
+
+
+def _strip_page_furniture(
+    markdown: str,
+    top_quota: Counter[str],
+    bottom_quota: Counter[str],
+) -> str:
+    """Remove the exact header/footer occurrences identified on one PDF page."""
+    lines = markdown.splitlines()
+    removed: set[int] = set()
+    remaining_top = top_quota.copy()
+    for index, line in enumerate(lines):
+        key = _page_furniture_key(line)
+        if key and remaining_top[key] > 0:
+            removed.add(index)
+            remaining_top[key] -= 1
+    remaining_bottom = bottom_quota.copy()
+    for index in range(len(lines) - 1, -1, -1):
+        if index in removed:
+            continue
+        key = _page_furniture_key(lines[index])
+        if key and remaining_bottom[key] > 0:
+            removed.add(index)
+            remaining_bottom[key] -= 1
+    return "\n".join(line for index, line in enumerate(lines) if index not in removed).strip()
+
+
+def _strip_recurring_rendered_footers(blocks: Sequence[str]) -> list[str]:
+    """Remove footer fragments emitted without corresponding spatial items.
+
+    Some PDF renderers place one half of a two-part footer in Markdown without
+    exposing it through ``text_items``. Restrict this fallback to the final
+    non-image lines on a page: unique locator-only lines and repeated short
+    lines with a locator at either edge.
+    """
+    candidates: list[list[tuple[int, str, str]]] = []
+    page_counts: Counter[str] = Counter()
+    for block in blocks:
+        block_candidates: list[tuple[int, str, str]] = []
+        lines = block.splitlines()
+        for index in range(len(lines) - 1, -1, -1):
+            line = lines[index].strip()
+            if not line or _LOCAL_MARKDOWN_IMAGE_RE.fullmatch(line):
+                continue
+            key = _page_furniture_key(line)
+            if key:
+                block_candidates.append((index, key, line))
+            if len(block_candidates) == 3:
+                break
+        candidates.append(block_candidates)
+        page_counts.update({key for _index, key, _line in block_candidates})
+
+    cleaned: list[str] = []
+    for block, block_candidates in zip(blocks, candidates, strict=True):
+        removed = {
+            index
+            for position, (index, key, line) in enumerate(block_candidates)
+            if (position == 0 and _LOCATOR_ONLY_RE.fullmatch(re.sub(r"[*_`~]+", "", line).strip()))
+            or (
+                page_counts[key] >= 2
+                and re.search(r"[A-Za-z]", line)
+                and _looks_like_footer_furniture(line)
+            )
+        }
+        cleaned.append(
+            "\n".join(
+                line for index, line in enumerate(block.splitlines()) if index not in removed
+            ).strip()
+        )
+    return cleaned
+
+
 def _detect_two_column_layout(
     page: Any,
     *,
@@ -452,6 +613,7 @@ def normalize_spatial_markdown(result: Any) -> tuple[str, int, int, int]:
     pages = list(raw_pages)
     if len(blocks) != len(pages):
         return str(result.text), 0, 0, 0
+    furniture_quotas = _page_furniture_quotas(pages)
     multicolumn_reflowed = 0
     outlines_normalized = 0
     collapsed_tables_normalized = 0
@@ -495,6 +657,9 @@ def normalize_spatial_markdown(result: Any) -> tuple[str, int, int, int]:
         if corrupted_outline:
             blocks[index] = _render_outline_page(page)
             outlines_normalized += 1
+    for index, (top_quota, bottom_quota) in enumerate(furniture_quotas):
+        blocks[index] = _strip_page_furniture(blocks[index], top_quota, bottom_quota)
+    blocks = _strip_recurring_rendered_footers(blocks)
     return (
         "\n\n-----\n\n".join(blocks),
         multicolumn_reflowed,
@@ -1592,7 +1757,7 @@ def _extractor_metadata(extractor: object) -> dict[str, object] | None:
 
 # Bump when extraction output for a given config could change materially, to
 # invalidate every cached entry without a data migration.
-_EXTRACTION_CACHE_VERSION = 2
+_EXTRACTION_CACHE_VERSION = 3
 
 
 def extraction_config_signature(params: Mapping[str, object]) -> str:

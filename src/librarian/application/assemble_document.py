@@ -16,6 +16,7 @@ def assemble_cleaned_document(chunks: Sequence[CleanedChunk]) -> str:
     text = remove_artifact_lines(text)
     text = remove_consecutive_duplicate_sentences(text)
     text = remove_duplicate_headers(text)
+    text = remove_empty_code_fences(text)
     text = normalize_assembled_whitespace(text)
     return text.strip()
 
@@ -98,6 +99,16 @@ def _drop_leading_duplicate_sentence(text: str, previous_sentence: str) -> str:
 def remove_duplicate_headers(text: str) -> str:
     """Collapse duplicate Markdown headers emitted at chunk boundaries."""
     return re.sub(r"(#{1,6}\s+[^\n]+)\s+\1", r"\1", text)
+
+
+def remove_empty_code_fences(text: str) -> str:
+    """Remove fenced code blocks that contain no content."""
+    return re.sub(
+        r"(?m)(?:^|\n)[ \t]*(?P<fence>`{3,}|~{3,})[^\n]*\n"
+        r"[ \t]*\n?[ \t]*(?P=fence)[ \t]*(?:\n|$)",
+        "",
+        text,
+    )
 
 
 def normalize_assembled_whitespace(text: str) -> str:

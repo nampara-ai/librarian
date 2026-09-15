@@ -215,6 +215,63 @@ def test_spatial_normalization_repairs_collapsed_prose_and_preserves_image() -> 
     assert "|---|" not in output
 
 
+def test_spatial_normalization_removes_page_headers_and_footers_by_geometry() -> None:
+    pages: list[SimpleNamespace] = []
+    blocks: list[str] = []
+    for page_number in range(1, 4):
+        items = [
+            SimpleNamespace(text="Quarterly Field Report", x=50, y=25, width=140, height=10),
+            SimpleNamespace(text=f"Body finding {page_number}", x=50, y=120, width=150, height=10),
+            SimpleNamespace(text="2056", x=50, y=250, width=30, height=10),
+            SimpleNamespace(text=f"Results {page_number}", x=50, y=470, width=80, height=10),
+        ]
+        pages.append(SimpleNamespace(width=600, height=500, text_items=items))
+        blocks.append(
+            "\n\n".join(
+                (
+                    "###### Quarterly Field Report",
+                    f"Body finding {page_number}",
+                    "2056",
+                    f"Results {page_number}",
+                    "6 Dialog Boxes",
+                )
+            )
+        )
+    result = SimpleNamespace(text="\n\n-----\n\n".join(blocks), pages=pages)
+
+    output, multicolumn_count, outline_count, table_count = normalize_spatial_markdown(result)
+
+    # Keep page one's possible document title; discard later copies and every
+    # footer. A number in the page body must remain untouched.
+    assert output.count("Quarterly Field Report") == 1
+    assert "Results 1" not in output
+    assert "Results 2" not in output
+    assert "Results 3" not in output
+    assert "6 Dialog Boxes" not in output
+    assert output.count("2056") == 3
+    assert multicolumn_count == outline_count == table_count == 0
+
+
+def test_spatial_normalization_preserves_unique_bottom_edge_content() -> None:
+    result = SimpleNamespace(
+        text="Body finding\n\nRevenue 2024",
+        pages=[
+            SimpleNamespace(
+                width=600,
+                height=500,
+                text_items=[
+                    SimpleNamespace(text="Body finding", x=50, y=120, width=100, height=10),
+                    SimpleNamespace(text="Revenue 2024", x=50, y=470, width=100, height=10),
+                ],
+            )
+        ],
+    )
+
+    output, _columns, _outlines, _tables = normalize_spatial_markdown(result)
+
+    assert "Revenue 2024" in output
+
+
 def _table_pdf_bytes() -> bytes:
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",

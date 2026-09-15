@@ -69,6 +69,14 @@ def test_assembly_preserves_markdown_rendering_quality_at_chunk_boundaries() -> 
     )
 
 
+def test_assembly_removes_empty_code_fences() -> None:
+    assembled = assemble_cleaned_document(
+        [_cleaned_chunk(0, "Before.\n\n```text\n\n```\n\nAfter.")]
+    )
+
+    assert assembled == "Before.\n\nAfter."
+
+
 def _cleaned_chunk(ordinal: int, text: str) -> CleanedChunk:
     chunk = Chunk(
         id=ChunkId(f"chk_{ordinal}"),

@@ -93,6 +93,52 @@ async def test_v3_classification_includes_title_and_tags() -> None:
 
 
 @pytest.mark.asyncio
+async def test_explicit_source_title_overrides_model_paraphrase() -> None:
+    classifier = _classifier(
+        _CannedProvider(
+            json.dumps(
+                {
+                    "summary": "A summary.",
+                    "dewey_code": "005.4",
+                    "category_name": "Systems programming",
+                    "title": "Macintosh Application Interface Design Guidelines",
+                }
+            )
+        )
+    )
+
+    result = await classifier.execute(
+        DocumentId("doc_test"),
+        "# Macintosh Human Interface Guidelines\n\nCopyright Apple Computer, Inc.",
+    )
+
+    assert result.title == "Macintosh Human Interface Guidelines"
+
+
+@pytest.mark.asyncio
+async def test_generic_opening_heading_does_not_override_model_title() -> None:
+    classifier = _classifier(
+        _CannedProvider(
+            json.dumps(
+                {
+                    "summary": "A summary.",
+                    "dewey_code": "636.1",
+                    "category_name": "Horses & Equines",
+                    "title": "Saddle Fit Field Notes",
+                }
+            )
+        )
+    )
+
+    result = await classifier.execute(
+        DocumentId("doc_test"),
+        "# Introduction\n\nThese notes document saddle fitting observations.",
+    )
+
+    assert result.title == "Saddle Fit Field Notes"
+
+
+@pytest.mark.asyncio
 async def test_classification_includes_one_sentence_description() -> None:
     classifier = _classifier(MockLLMProvider())
 

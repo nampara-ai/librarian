@@ -110,6 +110,23 @@ _GENERIC_SERIES_STEMS = frozenset(
     }
 )
 
+_GENERIC_DOCUMENT_HEADINGS = frozenset(
+    {
+        "abstract",
+        "acknowledgments",
+        "bibliography",
+        "contents",
+        "executive summary",
+        "foreword",
+        "index",
+        "introduction",
+        "preface",
+        "references",
+        "summary",
+        "table of contents",
+    }
+)
+
 
 def _classification_sample(text: str, *, budget: int) -> str:
     """Return a representative excerpt of the document for classification.
@@ -200,9 +217,7 @@ def _series_key(
         return _series_slug(primary) or None
     if fallback_filename:
         stem = (
-            fallback_filename.rsplit(".", 1)[0]
-            if "." in fallback_filename
-            else fallback_filename
+            fallback_filename.rsplit(".", 1)[0] if "." in fallback_filename else fallback_filename
         )
         slug = _series_slug(stem)
         if _is_meaningful_series_slug(slug):
@@ -215,6 +230,46 @@ def _clean_title(value: str | None) -> str | None:
         return None
     collapsed = " ".join(value.split())
     return collapsed[:_MAX_TITLE_CHARS].strip() or None
+
+
+def _source_document_title(text: str) -> str | None:
+    """Return an explicit title heading near the start of the source.
+
+    A model is useful for naming untitled material, but it must not paraphrase a
+    title the document states itself. Only a top-level Markdown heading in the
+    opening material is authoritative; generic structural headings are ignored
+    so documents beginning with ``Introduction`` still use the model's title.
+    """
+    opening = text[:4_000]
+    nonempty_seen = 0
+    for line in opening.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        nonempty_seen += 1
+        if nonempty_seen > 24:
+            break
+        match = re.fullmatch(r"#\s+(.+?)\s*#*", stripped)
+        if match is None:
+            continue
+        candidate = re.sub(r"[*_`]+", "", match.group(1))
+        candidate = _clean_title(candidate)
+        if candidate is None:
+            continue
+        normalized = re.sub(r"[^a-z0-9]+", " ", candidate.lower()).strip()
+        if (
+            normalized in _GENERIC_DOCUMENT_HEADINGS
+            or re.fullmatch(r"(?:chapter|appendix|part)\s+[a-z0-9]+", normalized)
+            or len(candidate) < 4
+        ):
+            continue
+        return candidate
+    return None
+
+
+def _grounded_title(model_title: str | None, text: str) -> str | None:
+    """Prefer a source-stated title over an inferred or paraphrased one."""
+    return _source_document_title(text) or _clean_title(model_title)
 
 
 def _clean_description(value: str | None) -> str | None:
@@ -294,7 +349,7 @@ class ClassifyDocument:
             summary=payload.summary.strip() or "No summary available.",
             taxonomy=self.taxonomy.name,
             confidence=payload.confidence,
-            title=_clean_title(payload.title),
+            title=_grounded_title(payload.title, text),
             tags=_clean_tags(payload.tags),
             description=_clean_description(payload.description),
             issuer=issuer,
