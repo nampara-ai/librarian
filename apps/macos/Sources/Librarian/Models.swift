@@ -200,4 +200,11 @@ struct QueueItem: Identifiable {
     var startedAt: Date
 
     var filename: String { sourceURL.lastPathComponent }
+
+    /// A client deadline is only safe before a durable backend run exists.
+    /// Processing time scales with document size, provider latency, retries,
+    /// and cleaning style, while the backend reports its own terminal state.
+    func exceededPreRunTimeout(at now: Date, timeout: TimeInterval) -> Bool {
+        runID == nil && now.timeIntervalSince(startedAt) > timeout
+    }
 }

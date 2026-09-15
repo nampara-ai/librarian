@@ -12,8 +12,10 @@ final class AppModel: ObservableObject {
     static let keepOriginalsKey = "librarian.keepOriginals"
     static let defaultBaseURL = "http://127.0.0.1:8080"
 
-    /// Items stuck in a non-terminal stage longer than this are failed.
-    static let stageTimeout: TimeInterval = 15 * 60
+    /// Bound work before the engine has accepted a durable run. Once a run ID
+    /// exists, the backend's terminal status is authoritative: large documents
+    /// can legitimately take longer than this while continuing to make progress.
+    static let preRunTimeout: TimeInterval = 15 * 60
 
     /// Client-side upload ceiling, mirroring the backend's 100 MiB limit so an
     /// oversize file is rejected instantly instead of being read into RAM and
@@ -191,7 +193,8 @@ final class AppModel: ObservableObject {
             serverOnline = try await client.health()
         } catch {
             serverOnline = false
-            // Still apply timeouts so nothing spins forever while offline.
+            // Preserve durable runs while offline; a later successful refresh
+            // will reconcile their authoritative backend state.
             reconcileQueue()
             return
         }
@@ -401,11 +404,11 @@ final class AppModel: ObservableObject {
     }
 
     /// Fold backend documents and runs into queue stages, fire exports for
-    /// finished documents, and time out items that stopped making progress.
+    /// finished documents, and bound work that never reached a backend run.
     private func reconcileQueue() {
         let now = Date()
         for item in queue where !item.stage.isTerminal {
-            if now.timeIntervalSince(item.startedAt) > Self.stageTimeout {
+            if item.exceededPreRunTimeout(at: now, timeout: Self.preRunTimeout) {
                 setStage(item.id, .failed(reason: Copy.reasonTimeout, retryable: true))
                 continue
             }
