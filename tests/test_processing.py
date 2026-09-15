@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -964,6 +965,72 @@ async def test_failed_reprocess_preserves_ready_document_status(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_failed_clean_preserves_completed_chunks_for_retry(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+        chunk_target_chars=160,
+        chunk_overlap_chars=20,
+    )
+    source = tmp_path / "long-notes.txt"
+    source.write_text(
+        "\n\n".join(f"Sentence {index} about horse training." for index in range(24)),
+        encoding="utf-8",
+    )
+    container = await build_container(settings)
+    ingested = await container.ingest_document.execute(source)
+
+    class FailOnceProvider:
+        name = "fail-once"
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def complete(
+            self,
+            *,
+            system_prompt: str,
+            user_prompt: str,
+            model: str,
+            max_tokens: int,
+            temperature: float,
+        ) -> str:
+            del system_prompt, model, max_tokens, temperature
+            self.calls.append(user_prompt)
+            if len(self.calls) == 2:
+                raise RuntimeError("provider failed on second chunk")
+            if user_prompt.startswith("[CONTEXT:"):
+                return user_prompt.split("\n\n", 1)[-1]
+            return user_prompt
+
+    provider = FailOnceProvider()
+    cleaner = replace(
+        container.process_document.cleaner,
+        provider=provider,
+        model="fail-once-model",
+        coherence_mode="max-coherence",
+    )
+    process = replace(container.process_document, cleaner=cleaner)
+
+    with pytest.raises(RuntimeError, match="Cleaning chunk 2 failed: provider failed"):
+        await process.execute(ingested.document.id)
+
+    chunks = await container.repository.list_for_document(ingested.document.id)
+    cached = await container.repository.get_cached_cleaned_chunks(
+        chunks,
+        prompt_version=cleaner.prompt_version,
+        model_provider=provider.name,
+        model_name=cleaner.model,
+    )
+    assert len(chunks) > 2
+    assert [item.chunk.ordinal for item in cached] == [0]
+
+    completed = await process.execute(ingested.document.id)
+    assert completed.status == RunStatus.SUCCEEDED
+    assert len(provider.calls) == len(chunks) + 1
+
+
+@pytest.mark.asyncio
 async def test_failed_extraction_does_not_persist_document(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",
@@ -1073,7 +1140,7 @@ async def test_clean_chunks_reports_per_chunk_progress(coherence_mode: str) -> N
     )
     completions = 0
 
-    async def note() -> None:
+    async def note(_: object) -> None:
         nonlocal completions
         completions += 1
 

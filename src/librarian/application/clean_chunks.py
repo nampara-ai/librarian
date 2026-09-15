@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from librarian.application.ports import LLMProvider
 from librarian.domain.models import Chunk
+from librarian.observability import sanitize_error_message
 from librarian.pipeline.validation import validate_cleaned_text
 from librarian.prompts.loader import PromptCatalog
 
@@ -63,6 +64,9 @@ class CleanedChunk:
     warnings: tuple[str, ...]
 
 
+ChunkCleanedCallback = Callable[[CleanedChunk], Awaitable[None]]
+
+
 @dataclass(frozen=True, slots=True)
 class CleanChunks:
     """Clean chunks through an LLM provider."""
@@ -86,7 +90,7 @@ class CleanChunks:
         self,
         chunks: list[Chunk],
         *,
-        on_chunk_cleaned: Callable[[], Awaitable[None]] | None = None,
+        on_chunk_cleaned: ChunkCleanedCallback | None = None,
     ) -> list[CleanedChunk]:
         """Clean chunks, invoking on_chunk_cleaned after each completion."""
         if self.coherence_mode == "fast":
@@ -100,7 +104,7 @@ class CleanChunks:
     async def _clean_parallel(
         self,
         chunks: list[Chunk],
-        on_chunk_cleaned: Callable[[], Awaitable[None]] | None,
+        on_chunk_cleaned: ChunkCleanedCallback | None,
     ) -> list[CleanedChunk]:
         if not chunks:
             return []
@@ -125,12 +129,13 @@ class CleanChunks:
                     previous_context = (
                         chunks[index - 1].text[-self.context_chars :] if index > 0 else ""
                     )
-                    results[index] = await self._clean_one(
+                    result = await self._clean_one(
                         chunk,
                         previous_context=previous_context,
                     )
+                    results[index] = result
                     if on_chunk_cleaned is not None:
-                        await on_chunk_cleaned()
+                        await on_chunk_cleaned(result)
                 finally:
                     queue.task_done()
 
@@ -140,7 +145,7 @@ class CleanChunks:
     async def _clean_balanced(
         self,
         chunks: list[Chunk],
-        on_chunk_cleaned: Callable[[], Awaitable[None]] | None,
+        on_chunk_cleaned: ChunkCleanedCallback | None,
     ) -> list[CleanedChunk]:
         if not chunks:
             return []
@@ -175,7 +180,7 @@ class CleanChunks:
     async def _clean_sequential(
         self,
         chunks: list[Chunk],
-        on_chunk_cleaned: Callable[[], Awaitable[None]] | None = None,
+        on_chunk_cleaned: ChunkCleanedCallback | None = None,
     ) -> list[CleanedChunk]:
         results: list[CleanedChunk] = []
         previous_context = ""
@@ -184,7 +189,7 @@ class CleanChunks:
             results.append(result)
             previous_context = result.text[-self.context_chars :]
             if on_chunk_cleaned is not None:
-                await on_chunk_cleaned()
+                await on_chunk_cleaned(result)
         return results
 
     async def _clean_one(self, chunk: Chunk, *, previous_context: str) -> CleanedChunk:
@@ -193,13 +198,18 @@ class CleanChunks:
         if previous_context:
             user_prompt = f"[CONTEXT: This continues from: {previous_context}]\n\n{chunk.text}"
 
-        raw = await self.provider.complete(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            model=self.model,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-        )
+        try:
+            raw = await self.provider.complete(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                model=self.model,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+            )
+        except Exception as exc:  # noqa: BLE001 - identify the failed chunk without its text
+            raise RuntimeError(
+                f"Cleaning chunk {chunk.ordinal + 1} failed: {sanitize_error_message(exc)}"
+            ) from None
         if len(raw) > self.max_response_chars:
             raise ValueError(
                 "cleaning provider response exceeded configured character limit "

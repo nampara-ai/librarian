@@ -13,7 +13,7 @@ from typing import Any
 
 from librarian.application.assemble_document import assemble_cleaned_document
 from librarian.application.classify_document import ClassifyDocument
-from librarian.application.clean_chunks import CleanChunks
+from librarian.application.clean_chunks import CleanChunks, CleanedChunk
 from librarian.application.ingest_document import raw_text_key
 from librarian.application.ports import (
     ApplicationMetrics,
@@ -161,7 +161,18 @@ class ProcessDocument:
                     stage=RunStage.CLEAN,
                 )
 
-                async def _note_chunk_cleaned() -> None:
+                async def _note_chunk_cleaned(cleaned_chunk: CleanedChunk) -> None:
+                    # A later chunk may fail or the app may stop. Persist each
+                    # successful result before reporting progress so a retry
+                    # can reuse the work already paid for.
+                    await self.outputs.save_cleaned_chunks(run_id, [cleaned_chunk])
+                    if cleaned_chunk.text.strip():
+                        await self.outputs.save_cleaned_chunk_cache(
+                            [cleaned_chunk],
+                            prompt_version=self.cleaner.prompt_version,
+                            model_provider=self.cleaner.provider.name,
+                            model_name=self.cleaner.model,
+                        )
                     progress["completed"] += 1
                     await self.runs.update_run_progress(
                         run_id,
@@ -174,15 +185,6 @@ class ProcessDocument:
                     missing_chunks, on_chunk_cleaned=_note_chunk_cleaned
                 )
                 await self._raise_if_canceled(run_id)
-                # Never cache an empty/blank cleaning result: doing so would
-                # permanently rehydrate lost content on every future re-run.
-                cacheable = [chunk for chunk in cleaned_missing if chunk.text.strip()]
-                await self.outputs.save_cleaned_chunk_cache(
-                    cacheable,
-                    prompt_version=self.cleaner.prompt_version,
-                    model_provider=self.cleaner.provider.name,
-                    model_name=self.cleaner.model,
-                )
                 cleaned_chunks = sorted(
                     [*cached_chunks, *cleaned_missing],
                     key=lambda item: item.chunk.ordinal,

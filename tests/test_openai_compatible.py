@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -10,6 +11,7 @@ from librarian.llm import build_provider
 from librarian.llm.openai_compatible import (
     OpenAICompatibleProvider,
     is_retriable_openai_error,
+    retry_after_seconds,
     unsupported_parameter,
 )
 from librarian.observability import MetricsRecorder
@@ -23,8 +25,10 @@ def _fake_request() -> Any:
     return httpx.Request("POST", "https://api.example.test")
 
 
-def _fake_response(status_code: int, request: Any) -> Any:
-    return httpx.Response(status_code, request=request)
+def _fake_response(
+    status_code: int, request: Any, *, headers: dict[str, str] | None = None
+) -> Any:
+    return httpx.Response(status_code, request=request, headers=headers)
 
 
 def test_openai_retry_classification() -> None:
@@ -78,6 +82,8 @@ def test_openai_provider_fast_fails_when_api_key_missing(monkeypatch: pytest.Mon
 async def test_openai_provider_retries_transient_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     request = _fake_request()
     calls = 0
+    delays: list[float] = []
+    client_kwargs: dict[str, object] = {}
 
     class FakeChoice:
         class Message:
@@ -97,7 +103,7 @@ async def test_openai_provider_retries_transient_errors(monkeypatch: pytest.Monk
             if calls == 1:
                 raise openai.RateLimitError(
                     "rate limited",
-                    response=_fake_response(429, request),
+                    response=_fake_response(429, request, headers={"retry-after": "3"}),
                     body=None,
                 )
             return FakeCompletion()
@@ -109,12 +115,15 @@ async def test_openai_provider_retries_transient_errors(monkeypatch: pytest.Monk
         chat = FakeChat()
 
     def fake_async_openai(**kwargs: object) -> FakeClient:
-        del kwargs
+        client_kwargs.update(kwargs)
         return FakeClient()
+
+    async def record_sleep(delay: float) -> None:
+        delays.append(delay)
 
     monkeypatch.setenv("LIBRARIAN_TEST_API_KEY", "test")
     monkeypatch.setattr("librarian.llm.openai_compatible.AsyncOpenAI", fake_async_openai)
-    monkeypatch.setattr("librarian.llm.openai_compatible.asyncio.sleep", _no_sleep)
+    monkeypatch.setattr("librarian.llm.openai_compatible.asyncio.sleep", record_sleep)
 
     provider = OpenAICompatibleProvider(
         api_key_env="LIBRARIAN_TEST_API_KEY",
@@ -134,6 +143,29 @@ async def test_openai_provider_retries_transient_errors(monkeypatch: pytest.Monk
 
     assert result == "ok"
     assert calls == 2
+    assert delays == [3.0]
+    assert client_kwargs["max_retries"] == 0
+
+
+def test_retry_after_supports_milliseconds_and_caps_long_waits() -> None:
+    request = _fake_request()
+    error = openai.RateLimitError(
+        "rate limited",
+        response=_fake_response(
+            429,
+            request,
+            headers={"retry-after-ms": "1500", "retry-after": "60"},
+        ),
+        body=None,
+    )
+    assert retry_after_seconds(error) == 1.5
+
+    long_wait = openai.RateLimitError(
+        "rate limited",
+        response=_fake_response(429, request, headers={"retry-after": "600"}),
+        body=None,
+    )
+    assert retry_after_seconds(long_wait) == 120.0
 
 
 @pytest.mark.asyncio
@@ -490,6 +522,72 @@ async def test_openai_provider_adapts_max_tokens_to_max_completion_tokens(
     assert await _complete(provider, "gpt-5") == "ok"
     assert len(sent) == 3
     assert sent[2]["max_completion_tokens"] == 8 and "max_tokens" not in sent[2]
+
+
+@pytest.mark.asyncio
+async def test_parallel_in_flight_requests_adapt_after_another_request_learns_dialect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    both_classic_requests_started = asyncio.Event()
+    adapted_retry_started = asyncio.Event()
+    classic_count = 0
+    sent: list[dict[str, Any]] = []
+
+    class FakeChoice:
+        class Message:
+            content = "ok"
+
+        message = Message()
+
+    class FakeCompletion:
+        choices = [FakeChoice()]
+        usage = None
+
+    class FakeCompletions:
+        async def create(self, **kwargs: Any) -> FakeCompletion:
+            nonlocal classic_count
+            sent.append(dict(kwargs))
+            if "max_tokens" in kwargs:
+                classic_count += 1
+                request_number = classic_count
+                if classic_count == 2:
+                    both_classic_requests_started.set()
+                await both_classic_requests_started.wait()
+                if request_number == 2:
+                    await adapted_retry_started.wait()
+                raise _bad_request(
+                    param="max_tokens", code="unsupported_parameter", message=_MAX_TOKENS_MSG
+                )
+            adapted_retry_started.set()
+            return FakeCompletion()
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeClient:
+        chat = FakeChat()
+
+    def fake_async_openai(**kwargs: object) -> FakeClient:
+        del kwargs
+        return FakeClient()
+
+    monkeypatch.setenv("LIBRARIAN_TEST_API_KEY", "test")
+    monkeypatch.setattr("librarian.llm.openai_compatible.AsyncOpenAI", fake_async_openai)
+    provider = OpenAICompatibleProvider(
+        api_key_env="LIBRARIAN_TEST_API_KEY",
+        base_url=None,
+        timeout_seconds=1,
+        max_concurrency=2,
+        max_retries=0,
+    )
+
+    assert await asyncio.gather(_complete(provider, "gpt-5"), _complete(provider, "gpt-5")) == [
+        "ok",
+        "ok",
+    ]
+    assert classic_count == 2
+    assert len(sent) == 4
+    assert all("max_completion_tokens" in request for request in sent[2:])
 
 
 @pytest.mark.asyncio

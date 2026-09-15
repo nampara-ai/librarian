@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import random
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any, Protocol, cast
 
 from openai import (
@@ -63,6 +66,7 @@ class ModelParamPrefs:
 _UNSUPPORTED_HINT = re.compile(r"unsupported|not supported|does not support", re.I)
 _MAX_TOKENS_HINT = re.compile(r"max_completion_tokens|max_tokens", re.I)
 _TEMPERATURE_HINT = re.compile(r"\btemperature\b", re.I)
+_MAX_SERVER_RETRY_AFTER_SECONDS = 120.0
 
 
 def unsupported_parameter(exc: Exception) -> str | None:
@@ -93,6 +97,36 @@ def unsupported_parameter(exc: Exception) -> str | None:
     if _TEMPERATURE_HINT.search(message):
         return "temperature"
     return None
+
+
+def retry_after_seconds(exc: Exception) -> float | None:
+    """Read a server's retry delay from an HTTP error, bounded for an interactive run."""
+    if not isinstance(exc, APIStatusError):
+        return None
+    headers = exc.response.headers
+    for name, divisor in (("retry-after-ms", 1000.0), ("retry-after", 1.0)):
+        raw = headers.get(name)
+        if raw is None:
+            continue
+        try:
+            seconds = float(raw) / divisor
+        except ValueError:
+            continue
+        if math.isfinite(seconds) and seconds >= 0:
+            return min(seconds, _MAX_SERVER_RETRY_AFTER_SECONDS)
+    raw_date = headers.get("retry-after")
+    if raw_date is None:
+        return None
+    try:
+        retry_at = parsedate_to_datetime(raw_date)
+    except (TypeError, ValueError):
+        return None
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=UTC)
+    return min(
+        max(0.0, (retry_at - datetime.now(UTC)).total_seconds()),
+        _MAX_SERVER_RETRY_AFTER_SECONDS,
+    )
 
 
 class LLMUsageMetrics(Protocol):
@@ -133,7 +167,11 @@ class OpenAICompatibleProvider:
         if not api_key:
             raise ValueError(f"Missing API key environment variable: {api_key_env}")
 
-        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout_seconds)
+        # The adapter owns retries. Leaving the SDK's own retry loop enabled
+        # multiplies attempts (and rate-limit pressure) behind each chunk.
+        self._client = AsyncOpenAI(
+            api_key=api_key, base_url=base_url, timeout=timeout_seconds, max_retries=0
+        )
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._max_retries = max_retries
         self._retry_base_delay_seconds = retry_base_delay_seconds
@@ -254,11 +292,14 @@ class OpenAICompatibleProvider:
             except Exception as exc:  # noqa: BLE001 - provider errors feed retry policy
                 rejected = unsupported_parameter(exc)
                 if adaptations < max_adaptations:
-                    if rejected == "max_tokens" and not prefs.use_max_completion_tokens:
+                    # Judge the in-flight request, not just shared preferences.
+                    # Another concurrent chunk may have learned the dialect
+                    # while this classic request was already on the wire.
+                    if rejected == "max_tokens" and "max_tokens" in kwargs:
                         prefs.use_max_completion_tokens = True
                         adaptations += 1
                         continue
-                    if rejected == "temperature" and not prefs.omit_temperature:
+                    if rejected == "temperature" and "temperature" in kwargs:
                         prefs.omit_temperature = True
                         adaptations += 1
                         continue
@@ -270,12 +311,16 @@ class OpenAICompatibleProvider:
                     raise RuntimeError(
                         f"LLM provider request failed after retries: {sanitize_error_message(exc)}"
                     ) from None
-                delay = min(
-                    self._retry_base_delay_seconds * (2**attempt),
-                    self._retry_max_delay_seconds,
-                )
-                jitter = random.uniform(0, delay * 0.1)  # noqa: S311
-                await asyncio.sleep(delay + jitter)
+                server_delay = retry_after_seconds(exc)
+                if server_delay is None:
+                    delay = min(
+                        self._retry_base_delay_seconds * (2**attempt),
+                        self._retry_max_delay_seconds,
+                    )
+                    delay += random.uniform(0, delay * 0.1)  # noqa: S311
+                else:
+                    delay = server_delay
+                await asyncio.sleep(delay)
                 attempt += 1
 
     def _record_usage(self, response: ChatCompletion, *, model: str) -> None:

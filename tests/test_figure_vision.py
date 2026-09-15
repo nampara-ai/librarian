@@ -263,7 +263,7 @@ def test_liteparse_extractor_without_vision_leaves_placeholder(tmp_path: Path) -
     # Placeholder retained, unenriched. Match liteparse's real runtime form
     # (img_) or its docstring form (image_) so this doesn't re-break on a
     # placeholder-format shift.
-    assert re.search(r"!\[\]\(img(?:age)?_p\d+_\d+\.png\)", markdown)
+    assert re.search(r"!\[\]\((?:img|image)_p\d+_\d+\.png\)", markdown)
 
 
 @requires_liteparse

@@ -119,6 +119,17 @@ enum Copy {
             || raw.contains("unauthorized") {
             return "The AI provider rejected the key — check it in settings"
         }
+        if raw.contains("content filtering") || raw.contains("content filter") {
+            return "The AI provider blocked part of this document — see Details"
+        }
+        if raw.contains("rate limit") || raw.contains("too many requests")
+            || raw.contains("error code: 429") {
+            return "The AI provider is rate limiting requests — wait, then Retry"
+        }
+        if raw.contains("model_not_found") || raw.contains("model has been deprecated")
+            || raw.contains("not a chat model") {
+            return "This AI model can't clean documents — choose another in Settings"
+        }
         if raw.contains("certificate") || raw.contains("ssl") || raw.contains("tls") {
             return "Secure connection to the AI provider failed — a VPN, proxy, "
                 + "or security tool may be interfering"
