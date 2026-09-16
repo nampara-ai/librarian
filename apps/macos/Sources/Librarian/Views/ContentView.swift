@@ -366,6 +366,18 @@ struct QualityDetailsView: View {
                 if let summary = report.extraction?.qualitySummary {
                     Text("\(summary.pages) pages · \(summary.pagesRequiringLayoutRepair) layout repairs · \(summary.pagesWithWarnings) pages flagged")
                     Text("\(summary.figureOcrLinesRemoved) figure OCR fragments separated · \(report.extraction?.figuresExtracted ?? 0) figures preserved")
+                    if let restored = report.extraction?.figureReferencesRestored, restored > 0 {
+                        Text("\(restored) figures restored after the PDF renderer omitted them")
+                    }
+                    if let captions = report.extraction?.figureCaptionTitlesRestored, captions > 0 {
+                        Text("\(captions) figure captions repaired from PDF text")
+                    }
+                    if let removed = summary.sideFurnitureLinesRemoved, removed > 0 {
+                        Text("\(removed) repeated margin fragments removed")
+                    }
+                    if let restored = summary.nativeBodyLinesRestored, restored > 0 {
+                        Text("\(restored) missing prose lines restored from PDF text")
+                    }
                     if let reused = report.extraction?.pagesReusedFromCache, reused > 0 {
                         Text("\(reused) pages reused from cache")
                     }
@@ -376,6 +388,10 @@ struct QualityDetailsView: View {
                         Text("\(verified) verified source chunks skipped model cleaning")
                     }
                     Text("\(processing.imageReferences) image references in final output")
+                    if let unmatched = processing.tocEntriesWithoutMatchingHeadingOrBody,
+                       unmatched > 0 {
+                        Text("\(unmatched) contents or figure-list entries need review")
+                    }
                     ForEach(processing.warnings, id: \.self) { warning in
                         Label(warning.replacingOccurrences(of: "-", with: " "), systemImage: "exclamationmark.triangle")
                     }

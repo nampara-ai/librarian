@@ -133,8 +133,9 @@ required.
 | **Extraction timeout** | `LIBRARIAN_EXTRACTION_TIMEOUT_SECONDS=N` | Bound a single document's extraction so one pathological file can't hang a batch. |
 
 PDF pages are classified and checked against their native text before cleaning. Verified pages
-keep their source text, while uncertain chunks use the configured model. Vector diagrams and
-embedded figures remain linked to image assets. The run's **Quality** view shows page repairs,
+keep their source text, while uncertain chunks use the configured model. The extractor restores
+prose lines and embedded-image references the PDF renderer omitted, repairs collapsed table
+headings, and snapshots dense vector diagrams. The run's **Quality** view shows page repairs,
 cache reuse, and final document checks.
 
 ### OCR system tools (CLI/API only — the Mac app bundles these)

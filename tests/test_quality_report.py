@@ -31,3 +31,12 @@ def test_index_order_ignores_single_letters_before_index_heading() -> None:
 
     assert report["index_letter_order_ok"] is True
     assert report["warnings"] == []
+
+
+def test_final_audit_flags_unmatched_contents_entry_without_self_matching() -> None:
+    source = "## Contents\n- Missing chapter heading 3\n\n## Present chapter\nBody text."
+
+    report = audit_final_document(source, source, title=None)
+
+    assert report["toc_entries_without_matching_heading_or_body"] == 1
+    assert report["warnings"] == ["toc-entries-unmatched"]

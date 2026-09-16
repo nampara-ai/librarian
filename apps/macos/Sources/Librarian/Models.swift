@@ -60,6 +60,8 @@ struct RunQualityReport: Codable {
 struct ExtractionQuality: Codable {
     let qualitySummary: ExtractionQualitySummary?
     let figuresExtracted: Int?
+    let figureReferencesRestored: Int?
+    let figureCaptionTitlesRestored: Int?
     let pagesReusedFromCache: Int?
     let assetPagesReusedFromCache: Int?
     let pages: [PageQuality]?
@@ -70,6 +72,8 @@ struct ExtractionQualitySummary: Codable {
     let pagesRequiringLayoutRepair: Int
     let pagesWithWarnings: Int
     let figureOcrLinesRemoved: Int
+    let sideFurnitureLinesRemoved: Int?
+    let nativeBodyLinesRestored: Int?
 }
 
 struct PageQuality: Codable, Identifiable {
@@ -78,6 +82,7 @@ struct PageQuality: Codable, Identifiable {
     let action: String
     let nativeTextCoverage: Double
     let imageReferences: Int
+    let figureReferencesRestored: Int?
     let figureOcrLinesRemoved: Int
     let warnings: [String]
 
@@ -87,6 +92,7 @@ struct PageQuality: Codable, Identifiable {
 struct ProcessingQuality: Codable {
     let pages: Int?
     let imageReferences: Int
+    let tocEntriesWithoutMatchingHeadingOrBody: Int?
     let chunks: Int
     let cachedCleanedChunks: Int
     let verifiedSourceChunks: Int?

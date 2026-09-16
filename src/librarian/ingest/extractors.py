@@ -20,7 +20,7 @@ import subprocess
 import tempfile
 import time
 import uuid
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -354,6 +354,144 @@ def _render_plain_page_with_images(page: Any, markdown: str) -> str:
     return "\n\n".join(section for section in sections if section)
 
 
+def _repair_merged_table_heading(page: Any, markdown: str) -> tuple[str, bool]:
+    """Separate a table caption, header, and first row merged by the renderer.
+
+    The replacement is allowed only when the positioned PDF text independently
+    supplies every cell already present in the malformed Markdown heading.
+    Other rows remain untouched, including tables whose layout is ambiguous.
+    """
+    lines = _group_text_items_into_lines(page.text_items)
+    if len(lines) < 3:
+        return markdown, False
+    pattern = re.compile(
+        r"(?m)^(?P<heading>\|[^\n]*\bTable[ \t]+(?P<code>\d+[-–]\d+)[^\n]*\|)[ \t]*\n"
+        r"(?P<separator>\|[ \t:|\-]+\|)[ \t]*(?=\n|$)"
+    )
+    for match in pattern.finditer(markdown):
+        code = match.group("code")
+        heading = re.sub(r"\s+", " ", match.group("heading")).casefold()
+        for index, caption_items in enumerate(lines[:-2]):
+            caption = " ".join(str(item.text).strip() for item in caption_items)
+            if not re.match(rf"(?i)^Table[ \t]+{re.escape(code)}[ \t]+\S", caption):
+                continue
+            header_items, first_items = lines[index + 1 : index + 3]
+            if not 3 <= len(header_items) <= 6 or len(first_items) != len(header_items):
+                continue
+            caption_y = min(float(item.y) for item in caption_items)
+            header_y = min(float(item.y) for item in header_items)
+            first_y = min(float(item.y) for item in first_items)
+            if not (5 < header_y - caption_y < 50 and 5 < first_y - header_y < 30):
+                continue
+            if any(
+                abs(float(header.x) - float(first.x)) > 18
+                for header, first in zip(header_items, first_items, strict=True)
+            ):
+                continue
+            cells = [str(item.text).strip() for item in [*header_items, *first_items]]
+            if any(
+                not cell or re.sub(r"\s+", " ", cell).casefold() not in heading
+                for cell in cells
+            ):
+                continue
+            if re.sub(r"\s+", " ", caption.split(" ", 2)[-1]).casefold() not in heading:
+                continue
+            column_count = max(len(header_items), match.group("heading").count("|") - 1)
+
+            def row(items: Sequence[Any], columns: int = column_count) -> str:
+                values = [str(item.text).strip().replace("|", r"\|") for item in items]
+                return "| " + " | ".join([*values, *([""] * (columns - len(values)))]) + " |"
+
+            replacement = "\n".join(
+                (caption, row(header_items), "|" + "---|" * column_count, row(first_items))
+            )
+            return markdown[: match.start()] + replacement + markdown[match.end() :], True
+    return markdown, False
+
+
+def _restore_missing_native_body_lines(
+    page: Any,
+    markdown: str,
+    regions: Sequence[tuple[float, float, float, float]],
+) -> tuple[str, int]:
+    """Restore intact PDF prose lines omitted where margin labels overlap it.
+
+    A line must have several words absent from the rendered page and two
+    matching neighboring source lines that establish its exact position.
+    Figure text and narrow margin labels are never eligible.
+    """
+    height, width = float(page.height), float(page.width)
+    body = sorted(
+        (
+            item
+            for item in page.text_items
+            if height * 0.085 <= float(item.y) <= height * 0.92
+            and float(item.x) < width * 0.9
+            and float(item.width) >= width * 0.25
+            and len(_QUALITY_WORD_RE.findall(str(item.text))) >= 9
+            and not _item_inside_figure(item, regions)
+        ),
+        key=lambda item: (float(item.y), float(item.x)),
+    )
+    if len(body) < 3:
+        return markdown, 0
+
+    def words(value: str) -> list[str]:
+        return [token.casefold() for token in _QUALITY_WORD_RE.findall(value)]
+
+    def phrase_span(value: str, phrase: Sequence[str]) -> tuple[int, int] | None:
+        matches = list(_QUALITY_WORD_RE.finditer(value))
+        tokens = [match.group().casefold() for match in matches]
+        for start in range(len(tokens) - len(phrase) + 1):
+            if tokens[start : start + len(phrase)] == list(phrase):
+                return matches[start].start(), matches[start + len(phrase) - 1].end()
+        return None
+
+    restored = 0
+    for item in body:
+        line = str(item.text).strip()
+        line_words = words(line)
+        if phrase_span(markdown, line_words) is not None:
+            continue
+        deficit = sum((Counter(line_words) - Counter(words(markdown))).values())
+        if deficit < 4 or deficit / len(line_words) < 0.3:
+            continue
+        neighbors = [
+            other
+            for other in body
+            if abs(float(other.x) - float(item.x)) <= 32
+        ]
+        preceding = [other for other in neighbors if float(other.y) < float(item.y)]
+        following = [other for other in neighbors if float(other.y) > float(item.y)]
+        if not preceding or not following:
+            continue
+        before = next(
+            (
+                span
+                for other in reversed(preceding)
+                if (span := phrase_span(markdown, words(str(other.text))))
+            ),
+            None,
+        )
+        after = next(
+            (
+                span
+                for other in following
+                if (span := phrase_span(markdown, words(str(other.text))))
+            ),
+            None,
+        )
+        if before is None or after is None or before[1] > after[0]:
+            continue
+        # Neighboring PDF lines should also be adjacent in the rendered prose;
+        # a large gap usually means a multicolumn or figure layout instead.
+        if len(markdown[before[1] : after[0]]) > 160:
+            continue
+        markdown = markdown[: after[0]] + line + "\n\n" + markdown[after[0] :]
+        restored += 1
+    return markdown, restored
+
+
 def _item_inside_figure(item: Any, regions: Sequence[tuple[float, float, float, float]]) -> bool:
     center_x = float(item.x) + float(item.width) / 2
     center_y = float(item.y) + float(item.height) / 2
@@ -375,7 +513,7 @@ def _separate_figure_ocr(
     native captions and following prose are retained. Scanned pages with no
     substantial native text are excluded from this filter.
     """
-    if not _has_local_image_references(markdown):
+    if not _has_local_image_references(markdown) and not regions:
         return markdown, 0
     native_items = [item for item in page.text_items if not _item_inside_figure(item, regions)]
     figure_items = [item for item in page.text_items if _item_inside_figure(item, regions)]
@@ -403,11 +541,28 @@ def _separate_figure_ocr(
             in_figure = True
             result.append(line)
             continue
+        key = _page_furniture_key(stripped)
+        words = _QUALITY_WORD_RE.findall(key)
+        figure_overlap = (
+            sum(min(count, figure_tokens[word]) for word, count in Counter(words).items())
+            / len(words)
+            if words
+            else 0.0
+        )
+        # Some renderers place screenshot OCR before the image token. Exact
+        # spatial matches can be removed regardless of token order; native
+        # body lines are protected even when they repeat words in the image.
+        if (
+            len(key) >= 3
+            and (key in figure_lines or (len(words) >= 2 and figure_overlap >= 0.9))
+            and key not in native_lines
+            and key not in native_joined
+        ):
+            removed += 1
+            continue
         if not in_figure or not stripped:
             result.append(line)
             continue
-        key = _page_furniture_key(stripped)
-        words = _QUALITY_WORD_RE.findall(key)
         if (
             key in native_lines
             or (len(words) >= 3 and key in native_joined)
@@ -418,12 +573,7 @@ def _separate_figure_ocr(
             in_figure = False
             result.append(line)
             continue
-        matches_figure = key in figure_lines or (
-            bool(words)
-            and sum(min(count, figure_tokens[word]) for word, count in Counter(words).items())
-            / len(words)
-            >= 0.6
-        )
+        matches_figure = key in figure_lines or (bool(words) and figure_overlap >= 0.6)
         if matches_figure or (
             len(stripped) <= 24
             and not re.search(r"[A-Za-z]", stripped)
@@ -433,6 +583,85 @@ def _separate_figure_ocr(
         else:
             result.append(line)
     return re.sub(r"\n{3,}", "\n\n", "\n".join(result)).strip(), removed
+
+
+def _strip_recurring_side_furniture(pages: Sequence[Any], blocks: list[str]) -> list[int]:
+    """Remove repeated vertical margin labels that leak into body Markdown."""
+    sequences: list[tuple[str, ...]] = []
+    for page in pages:
+        side_items = sorted(
+            (
+                item
+                for item in page.text_items
+                if float(item.x) >= float(page.width) * 0.93
+                and float(page.height) * 0.3 <= float(item.y) <= float(page.height) * 0.85
+                and float(item.width) <= float(page.width) * 0.05
+                and 0 < len(str(item.text).strip()) <= 5
+            ),
+            key=lambda item: (float(item.y), float(item.x)),
+        )
+        sequence = tuple(str(item.text).strip() for item in side_items)
+        sequences.append(sequence if len(sequence) >= 5 else ())
+    repeated = {
+        sequence
+        for sequence, count in Counter(sequences).items()
+        if sequence
+        and count >= 3
+        and sum(len(part) for part in sequence if part.isalpha()) >= 6
+        and sum(part.isalpha() for part in sequence) >= 3
+    }
+    removed_counts = [0] * len(blocks)
+    for index, (page, sequence) in enumerate(zip(pages, sequences, strict=True)):
+        if sequence not in repeated:
+            continue
+        letters = [part for part in sequence if part.isalpha()]
+        if not letters:
+            continue
+        lines = blocks[index].splitlines()
+        dropped_lines: set[int] = set()
+        for start in range(len(lines) - len(letters) + 1):
+            if [line.strip() for line in lines[start : start + len(letters)]] != letters:
+                continue
+            dropped_lines.update(range(start, start + len(letters)))
+            # A vertical label can have standalone numerals and rules above
+            # its letters. Remove only the adjacent tokens seen at the margin.
+            prefix = set(sequence) - set(letters)
+            cursor = start - 1
+            while cursor >= 0 and start - cursor <= len(sequence) + 2:
+                if not lines[cursor].strip():
+                    cursor -= 1
+                    continue
+                if lines[cursor].strip() not in prefix:
+                    break
+                dropped_lines.add(cursor)
+                cursor -= 1
+        removed_counts[index] = len(dropped_lines)
+        if dropped_lines:
+            native_lines = {
+                str(item.text).strip()
+                for item in page.text_items
+                if float(item.x) < float(page.width) * 0.93
+            }
+            for line_index, line in enumerate(lines):
+                for token in sequence:
+                    if token.isalpha() or not line.rstrip().endswith(f" {token}"):
+                        continue
+                    base = line.rstrip()[: -len(token) - 1]
+                    if base.strip() in native_lines:
+                        lines[line_index] = base
+                        removed_counts[index] += 1
+                        break
+        retained = "\n".join(
+            line for line_index, line in enumerate(lines) if line_index not in dropped_lines
+        )
+        inline_tokens = [part for part in sequence if part.isalnum()]
+        inline_pattern = r"(?<!\w)" + r"[ \t]+".join(map(re.escape, inline_tokens)) + r"(?!\w)"
+        retained, inline_removed = re.subn(inline_pattern, "", retained)
+        removed_counts[index] += inline_removed
+        if not removed_counts[index]:
+            continue
+        blocks[index] = re.sub(r"\n{3,}", "\n\n", retained).strip()
+    return removed_counts
 
 
 def _page_kind(page: Any, markdown: str, *, page_index: int) -> str:
@@ -826,9 +1055,15 @@ def normalize_spatial_markdown(
         blocks[index] = _strip_page_furniture(blocks[index], top_quota, bottom_quota)
     blocks = _strip_recurring_rendered_footers(blocks)
     for index, (page, source_block) in enumerate(zip(pages, original_blocks, strict=True)):
+        blocks[index], table_heading_repaired = _repair_merged_table_heading(page, blocks[index])
+        if table_heading_repaired and actions[index] == "accepted":
+            actions[index] = "table-heading-repaired"
         page_number = int(getattr(page, "page_num", index + 1))
         regions = figure_regions.get(page_number, ()) if figure_regions is not None else ()
         blocks[index], figure_ocr_removed = _separate_figure_ocr(page, blocks[index], regions)
+        blocks[index], native_lines_restored = _restore_missing_native_body_lines(
+            page, blocks[index], regions
+        )
         coverage, warnings = _page_fidelity(page, blocks[index], source_block, regions)
         if "native-text-loss" in warnings or "changed-images" in warnings:
             alternate = _render_plain_page_with_images(page, source_block)
@@ -844,6 +1079,7 @@ def normalize_spatial_markdown(
                 blocks[index] = alternate
                 coverage, warnings = alternate_coverage, alternate_warnings
                 actions[index] = "native-text-fallback"
+                native_lines_restored = 0
         if page_reports is not None:
             page_reports.append(
                 {
@@ -852,10 +1088,20 @@ def normalize_spatial_markdown(
                     "action": actions[index],
                     "native_text_coverage": round(coverage, 3),
                     "image_references": len(_LOCAL_MARKDOWN_IMAGE_RE.findall(blocks[index])),
+                    "figure_references_restored": 0,
+                    "figure_caption_titles_restored": 0,
                     "figure_ocr_lines_removed": figure_ocr_removed,
+                    "native_body_lines_restored": native_lines_restored,
+                    "side_furniture_lines_removed": 0,
                     "warnings": list(warnings),
                 }
             )
+    side_furniture_removed = _strip_recurring_side_furniture(pages, blocks)
+    if page_reports is not None:
+        for report, removed in zip(page_reports, side_furniture_removed, strict=True):
+            report["side_furniture_lines_removed"] = removed
+            if removed and report["action"] == "accepted":
+                report["action"] = "side-furniture-stripped"
     return (
         f"\n\n{_PAGE_BREAK}\n\n".join(blocks),
         multicolumn_reflowed,
@@ -1982,6 +2228,278 @@ def _vector_curve_regions(page: Any) -> list[tuple[float, float, float, float]]:
     return regions
 
 
+def _attach_unreferenced_figures(
+    source: Path,
+    markdown: str,
+    figures: Sequence[FigureImage],
+    pages: Sequence[Any],
+    reports: list[dict[str, object]],
+) -> tuple[str, int]:
+    """Restore PDF raster images omitted from LiteParse's Markdown renderer."""
+    blocks = markdown.split(f"\n\n{_PAGE_BREAK}\n\n")
+    if len(blocks) != len(pages):
+        return markdown, 0
+    missing_by_page: dict[int, list[FigureImage]] = defaultdict(list)
+    for figure in figures:
+        if figure.find_placeholder(markdown) is None:
+            missing_by_page[figure.page].append(figure)
+    if not missing_by_page:
+        return markdown, 0
+    pdfplumber = importlib.import_module("pdfplumber")
+    restored = 0
+    with pdfplumber.open(source) as pdf:
+        for page_number, missing in sorted(missing_by_page.items()):
+            if not 1 <= page_number <= len(blocks):
+                continue
+            page = pages[page_number - 1]
+            image_boxes = pdf.pages[page_number - 1].images
+            captions = [
+                (line.y, match.group(1), line.text)
+                for line in _spatial_lines(page.text_items)
+                if len(line.text) < 140
+                and (match := re.match(r"(?i)^\s*Figure\s+(\d+[-–]\d+[A-Za-z]?)\b", line.text))
+                and any(abs(float(box["top"]) - line.y) <= 120 for box in image_boxes)
+            ]
+            insertions: dict[int, list[str]] = defaultdict(list)
+            for figure in sorted(missing, key=lambda item: item.id):
+                ordinal = re.fullmatch(r"p\d+_(\d+)", figure.id)
+                image_top = (
+                    float(image_boxes[int(ordinal.group(1))]["top"])
+                    if ordinal is not None and int(ordinal.group(1)) < len(image_boxes)
+                    else None
+                )
+                caption = None
+                if image_top is not None and captions:
+                    top = image_top
+                    nearest = min(captions, key=lambda caption: abs(caption[0] - top))
+                    if abs(nearest[0] - image_top) <= 120:
+                        caption = nearest
+                if caption is None and len(captions) == 1:
+                    caption = captions[0]
+                anchor = (
+                    _markdown_figure_caption(blocks[page_number - 1], caption[1], caption[2])
+                    if caption is not None
+                    else None
+                )
+                offset = anchor.end() if anchor is not None else len(blocks[page_number - 1])
+                insertions[offset].append(figure.placeholder_candidates[1])
+                restored += 1
+            block = blocks[page_number - 1]
+            for offset, placeholders in sorted(insertions.items(), reverse=True):
+                block = block[:offset] + "\n\n" + "\n\n".join(placeholders) + block[offset:]
+            blocks[page_number - 1] = block.strip()
+            reports[page_number - 1]["figure_references_restored"] = len(missing)
+            reports[page_number - 1]["image_references"] = len(
+                _LOCAL_MARKDOWN_IMAGE_RE.findall(block)
+            )
+            if reports[page_number - 1]["action"] == "accepted":
+                reports[page_number - 1]["action"] = "missing-figures-restored"
+    return f"\n\n{_PAGE_BREAK}\n\n".join(blocks), restored
+
+
+def _markdown_figure_caption(block: str, code: str, caption_text: str) -> re.Match[str] | None:
+    matches = list(re.finditer(rf"(?im)^[ \t|#*]*Figure[ \t]+{re.escape(code)}\b[^\n]*$", block))
+    if not matches:
+        return None
+    tail = caption_text.split(code, 1)[-1].strip()
+    canonical_tail = _page_furniture_key(tail)
+    if canonical_tail:
+        for match in matches:
+            if canonical_tail in _page_furniture_key(match.group(0)):
+                return match
+    return matches[-1]
+
+
+def _suppress_figure_ocr_zones(
+    markdown: str,
+    pages: Sequence[Any],
+    figure_regions: Mapping[int, Sequence[tuple[float, float, float, float]]],
+    reports: list[dict[str, object]],
+) -> str:
+    """Replace noisy screenshot text between a caption and the next prose line."""
+    blocks = markdown.split(f"\n\n{_PAGE_BREAK}\n\n")
+    if len(blocks) != len(pages):
+        return markdown
+    for index, page in enumerate(pages):
+        regions = figure_regions.get(int(page.page_num), ())
+        if not regions:
+            continue
+        figure_items = [item for item in page.text_items if _item_inside_figure(item, regions)]
+        native_items = [item for item in page.text_items if not _item_inside_figure(item, regions)]
+        figure_tokens = Counter(
+            word.casefold()
+            for item in figure_items
+            for word in _QUALITY_WORD_RE.findall(str(item.text))
+        )
+        native_tokens = {
+            word.casefold()
+            for item in native_items
+            for word in _QUALITY_WORD_RE.findall(str(item.text))
+        }
+        rendered_tokens = Counter(
+            word.casefold() for word in _QUALITY_WORD_RE.findall(blocks[index])
+        )
+        residual = sum(
+            min(rendered_tokens[word], count)
+            for word, count in figure_tokens.items()
+            if word not in native_tokens and len(word) >= 2
+        )
+        if residual < 5 and cast(int, reports[index]["figure_ocr_lines_removed"]) < 5:
+            continue
+        spatial_lines = _spatial_lines(page.text_items)
+        captions = [
+            (line.y, match.group(1), line.text)
+            for line in spatial_lines
+            if len(line.text) < 140
+            and (match := re.match(r"(?i)^\s*Figure\s+(\d+[-–]\d+[A-Za-z]?)\b", line.text))
+            and any(abs(top - line.y) <= 120 for _x0, top, _x1, _bottom in regions)
+        ]
+        if not captions:
+            continue
+        block = blocks[index]
+        edits: list[tuple[int, int, str, int]] = []
+        native_lines = _spatial_lines(native_items)
+        figure_only_page = len(
+            _QUALITY_WORD_RE.findall(" ".join(str(item.text) for item in native_items))
+        ) < 40 and not any(
+            len(_QUALITY_WORD_RE.findall(line.text)) >= 8
+            and line.y > min(caption[0] for caption in captions) + 10
+            for line in native_lines
+        )
+        for caption_y, code, caption_text in captions:
+            caption_match = _markdown_figure_caption(block, code, caption_text)
+            if caption_match is None:
+                continue
+            start = caption_match.end()
+            next_caption = re.search(
+                r"(?im)^[ \t|#*]*Figure[ \t]+\d+[-–]\d+\b[^\n]*$",
+                block[start:],
+            )
+            end = start + next_caption.start() if next_caption is not None else len(block)
+            following_prose = [
+                line
+                for line in native_lines
+                if line.y > caption_y + 10
+                and len(_QUALITY_WORD_RE.findall(line.text)) >= 8
+                and not re.match(r"(?i)^\s*Figure\s+\d+[-–]\d+", line.text)
+            ]
+            for line in following_prose:
+                prefix = line.text[: min(48, len(line.text))]
+                position = block.find(prefix, start, end)
+                if position >= 0:
+                    end = position
+                    break
+            if end <= start:
+                continue
+            zone = block[start:end]
+            placeholders = [match.group(0) for match in _LOCAL_MARKDOWN_IMAGE_RE.finditer(zone)]
+            removed_lines = sum(
+                bool(line.strip()) and not _LOCAL_MARKDOWN_IMAGE_RE.fullmatch(line.strip())
+                for line in zone.splitlines()
+            )
+            if removed_lines < 1 or not placeholders:
+                continue
+            next_y = min((y for y, _code, _text in captions if y > caption_y), default=float("inf"))
+            if following_prose:
+                next_y = min(next_y, following_prose[0].y)
+            native_labels = [
+                line.text
+                for line in native_lines
+                if caption_y + 8 < line.y < next_y
+                and len(_QUALITY_WORD_RE.findall(line.text)) >= 2
+                and not re.match(r"(?i)^\s*Figure\s+\d+[-–]\d+", line.text)
+            ]
+            replacement = "\n\n" + "\n\n".join([*placeholders, *native_labels]) + "\n\n"
+            edits.append((start, end, replacement, removed_lines))
+        removed_total = 0
+        for start, end, replacement, removed_lines in sorted(edits, reverse=True):
+            block = block[:start] + replacement + block[end:]
+            removed_total += removed_lines
+        block = re.sub(
+            r"(?im)^[ \t]*\|(?:-+\|)+[ \t]*\n(?=[ \t|#*]*Figure\s+\d+[-–]\d+)",
+            "",
+            block,
+        )
+        block = re.sub(
+            r"(?im)^[ \t]*\|[ \t]*(Figure\s+\d+[-–]\d+)[ \t]+([^|\n]+?)[ \t]*\|[ \t]*$",
+            lambda match: f"**{match.group(1)}** {match.group(2).strip()}",
+            block,
+        )
+        candidate = re.sub(r"\n{3,}", "\n\n", block).strip()
+        coverage, warnings = _page_fidelity(page, candidate, blocks[index], regions)
+        old_coverage = cast(float, reports[index]["native_text_coverage"])
+        if (
+            "changed-images" in warnings
+            or (not figure_only_page and coverage + 0.03 < old_coverage)
+            or (
+                not figure_only_page
+                and "missing-numbers" in warnings
+                and "missing-numbers" not in cast(list[str], reports[index]["warnings"])
+            )
+        ):
+            continue
+        blocks[index] = candidate
+        reports[index]["native_text_coverage"] = round(coverage, 3)
+        reports[index]["figure_ocr_lines_removed"] = (
+            cast(int, reports[index]["figure_ocr_lines_removed"]) + removed_total
+        )
+    return f"\n\n{_PAGE_BREAK}\n\n".join(blocks)
+
+
+def _restore_native_figure_captions(
+    markdown: str,
+    pages: Sequence[Any],
+    figure_regions: Mapping[int, Sequence[tuple[float, float, float, float]]],
+    reports: list[dict[str, object]],
+) -> str:
+    """Complete captions whose title was separated from its figure number."""
+    blocks = markdown.split(f"\n\n{_PAGE_BREAK}\n\n")
+    if len(blocks) != len(pages):
+        return markdown
+    for index, page in enumerate(pages):
+        regions = figure_regions.get(int(page.page_num), ())
+        if not regions:
+            continue
+        block = blocks[index]
+        restored = 0
+        for line in _spatial_lines(page.text_items):
+            match = re.match(r"(?i)^\s*Figure\s+(\d+[-–]\d+[A-Za-z]?)\s+(.+)$", line.text)
+            if match is None or not any(
+                abs(top - line.y) <= 120 for _x0, top, _x1, _bottom in regions
+            ):
+                continue
+            code, title = match.group(1), match.group(2).strip()
+            if not 2 <= len(title) <= 120:
+                continue
+            rendered = _markdown_figure_caption(block, code, line.text)
+            if rendered is None:
+                continue
+            bare = re.fullmatch(
+                rf"[ \t|#*]*Figure[ \t]+{re.escape(code)}[ \t*|]*",
+                rendered.group(0),
+                flags=re.IGNORECASE,
+            )
+            if bare is None:
+                continue
+            replacement = f"**Figure {code}** {title}"
+            block = block[: rendered.start()] + replacement + block[rendered.end() :]
+            duplicate = re.search(
+                rf"(?im)^[ \t]*{re.escape(title)}[ \t]*$",
+                block[
+                    rendered.start() + len(replacement) : rendered.start() + len(replacement) + 600
+                ],
+            )
+            if duplicate is not None:
+                duplicate_start = rendered.start() + len(replacement) + duplicate.start()
+                duplicate_end = rendered.start() + len(replacement) + duplicate.end()
+                block = block[:duplicate_start] + block[duplicate_end:]
+            restored += 1
+        if restored:
+            blocks[index] = re.sub(r"\n{3,}", "\n\n", block).strip()
+            reports[index]["figure_caption_titles_restored"] = restored
+    return f"\n\n{_PAGE_BREAK}\n\n".join(blocks)
+
+
 def _snapshot_vector_diagrams(
     source: Path,
     result: Any,
@@ -2121,6 +2639,7 @@ class LiteParseExtractor:
         self._last_page_reports: list[dict[str, object]] = []
         self._last_page_cache_hits = 0
         self._last_asset_cache_hits = 0
+        self._last_restored_figures = 0
 
     @property
     def vision_active(self) -> bool:
@@ -2151,6 +2670,11 @@ class LiteParseExtractor:
             "collapsed_table_pages_normalized": normalized_tables,
             "pages_reused_from_cache": self._last_page_cache_hits,
             "asset_pages_reused_from_cache": self._last_asset_cache_hits,
+            "figure_references_restored": self._last_restored_figures,
+            "figure_caption_titles_restored": sum(
+                cast(int, report["figure_caption_titles_restored"])
+                for report in self._last_page_reports
+            ),
             "pages": self._last_page_reports,
         }
         metadata["quality_summary"] = {
@@ -2164,6 +2688,15 @@ class LiteParseExtractor:
             "figure_ocr_lines_removed": sum(
                 cast(int, report["figure_ocr_lines_removed"]) for report in self._last_page_reports
             ),
+            "side_furniture_lines_removed": sum(
+                cast(int, report["side_furniture_lines_removed"])
+                for report in self._last_page_reports
+            ),
+            "native_body_lines_restored": sum(
+                cast(int, report["native_body_lines_restored"])
+                for report in self._last_page_reports
+            ),
+            "figure_references_restored": self._last_restored_figures,
         }
         if self.vision_provider is not None and figures:
             page_priority = {
@@ -2253,10 +2786,43 @@ class LiteParseExtractor:
                     ).parse(str(source)),
                     max_pages=self.max_pages,
                 )
-            figure_pages = {
-                int(match) for match in _LITEPARSE_IMAGE_PAGE_RE.findall(str(result.text))
-            }
-            figure_regions = _pdf_image_regions(source, figure_pages)
+            parsed_pages = list(getattr(result, "pages", ()))
+            figures: list[FigureImage] = []
+            self._last_asset_cache_hits = 0
+            if self.image_mode != "off":
+                # The Markdown renderer can omit a raster image even though
+                # LiteParse extracts its bytes. Inventory every page so those
+                # figures cannot silently disappear from the output.
+                page_numbers = [int(page.page_num) for page in parsed_pages]
+                for start in range(0, len(page_numbers), _LITEPARSE_ASSET_PAGE_BATCH):
+                    batch = page_numbers[start : start + _LITEPARSE_ASSET_PAGE_BATCH]
+                    missing: list[int] = []
+                    for page_number in batch:
+                        cached = (
+                            _load_cached_liteparse_assets(cache_directory, page_number)
+                            if cache_directory is not None
+                            else None
+                        )
+                        if cached is None:
+                            missing.append(page_number)
+                        else:
+                            figures.extend(cached)
+                            self._last_asset_cache_hits += 1
+                    if not missing:
+                        continue
+                    embedded = parser(
+                        image_mode="embed", target_pages=",".join(map(str, missing))
+                    ).parse(str(source))
+                    recovered = self._figures_from_result(embedded)
+                    figures.extend(recovered)
+                    if cache_directory is not None:
+                        for page_number in missing:
+                            _save_cached_liteparse_assets(
+                                cache_directory,
+                                page_number,
+                                [figure for figure in recovered if figure.page == page_number],
+                            )
+            figure_regions = _pdf_image_regions(source, {figure.page for figure in figures})
             (
                 text,
                 _unused_figures,
@@ -2267,36 +2833,16 @@ class LiteParseExtractor:
             text, vector_figures = _snapshot_vector_diagrams(
                 source, result, text, self._last_page_reports
             )
-            referenced_pages = sorted(
-                {int(match) for match in _LITEPARSE_IMAGE_PAGE_RE.findall(text)}
+            text, restored_figures = _attach_unreferenced_figures(
+                source, text, figures, parsed_pages, self._last_page_reports
             )
-            figures: list[FigureImage] = []
-            self._last_asset_cache_hits = 0
-            missing_asset_pages: list[int] = []
-            for page_number in referenced_pages:
-                cached_figures = (
-                    _load_cached_liteparse_assets(cache_directory, page_number)
-                    if cache_directory is not None
-                    else None
-                )
-                if cached_figures is None:
-                    missing_asset_pages.append(page_number)
-                else:
-                    figures.extend(cached_figures)
-                    self._last_asset_cache_hits += 1
-            for start in range(0, len(missing_asset_pages), _LITEPARSE_ASSET_PAGE_BATCH):
-                page_batch = missing_asset_pages[start : start + _LITEPARSE_ASSET_PAGE_BATCH]
-                selected = ",".join(str(page) for page in page_batch)
-                embedded = parser(image_mode="embed", target_pages=selected).parse(str(source))
-                batch_figures = self._figures_from_result(embedded)
-                figures.extend(batch_figures)
-                if cache_directory is not None:
-                    for page_number in page_batch:
-                        _save_cached_liteparse_assets(
-                            cache_directory,
-                            page_number,
-                            [figure for figure in batch_figures if figure.page == page_number],
-                        )
+            text = _suppress_figure_ocr_zones(
+                text, parsed_pages, figure_regions, self._last_page_reports
+            )
+            text = _restore_native_figure_captions(
+                text, parsed_pages, figure_regions, self._last_page_reports
+            )
+            self._last_restored_figures = restored_figures
             figures.extend(vector_figures)
             referenced_names = set(_LOCAL_MARKDOWN_IMAGE_RE.findall(text))
             figure_names = {
@@ -2304,11 +2850,13 @@ class LiteParseExtractor:
                 for figure in figures
                 if (placeholder := figure.find_placeholder(text)) is not None
             }
-            unresolved = [
-                page_number
-                for page_number in referenced_pages
-                if any(f"_p{page_number}_" in name for name in referenced_names - figure_names)
-            ]
+            unresolved = sorted(
+                {
+                    int(match.group(1))
+                    for name in referenced_names - figure_names
+                    if (match := _LITEPARSE_IMAGE_PAGE_RE.search(name)) is not None
+                }
+            )
             if unresolved:
                 # A stale/partial asset entry must not make an image-bearing
                 # document appear complete. Retry only the missing pages once.
@@ -2460,7 +3008,7 @@ def _extractor_metadata(extractor: object) -> dict[str, object] | None:
 
 # Bump when extraction output for a given config could change materially, to
 # invalidate every cached entry without a data migration.
-_EXTRACTION_CACHE_VERSION = 4
+_EXTRACTION_CACHE_VERSION = 6
 # Raw LiteParse pages have not changed; keep their resumable cache while
 # invalidating cached finalized Markdown after the normalization improvements.
 _LITEPARSE_RAW_CACHE_VERSION = 3

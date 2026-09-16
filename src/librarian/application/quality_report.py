@@ -55,7 +55,10 @@ def audit_final_document(source: str, output: str, *, title: str | None) -> dict
         warnings.append("title-differs-from-source-heading")
     toc_entries = _TOC_ENTRY_RE.findall(output[: min(len(output), 75_000)])
     heading_text = _canonical(" ".join(output_headings))
-    body_text = _canonical(output[75_000:])
+    # Search the entire document while excluding the outline rows themselves;
+    # a fixed character cutoff can miss early chapters in books with long
+    # contents and figure lists.
+    body_text = _canonical(_TOC_ENTRY_RE.sub("", output))
     unmatched_toc = sum(
         1
         for entry in toc_entries
@@ -63,6 +66,8 @@ def audit_final_document(source: str, output: str, *, title: str | None) -> dict
         and _canonical(entry) not in heading_text
         and _canonical(entry) not in body_text
     )
+    if toc_entries and unmatched_toc / len(toc_entries) >= 0.01:
+        warnings.append("toc-entries-unmatched")
     # Index letter headings are unambiguous; an out-of-order letter is a
     # useful warning, while books without this format remain unscored.
     index_headings = list(re.finditer(r"(?im)^#{0,3}[ \t]*index[ \t]*$", output))

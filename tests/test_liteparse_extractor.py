@@ -1,6 +1,7 @@
 """Tests for the optional liteparse-backed extraction engine."""
 
 import asyncio
+import io
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,9 +12,16 @@ from librarian.ingest.extractors import (
     IMAGE_EXTENSIONS,
     CompositeExtractor,
     FallbackExtractor,
+    FigureImage,
     LiteParseExtractor,
+    _attach_unreferenced_figures,  # pyright: ignore[reportPrivateUsage]
     _chapter_openers,  # pyright: ignore[reportPrivateUsage]
     _parse_liteparse_pages_incrementally,  # pyright: ignore[reportPrivateUsage]
+    _repair_merged_table_heading,  # pyright: ignore[reportPrivateUsage]
+    _restore_missing_native_body_lines,  # pyright: ignore[reportPrivateUsage]
+    _restore_native_figure_captions,  # pyright: ignore[reportPrivateUsage]
+    _strip_recurring_side_furniture,  # pyright: ignore[reportPrivateUsage]
+    _suppress_figure_ocr_zones,  # pyright: ignore[reportPrivateUsage]
     liteparse_available,
     normalize_spatial_markdown,
     reflow_multicolumn_markdown,
@@ -22,6 +30,69 @@ from librarian.ingest.extractors import (
 requires_liteparse = pytest.mark.skipif(
     not liteparse_available(), reason="liteparse extra not installed"
 )
+
+
+def test_merged_table_heading_recovers_caption_columns_and_first_row() -> None:
+    def item(text: str, x: int, y: int) -> SimpleNamespace:
+        return SimpleNamespace(text=text, x=x, y=y, width=len(text) * 5, height=10)
+
+    page = SimpleNamespace(
+        text_items=[
+            item("Table 3-2", 210, 390),
+            item("Preferred names", 270, 390),
+            item("Old name", 90, 415),
+            item("New name", 215, 415),
+            item("Example", 340, 415),
+            item("foo", 90, 432),
+            item("bar", 215, 432),
+            item("bar item", 340, 432),
+        ]
+    )
+    malformed = (
+        "Intro\n\n| Old name foo | Table 3-2 New name bar | Preferred names Example bar item | |\n"
+        "|---|---|---|---|\n| later | newer | next | |"
+    )
+
+    repaired, changed = _repair_merged_table_heading(page, malformed)
+
+    assert changed
+    assert "Table 3-2 Preferred names\n| Old name | New name | Example |  |" in repaired
+    assert "| foo | bar | bar item |  |" in repaired
+    assert "| later | newer | next | |" in repaired
+    assert _repair_merged_table_heading(page, "| Table 3-2 | Preferred names |\n|---|---|") == (
+        "| Table 3-2 | Preferred names |\n|---|---|",
+        False,
+    )
+
+
+def test_missing_body_line_is_restored_between_spatial_neighbors() -> None:
+    def item(text: str, x: int, y: int, width: int = 320) -> SimpleNamespace:
+        return SimpleNamespace(text=text, x=x, y=y, width=width, height=10)
+
+    before = "Readers can see the available options in the menu at any time"
+    missing = "They can remember the names because the choices are always visible"
+    after = "The menu remains in the same place while the application is open"
+    page = SimpleNamespace(
+        width=600,
+        height=800,
+        text_items=[
+            item(before, 170, 100),
+            item("Margin label", 60, 112, 50),
+            item(missing, 170, 112),
+            item(after, 170, 124),
+        ],
+    )
+
+    output, count = _restore_missing_native_body_lines(
+        page, f"{before}\n\n{after}", ()
+    )
+
+    assert count == 1
+    assert output.index(before) < output.index(missing) < output.index(after)
+    assert _restore_missing_native_body_lines(page, output, ()) == (output, 0)
+    assert _restore_missing_native_body_lines(
+        page, f"{before}\n\n{after}", [(150, 105, 500, 125)]
+    )[1] == 0
 
 
 def test_chapter_opener_uses_layout_title_and_ignores_later_running_header() -> None:
@@ -365,6 +436,161 @@ def test_spatial_normalization_separates_screenshot_ocr_from_prose() -> None:
     assert output.count("![](image_p1_0.png)") == 1
     assert reports[0]["figure_ocr_lines_removed"] == 3
     assert reports[0]["warnings"] == []
+
+
+def test_spatial_normalization_removes_screenshot_ocr_before_image_token() -> None:
+    body = (
+        "The guide explains how to save a document and where the resulting file appears. "
+        "The user can choose a destination, enter a name, and confirm the dialog."
+    )
+    markdown = (
+        f"{body}\n\n**Figure 3-1** Save dialog\n\n"
+        "Desktop items\n\ni Trash\n\nType a name for your document here\n\n"
+        "![](image_p1_0.png)"
+    )
+    page = SimpleNamespace(
+        page_num=1,
+        width=600,
+        height=500,
+        text=body,
+        text_items=[
+            SimpleNamespace(text=body, x=50, y=100, width=450, height=10),
+            SimpleNamespace(text="Desktop items", x=80, y=270, width=90, height=10),
+            SimpleNamespace(text="i", x=80, y=280, width=8, height=8),
+            SimpleNamespace(text="Trash", x=90, y=284, width=40, height=8),
+            SimpleNamespace(
+                text="Type a name for your document here", x=80, y=290, width=220, height=10
+            ),
+        ],
+    )
+    reports: list[dict[str, object]] = []
+
+    output, *_counts = normalize_spatial_markdown(
+        SimpleNamespace(text=markdown, pages=[page]),
+        page_reports=reports,
+        figure_regions={1: [(60, 250, 320, 330)]},
+    )
+
+    assert "Desktop items" not in output
+    assert "i Trash" not in output
+    assert "Type a name for your document here" not in output
+    assert "**Figure 3-1** Save dialog" in output
+    assert body in output
+    assert output.count("![](image_p1_0.png)") == 1
+    assert reports[0]["figure_ocr_lines_removed"] == 3
+
+
+def test_recurring_vertical_margin_label_is_removed_without_losing_body() -> None:
+    pages = [
+        SimpleNamespace(
+            width=600,
+            height=800,
+            text_items=[
+                SimpleNamespace(text="Body copy", x=100, y=445, width=140, height=10),
+                SimpleNamespace(text="More body", x=100, y=520, width=130, height=10),
+                *[
+                    SimpleNamespace(text=label, x=570, y=y, width=10, height=8)
+                    for label, y in zip(
+                        ("|", "1", "M", "ar", "gin"), (450, 465, 480, 495, 510), strict=True
+                    )
+                ],
+            ],
+        )
+        for _ in range(3)
+    ]
+    blocks = ["Body copy |\n1\nM\nar\ngin\nMore body" for _ in pages]
+
+    removed = _strip_recurring_side_furniture(pages, blocks)
+
+    assert all(count >= 4 for count in removed)
+    assert blocks == ["Body copy\nMore body"] * 3
+
+    table_blocks = ["| Label | 1 M ar gin |\n| Value | More body |" for _ in pages]
+    inline_removed = _strip_recurring_side_furniture(pages, table_blocks)
+    assert inline_removed == [1, 1, 1]
+    assert all("M ar gin" not in block for block in table_blocks)
+
+
+def test_unreferenced_raster_figure_is_restored_at_its_caption(tmp_path: Path) -> None:
+    image_module = pytest.importorskip("PIL.Image")
+    image = image_module.new("RGB", (120, 90), "white")
+    source = tmp_path / "figure.pdf"
+    image.save(source)
+    bitmap = io.BytesIO()
+    image.save(bitmap, format="PNG")
+    figure = FigureImage(id="p1_0", page=1, media_type="image/png", data=bitmap.getvalue())
+    page = SimpleNamespace(
+        page_num=1,
+        height=500,
+        text_items=[
+            SimpleNamespace(text="Figure 1-1 Sample chart", x=50, y=25, width=180, height=12)
+        ],
+    )
+    reports: list[dict[str, object]] = [
+        {"action": "accepted", "image_references": 0, "figure_references_restored": 0}
+    ]
+
+    output, count = _attach_unreferenced_figures(
+        source,
+        "Figure 1-1 shows the result.\n\n**Figure 1-1** Sample chart\n\n"
+        "The next paragraph is body text.",
+        [figure],
+        [page],
+        reports,
+    )
+
+    assert count == 1
+    assert output.index("**Figure 1-1** Sample chart") < output.index("![](image_p1_0.png)")
+    assert output.index("![](image_p1_0.png)") < output.index("The next paragraph")
+    assert reports[0]["figure_references_restored"] == 1
+    assert reports[0]["image_references"] == 1
+
+
+def test_figure_ocr_zone_keeps_caption_image_and_following_prose() -> None:
+    body = "The menu labels remain familiar and the controls behave consistently."
+    page = SimpleNamespace(
+        page_num=1,
+        height=500,
+        text_items=[
+            SimpleNamespace(text="Figure 2-1 Menu example", x=50, y=100, width=180, height=12),
+            SimpleNamespace(
+                text="Font Size Style New Open Close", x=200, y=160, width=180, height=12
+            ),
+            SimpleNamespace(text=body, x=50, y=300, width=410, height=12),
+        ],
+    )
+    source = (
+        "**Figure 2-1** Menu example\n\nFont Size Style New Open Close\n\n"
+        "|---|---|---|\n\n![](image_p1_0.png)\n\n" + body
+    )
+    reports: list[dict[str, object]] = [
+        {"figure_ocr_lines_removed": 0, "native_text_coverage": 1.0, "warnings": []}
+    ]
+
+    output = _suppress_figure_ocr_zones(source, [page], {1: [(180, 120, 420, 220)]}, reports)
+
+    assert "Font Size Style New Open Close" not in output
+    assert "|---|" not in output
+    assert "**Figure 2-1** Menu example" in output
+    assert "![](image_p1_0.png)" in output
+    assert body in output
+
+
+def test_native_caption_title_is_reattached_to_its_figure_number() -> None:
+    page = SimpleNamespace(
+        page_num=1,
+        text_items=[
+            SimpleNamespace(text="Figure 2-1 Menu example", x=50, y=100, width=180, height=12)
+        ],
+    )
+    source = "**Figure 2-1**\n\n![](image_p1_0.png)\n\nMenu example\n\nFollowing text."
+    reports: list[dict[str, object]] = [{"figure_caption_titles_restored": 0}]
+
+    output = _restore_native_figure_captions(source, [page], {1: [(60, 120, 300, 220)]}, reports)
+
+    assert "**Figure 2-1** Menu example" in output
+    assert output.count("Menu example") == 1
+    assert reports[0]["figure_caption_titles_restored"] == 1
 
 
 def test_spatial_normalization_falls_back_when_renderer_loses_native_text() -> None:
