@@ -138,6 +138,10 @@ prose lines and embedded-image references the PDF renderer omitted, repairs coll
 headings, and snapshots dense vector diagrams. The run's **Quality** view shows page repairs,
 cache reuse, and final document checks.
 
+When processing a document already in the library, Librarian refreshes its stored extraction if
+the extractor version or extraction settings changed, then updates its text, assets, and quality
+report before cleaning. Unchanged extractions still reuse the stored result.
+
 ### OCR system tools (CLI/API only — the Mac app bundles these)
 
 The built-in OCR fallback needs two system binaries on your `PATH`:

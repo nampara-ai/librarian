@@ -54,23 +54,16 @@ class IngestDocument:
             try:
                 raw_text = await self.content.get_text(raw_text_key(document_id))
             except KeyError:
-                extracted = await _extract_payload(self.extractor, source_path)
-                raw_text = extracted.text
-                await self.content.put_text(raw_text_key(document_id), raw_text)
-                await self._save_assets(document_id, extracted)
-                await self._save_extraction_report(document_id)
+                raw_text = await self._refresh_extraction(document_id, source_path)
             else:
                 # Databases created before asset persistence need one fresh
                 # extraction. The durable marker also distinguishes a valid
                 # empty asset set from an interrupted migration/re-extraction.
-                if self.assets is not None and not await self.assets.document_assets_initialized(
-                    document_id
-                ):
-                    extracted = await _extract_payload(self.extractor, source_path)
-                    raw_text = extracted.text
-                    await self.content.put_text(raw_text_key(document_id), raw_text)
-                    await self._save_assets(document_id, extracted)
-                    await self._save_extraction_report(document_id)
+                missing_assets = self.assets is not None and not (
+                    await self.assets.document_assets_initialized(document_id)
+                )
+                if missing_assets or not await self._extraction_is_current(document_id):
+                    raw_text = await self._refresh_extraction(document_id, source_path)
             return IngestedDocument(document=existing, raw_text=raw_text, duplicate=True)
 
         media_type = mimetypes.guess_type(source_path.name)[0] or "application/octet-stream"
@@ -98,7 +91,55 @@ class IngestDocument:
             await self.content.put_text(raw_text_key(document_id), raw_text)
         await self._save_assets(document_id, extracted)
         await self._save_extraction_report(document_id)
+        await self._save_extraction_signature(document_id)
         return IngestedDocument(document=document, raw_text=raw_text)
+
+    async def ensure_current(self, document: Document) -> bool:
+        """Refresh stored extraction when the extractor or its settings changed.
+
+        Processing an existing document otherwise bypasses ingestion entirely,
+        so a new app build can silently reuse obsolete text and image assets.
+        """
+        document_id = document.id
+        missing_assets = self.assets is not None and not (
+            await self.assets.document_assets_initialized(document_id)
+        )
+        if not missing_assets and await self._extraction_is_current(document_id):
+            return False
+        source_path, payload = await _read_source(
+            document.source.path, max_source_bytes=self.max_source_bytes
+        )
+        if hashlib.sha256(payload).hexdigest() != document.source.sha256:
+            raise ValueError(
+                f"Stored source file changed for {document_id}; re-import the document"
+            )
+        await self._refresh_extraction(document_id, source_path)
+        return True
+
+    async def _extraction_is_current(self, document_id: DocumentId) -> bool:
+        signature = getattr(self.extractor, "config_signature", None)
+        if not isinstance(signature, str):
+            return True
+        try:
+            stored = await self.content.get_text(extraction_signature_key(document_id))
+        except KeyError:
+            return False
+        return stored == signature
+
+    async def _refresh_extraction(self, document_id: DocumentId, source_path: Path) -> str:
+        extracted = await _extract_payload(self.extractor, source_path)
+        await self.content.put_text(raw_text_key(document_id), extracted.text)
+        await self._save_assets(document_id, extracted)
+        await self._save_extraction_report(document_id)
+        # Write this marker last. An interrupted refresh must be retried rather
+        # than accepted with mismatched raw text, assets, or quality metadata.
+        await self._save_extraction_signature(document_id)
+        return extracted.text
+
+    async def _save_extraction_signature(self, document_id: DocumentId) -> None:
+        signature = getattr(self.extractor, "config_signature", None)
+        if isinstance(signature, str):
+            await self.content.put_text(extraction_signature_key(document_id), signature)
 
     async def _save_extraction_report(self, document_id: DocumentId) -> None:
         metadata = getattr(self.extractor, "last_metadata", None)
@@ -128,6 +169,11 @@ class IngestDocument:
 def raw_text_key(document_id: DocumentId) -> str:
     """Content key for a document's extracted source text."""
     return f"raw:{document_id}"
+
+
+def extraction_signature_key(document_id: DocumentId) -> str:
+    """Content key marking which extractor version produced stored raw text."""
+    return f"extraction-signature:{document_id}"
 
 
 async def _extract_payload(extractor: TextExtractor, path: Path) -> ExtractionPayload:

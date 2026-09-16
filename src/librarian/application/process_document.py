@@ -16,7 +16,7 @@ from typing import Any, cast
 from librarian.application.assemble_document import assemble_cleaned_document
 from librarian.application.classify_document import ClassifyDocument
 from librarian.application.clean_chunks import CleanChunks, CleanedChunk
-from librarian.application.ingest_document import raw_text_key
+from librarian.application.ingest_document import IngestDocument, raw_text_key
 from librarian.application.ports import (
     ApplicationMetrics,
     ChunkRepository,
@@ -114,6 +114,7 @@ class ProcessDocument:
     cleaner: CleanChunks
     classifier: ClassifyDocument
     chunking_policy: ChunkingPolicy
+    ingest_document: IngestDocument | None = None
     metrics: ApplicationMetrics = field(default_factory=NoOpMetricsRecorder)
     tracer: Any | None = None
 
@@ -169,8 +170,19 @@ class ProcessDocument:
                     status=RunStatus.RUNNING,
                     stage=RunStage.EXTRACT,
                 )
+                extraction_refreshed = (
+                    await self.ingest_document.ensure_current(document)
+                    if self.ingest_document is not None
+                    else False
+                )
                 raw_text = await self.content.get_text(raw_text_key(document_id))
-            await self.events.emit(run_id, RunStage.EXTRACT, "loaded extracted source text")
+            await self.events.emit(
+                run_id,
+                RunStage.EXTRACT,
+                "refreshed stale extracted source text"
+                if extraction_refreshed
+                else "loaded extracted source text",
+            )
             await self._raise_if_canceled(run_id)
             async with self._timed_stage(RunStage.NORMALIZE, run_id, document_id):
                 await self.runs.update_status(

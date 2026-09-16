@@ -952,8 +952,19 @@ class SQLiteRepository:
                 (str(document_id),),
             )
             connection.execute(
-                "DELETE FROM content_blobs WHERE key = ?",
-                (f"raw:{document_id}",),
+                """
+                DELETE FROM content_blobs
+                WHERE key IN (?, ?, ?)
+                   OR key IN (
+                     SELECT 'quality:run:' || id FROM runs WHERE document_id = ?
+                   )
+                """,
+                (
+                    f"raw:{document_id}",
+                    f"extraction-signature:{document_id}",
+                    f"quality:extraction:{document_id}",
+                    str(document_id),
+                ),
             )
             connection.execute(
                 """

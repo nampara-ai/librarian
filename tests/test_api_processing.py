@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 import librarian.api.app as api_app
 from librarian.api.app import FixedWindowRateLimiter, create_app
 from librarian.application.factory import build_container
-from librarian.application.ingest_document import raw_text_key
+from librarian.application.ingest_document import extraction_signature_key, raw_text_key
 from librarian.application.jobs import QueueWorker
 from librarian.config import Settings
 from librarian.domain.ids import DocumentId
@@ -1752,8 +1752,7 @@ def test_api_delete_removes_all_document_scoped_records(tmp_path: Path) -> None:
             }.items()
         }
         counts["content_blobs"] = connection.execute(
-            "SELECT COUNT(*) AS count FROM content_blobs WHERE key = ?",
-            (raw_text_key(DocumentId(document_id)),),
+            "SELECT COUNT(*) AS count FROM content_blobs"
         ).fetchone()["count"]
     assert counts == {
         "documents": 0,
@@ -1801,6 +1800,43 @@ def test_api_duplicate_upload_preserves_ready_status_and_removes_duplicate_file(
     assert after_duplicate.json()["status"] == "ready"
     assert deleted.status_code == 200
     assert not list((tmp_path / ".librarian" / "uploads").glob("*/same.txt"))
+
+
+def test_processing_existing_document_refreshes_stale_extraction(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / ".librarian",
+        database_path=tmp_path / ".librarian" / "librarian.sqlite",
+    )
+    source = b"The current source is accurate and ready."
+    with TestClient(create_app(settings)) as client:
+        upload = client.post(
+            "/documents", files={"file": ("source.txt", source, "text/plain")}
+        )
+        assert upload.status_code == 200
+        document_id = upload.json()["id"]
+        with sqlite3.connect(settings.database_path) as connection:
+            connection.execute(
+                "UPDATE content_blobs SET text = ? WHERE key = ?",
+                ("obsolete extraction", raw_text_key(DocumentId(document_id))),
+            )
+            connection.execute(
+                "UPDATE content_blobs SET text = ? WHERE key = ?",
+                ("old-extractor", extraction_signature_key(DocumentId(document_id))),
+            )
+
+        run = client.post("/runs", json={"document_id": document_id})
+        assert run.status_code == 200
+        result = _wait_for_run(client, run.json()["id"])
+        assert result.json()["status"] == "succeeded"
+        content = client.get(f"/documents/{document_id}/content")
+        assert source.decode() in content.json()["text"]
+        assert "obsolete extraction" not in content.json()["text"]
+        with sqlite3.connect(settings.database_path) as connection:
+            stored = connection.execute(
+                "SELECT text FROM content_blobs WHERE key = ?",
+                (extraction_signature_key(DocumentId(document_id)),),
+            ).fetchone()
+        assert stored is not None and stored[0] != "old-extractor"
 
 
 def test_api_document_pagination(tmp_path: Path) -> None:

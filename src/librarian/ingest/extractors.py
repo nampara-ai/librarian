@@ -3073,6 +3073,7 @@ class CachingExtractor:
         self._inner = inner
         self._cache = cache
         self._config_signature = config_signature
+        self.config_signature = config_signature
         self.supported_extensions = inner.supported_extensions
         self.last_metadata: dict[str, object] | None = None
         self.last_cache_hit: bool | None = None

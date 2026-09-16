@@ -171,6 +171,7 @@ async def build_container(
         cleaner=cleaner,
         classifier=classifier,
         chunking_policy=policy,
+        ingest_document=ingest_container.ingest_document,
         metrics=metrics or NoOpMetricsRecorder(),
         tracer=tracer,
     )
