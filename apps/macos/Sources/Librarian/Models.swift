@@ -93,6 +93,7 @@ struct ProcessingQuality: Codable {
     let pages: Int?
     let imageReferences: Int
     let tocEntriesWithoutMatchingHeadingOrBody: Int?
+    let tocUnmatchedEntries: [String]?
     let chunks: Int
     let cachedCleanedChunks: Int
     let verifiedSourceChunks: Int?

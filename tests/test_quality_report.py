@@ -39,4 +39,5 @@ def test_final_audit_flags_unmatched_contents_entry_without_self_matching() -> N
     report = audit_final_document(source, source, title=None)
 
     assert report["toc_entries_without_matching_heading_or_body"] == 1
+    assert report["toc_unmatched_entries"] == ["Missing chapter heading"]
     assert report["warnings"] == ["toc-entries-unmatched"]

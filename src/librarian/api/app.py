@@ -24,7 +24,7 @@ from urllib.parse import quote, unquote
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -55,7 +55,11 @@ from librarian.application.factory import (
 from librarian.application.import_library import ImportLibrary, ImportProcessingMode
 from librarian.application.jobs import InProcessJobRunner
 from librarian.application.ports import SearchScope
-from librarian.application.quality_report import extraction_report_key, run_quality_key
+from librarian.application.quality_report import (
+    extraction_report_key,
+    run_quality_key,
+    unmatched_toc_entries,
+)
 from librarian.config import Settings
 from librarian.domain.ids import DocumentId, RunId
 from librarian.domain.models import (
@@ -1154,6 +1158,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             truncated=end < total_chars,
         )
 
+    @app.get("/documents/{document_id}/source")
+    async def get_document_source(document_id: str) -> FileResponse:
+        """Return the stored original for source-page review in the Mac app."""
+        container = await build_ingest_container(settings)
+        document = await container.repository.get_document(DocumentId(document_id))
+        if document is None or not document.source.path.is_file():
+            raise HTTPException(status_code=404, detail="Document source not found")
+        return FileResponse(
+            document.source.path,
+            media_type=document.source.media_type,
+            filename=document.source.filename,
+        )
+
     @app.get(
         "/documents/{document_id}/export",
         responses={
@@ -1306,11 +1323,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             payload = json.loads(raw)
             return cast("dict[str, Any]", payload) if isinstance(payload, dict) else None
 
+        processing = await read_report(run_quality_key(run.id))
+        # Reports saved by older engines contain only the unmatched count.
+        # Enrich the latest completed run on demand so existing review notices
+        # become actionable without reprocessing a large document.
+        if processing is not None and "toc_unmatched_entries" not in processing:
+            output = await container.repository.get_cleaned_output(run.document_id)
+            if output is not None and output.run_id == run.id:
+                processing["toc_unmatched_entries"] = unmatched_toc_entries(output.text)
+
         return QualityReportResponse(
             run_id=str(run.id),
             document_id=str(run.document_id),
             extraction=await read_report(extraction_report_key(run.document_id)),
-            processing=await read_report(run_quality_key(run.id)),
+            processing=processing,
         )
 
     @app.post("/runs/{run_id}/cancel", response_model=RunResponse)

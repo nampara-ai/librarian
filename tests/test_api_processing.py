@@ -50,6 +50,29 @@ def test_api_upload_run_and_get_content(tmp_path: Path) -> None:
         assert quality.json()["run_id"] == run_id
         assert quality.json()["processing"]["chunks"] == 1
         assert quality.json()["processing"]["fatal"] == []
+        assert quality.json()["processing"]["toc_unmatched_entries"] == []
+
+        # Existing reports written before the detail field was added are
+        # enriched when the same completed run is still the latest output.
+        with sqlite3.connect(settings.database_path) as connection:
+            key = f"quality:run:{run_id}"
+            stored = json.loads(
+                connection.execute(
+                    "SELECT text FROM content_blobs WHERE key = ?", (key,)
+                ).fetchone()[0]
+            )
+            del stored["toc_unmatched_entries"]
+            connection.execute(
+                "UPDATE content_blobs SET text = ? WHERE key = ?",
+                (json.dumps(stored), key),
+            )
+        old_quality = client.get(f"/runs/{run_id}/quality")
+        assert old_quality.status_code == 200
+        assert old_quality.json()["processing"]["toc_unmatched_entries"] == []
+
+        source = client.get(f"/documents/{document_id}/source")
+        assert source.status_code == 200
+        assert source.content == b"Horse transcript with rough um text."
 
         content = client.get(f"/documents/{document_id}/content")
         assert content.status_code == 200

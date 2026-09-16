@@ -5,6 +5,7 @@ import SwiftUI
 struct LibraryRow: Identifiable, Hashable {
     let id: String
     let documentID: String
+    let runID: String?
     let filename: String
     let snippet: String?
     let classificationLabel: String?
@@ -22,6 +23,9 @@ struct LibraryView: View {
     @State private var isLoading = false
     @State private var notice: String?
     @State private var pendingDelete: LibraryRow?
+    @State private var qualityRow: LibraryRow?
+    @State private var qualityReport: RunQualityReport?
+    @State private var isLoadingQuality = false
     @State private var searchTask: Task<Void, Never>?
 
     var body: some View {
@@ -71,6 +75,7 @@ struct LibraryView: View {
                     LibraryRowView(
                         row: row,
                         onSave: { save(row) },
+                        onQuality: { showQuality(row) },
                         onDelete: { pendingDelete = row }
                     )
                     .listRowSeparator(.visible)
@@ -108,6 +113,16 @@ struct LibraryView: View {
         } message: { row in
             Text(Copy.libraryDeleteConfirmBody(row.filename))
         }
+        .sheet(item: $qualityRow) { row in
+            QualityDetailsView(
+                filename: row.filename,
+                sourceURL: nil,
+                documentID: row.documentID,
+                outputURL: nil,
+                report: qualityReport,
+                isLoading: isLoadingQuality
+            )
+        }
     }
 
     // MARK: - Data
@@ -130,13 +145,22 @@ struct LibraryView: View {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             if trimmed.isEmpty {
-                let page = try await model.client.listDocuments()
+                async let documentsPage = model.client.listDocuments()
+                async let runsPage = model.client.listRuns()
+                let (page, runPage) = try await (documentsPage, runsPage)
+                var latestRunIDs: [String: String] = [:]
+                for run in runPage.runs where run.status == "succeeded" {
+                    if latestRunIDs[run.documentId] == nil {
+                        latestRunIDs[run.documentId] = run.id
+                    }
+                }
                 rows = page.documents
                     .filter { $0.status == "ready" }
                     .map { document in
                         LibraryRow(
                             id: "doc-\(document.id)",
                             documentID: document.id,
+                            runID: latestRunIDs[document.id],
                             filename: document.filename,
                             snippet: nil,
                             classificationLabel: nil
@@ -148,6 +172,7 @@ struct LibraryView: View {
                     LibraryRow(
                         id: "hit-\(result.id)",
                         documentID: result.documentId,
+                        runID: result.runId,
                         filename: result.filename,
                         snippet: Self.plainSnippet(result.snippet),
                         classificationLabel: result.classificationLabel
@@ -199,6 +224,19 @@ struct LibraryView: View {
         }
     }
 
+    private func showQuality(_ row: LibraryRow) {
+        guard let runID = row.runID else { return }
+        qualityReport = nil
+        isLoadingQuality = true
+        qualityRow = row
+        Task { @MainActor in
+            let loaded = await model.qualityReport(runID: runID)
+            guard qualityRow?.id == row.id else { return }
+            qualityReport = loaded
+            isLoadingQuality = false
+        }
+    }
+
     private func delete(_ row: LibraryRow) {
         pendingDelete = nil
         Task { @MainActor in
@@ -216,6 +254,7 @@ struct LibraryView: View {
 struct LibraryRowView: View {
     let row: LibraryRow
     let onSave: () -> Void
+    let onQuality: () -> Void
     let onDelete: () -> Void
 
     var body: some View {
@@ -249,11 +288,18 @@ struct LibraryRowView: View {
 
             Spacer()
 
+            if row.runID != nil {
+                Button(Copy.qualityReport, action: onQuality)
+                    .buttonStyle(.link)
+            }
             Button(Copy.librarySaveCopy, action: onSave)
                 .buttonStyle(.link)
         }
         .frame(minHeight: 40)
         .contextMenu {
+            if row.runID != nil {
+                Button(Copy.qualityReport, action: onQuality)
+            }
             Button(Copy.librarySaveCopy, action: onSave)
             Divider()
             Button(Copy.libraryDelete, role: .destructive, action: onDelete)

@@ -1,3 +1,4 @@
+import PDFKit
 import SwiftUI
 
 /// The one screen: destination strip, queue, footer. The whole window is a
@@ -289,14 +290,22 @@ struct QueueRowView: View {
                 }
             }
             .buttonStyle(.link)
-            .popover(isPresented: $showQuality) {
+            .sheet(isPresented: $showQuality) {
                 QualityDetailsView(
                     filename: item.filename,
+                    sourceURL: item.sourceURL,
+                    documentID: item.documentID,
+                    outputURL: savedOutputURL,
                     report: qualityReport,
                     isLoading: isLoadingQuality
                 )
             }
         }
+    }
+
+    private var savedOutputURL: URL? {
+        if case .done(let url) = item.stage { return url }
+        return nil
     }
 
     private var stageAccessibilityLabel: String {
@@ -347,80 +356,220 @@ struct QueueRowView: View {
 // MARK: - Quality details
 
 struct QualityDetailsView: View {
+    @EnvironmentObject private var model: AppModel
     let filename: String
+    let sourceURL: URL?
+    let documentID: String?
+    let outputURL: URL?
     let report: RunQualityReport?
     let isLoading: Bool
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedPage: QualityReviewPage?
+    @State private var sourceData: Data?
+    @State private var isLoadingSource = false
+    @State private var sourceLoadError: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(filename)
-                .font(.headline)
-                .lineLimit(1)
-            Text("Quality report")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Quality report").font(.title3.weight(.semibold))
+                    Text(filename).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer()
+                Button("Done") { dismiss() }
+            }
             Divider()
             if isLoading {
                 ProgressView("Loading…").controlSize(.small)
             } else if let report {
-                if let summary = report.extraction?.qualitySummary {
-                    Text("\(summary.pages) pages · \(summary.pagesRequiringLayoutRepair) layout repairs · \(summary.pagesWithWarnings) pages flagged")
-                    Text("\(summary.figureOcrLinesRemoved) figure OCR fragments separated · \(report.extraction?.figuresExtracted ?? 0) figures preserved")
-                    if let restored = report.extraction?.figureReferencesRestored, restored > 0 {
-                        Text("\(restored) figures restored after the PDF renderer omitted them")
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        reportContent(report)
                     }
-                    if let captions = report.extraction?.figureCaptionTitlesRestored, captions > 0 {
-                        Text("\(captions) figure captions repaired from PDF text")
-                    }
-                    if let removed = summary.sideFurnitureLinesRemoved, removed > 0 {
-                        Text("\(removed) repeated margin fragments removed")
-                    }
-                    if let restored = summary.nativeBodyLinesRestored, restored > 0 {
-                        Text("\(restored) missing prose lines restored from PDF text")
-                    }
-                    if let reused = report.extraction?.pagesReusedFromCache, reused > 0 {
-                        Text("\(reused) pages reused from cache")
-                    }
-                }
-                if let processing = report.processing {
-                    Text("\(processing.chunks) chunks · \(processing.cachedCleanedChunks) reused · \(processing.sourcePreservedChunks) kept verbatim for fidelity")
-                    if let verified = processing.verifiedSourceChunks, verified > 0 {
-                        Text("\(verified) verified source chunks skipped model cleaning")
-                    }
-                    Text("\(processing.imageReferences) image references in final output")
-                    if let unmatched = processing.tocEntriesWithoutMatchingHeadingOrBody,
-                       unmatched > 0 {
-                        Text("\(unmatched) contents or figure-list entries need review")
-                    }
-                    ForEach(processing.warnings, id: \.self) { warning in
-                        Label(warning.replacingOccurrences(of: "-", with: " "), systemImage: "exclamationmark.triangle")
-                    }
-                }
-                let flagged = (report.extraction?.pages ?? []).filter { !$0.warnings.isEmpty }
-                if !flagged.isEmpty {
-                    Divider()
-                    Text("Pages to review")
-                        .font(.subheadline.weight(.semibold))
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(Array(flagged.prefix(20))) { page in
-                                Text("Page \(page.pageNumber): \(page.warnings.joined(separator: ", "))")
-                                    .font(.caption)
-                                    .textSelection(.enabled)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxHeight: 180)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             } else {
                 Text("No quality report is available for this run.")
                     .foregroundStyle(.secondary)
             }
+            Divider()
+            HStack {
+                if filename.lowercased().hasSuffix(".pdf") {
+                    Button("Open source PDF") { reviewPage(1) }
+                } else if let sourceURL {
+                    Button("Open original file") { NSWorkspace.shared.open(sourceURL) }
+                }
+                if let outputURL {
+                    Button("Open saved file") { NSWorkspace.shared.open(outputURL) }
+                }
+                if isLoadingSource { ProgressView().controlSize(.small) }
+                Spacer()
+            }
         }
-        .font(.caption)
+        .padding(18)
+        .frame(minWidth: 620, idealWidth: 680, minHeight: 420, idealHeight: 560)
+        .sheet(item: $selectedPage) { page in
+            SourcePDFPageView(
+                sourceURL: sourceURL,
+                sourceData: sourceData,
+                pageNumber: page.number
+            )
+        }
+        .alert("Could not open source", isPresented: Binding(
+            get: { sourceLoadError != nil },
+            set: { if !$0 { sourceLoadError = nil } }
+        )) {
+            Button("OK", role: .cancel) { sourceLoadError = nil }
+        } message: {
+            Text(sourceLoadError ?? "")
+        }
+    }
+
+    @ViewBuilder
+    private func reportContent(_ report: RunQualityReport) -> some View {
+        if let summary = report.extraction?.qualitySummary {
+            Text("\(summary.pages) pages · \(summary.pagesRequiringLayoutRepair) layout repairs · \(summary.pagesWithWarnings) pages flagged")
+            Text("\(summary.figureOcrLinesRemoved) figure OCR fragments separated · \(report.extraction?.figuresExtracted ?? 0) figures preserved")
+            if let restored = report.extraction?.figureReferencesRestored, restored > 0 {
+                Text("\(restored) figures restored after the PDF renderer omitted them")
+            }
+            if let captions = report.extraction?.figureCaptionTitlesRestored, captions > 0 {
+                Text("\(captions) figure captions repaired from PDF text")
+            }
+            if let removed = summary.sideFurnitureLinesRemoved, removed > 0 {
+                Text("\(removed) repeated margin fragments removed")
+            }
+            if let restored = summary.nativeBodyLinesRestored, restored > 0 {
+                Text("\(restored) missing prose lines restored from PDF text")
+            }
+            if let reused = report.extraction?.pagesReusedFromCache, reused > 0 {
+                Text("\(reused) pages reused from cache")
+            }
+        }
+        if let processing = report.processing {
+            Text("\(processing.chunks) chunks · \(processing.cachedCleanedChunks) reused · \(processing.sourcePreservedChunks) kept verbatim for fidelity")
+            if let verified = processing.verifiedSourceChunks, verified > 0 {
+                Text("\(verified) verified source chunks skipped model cleaning")
+            }
+            Text("\(processing.imageReferences) image references in final output")
+            if let unmatched = processing.tocEntriesWithoutMatchingHeadingOrBody,
+               unmatched > 0 {
+                Divider()
+                Text("\(unmatched) contents or figure-list entries to review")
+                    .font(.subheadline.weight(.semibold))
+                Text("These titles have no exact match elsewhere in the output. Small wording or punctuation differences can also trigger this check.")
+                    .foregroundStyle(.secondary)
+                if let entries = processing.tocUnmatchedEntries, !entries.isEmpty {
+                    ForEach(entries.indices, id: \.self) { index in
+                        HStack(alignment: .firstTextBaseline, spacing: 12) {
+                            Text(entries[index])
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Button("Copy") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(entries[index], forType: .string)
+                            }
+                            .buttonStyle(.link)
+                            .help("Copy this title to search for it in the saved file")
+                        }
+                    }
+                } else {
+                    Text("Entry details are unavailable for this run.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            ForEach(processing.warnings.filter { $0 != "toc-entries-unmatched" }, id: \.self) { warning in
+                Label(warning.replacingOccurrences(of: "-", with: " "), systemImage: "exclamationmark.triangle")
+            }
+        }
+        let flagged = (report.extraction?.pages ?? []).filter { !$0.warnings.isEmpty }
+        if !flagged.isEmpty {
+            Divider()
+            Text("Pages to review")
+                .font(.subheadline.weight(.semibold))
+            Text("Extraction warnings are checks to verify against the original. Number warnings can include printed page or chapter labels.")
+                .foregroundStyle(.secondary)
+            ForEach(flagged) { page in
+                HStack(alignment: .firstTextBaseline) {
+                    Text("PDF page \(page.pageNumber): \(page.warnings.joined(separator: ", ").replacingOccurrences(of: "-", with: " "))")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if filename.lowercased().hasSuffix(".pdf") {
+                        Button("Review page") { reviewPage(page.pageNumber) }
+                            .buttonStyle(.link)
+                    }
+                }
+            }
+        }
+    }
+
+    private func reviewPage(_ number: Int) {
+        if sourceData != nil || sourceURL.map({ FileManager.default.fileExists(atPath: $0.path) }) == true {
+            selectedPage = QualityReviewPage(number: number)
+            return
+        }
+        guard let documentID else { return }
+        isLoadingSource = true
+        Task { @MainActor in
+            defer { isLoadingSource = false }
+            do {
+                sourceData = try await model.client.sourceDocument(documentId: documentID)
+                selectedPage = QualityReviewPage(number: number)
+            } catch {
+                sourceLoadError = Copy.userFacingReason(for: error.localizedDescription)
+            }
+        }
+    }
+}
+
+private struct QualityReviewPage: Identifiable {
+    let number: Int
+    var id: Int { number }
+}
+
+private struct SourcePDFPageView: View {
+    let sourceURL: URL?
+    let sourceData: Data?
+    let pageNumber: Int
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack {
+                Text("Source PDF · page \(pageNumber)")
+                    .font(.headline)
+                Spacer()
+                if let sourceURL {
+                    Button("Open in Preview") { NSWorkspace.shared.open(sourceURL) }
+                }
+                Button("Done") { dismiss() }
+            }
+            PDFPageView(sourceURL: sourceURL, sourceData: sourceData, pageNumber: pageNumber)
+        }
         .padding(14)
-        .frame(width: 460, alignment: .leading)
+        .frame(minWidth: 780, minHeight: 600)
+    }
+}
+
+private struct PDFPageView: NSViewRepresentable {
+    let sourceURL: URL?
+    let sourceData: Data?
+    let pageNumber: Int
+
+    func makeNSView(context: Context) -> PDFView {
+        let view = PDFView()
+        view.autoScales = true
+        view.displayMode = .singlePageContinuous
+        view.document = sourceURL.flatMap(PDFDocument.init(url:))
+            ?? sourceData.flatMap(PDFDocument.init(data:))
+        if let page = view.document?.page(at: pageNumber - 1) {
+            view.go(to: page)
+        }
+        return view
+    }
+
+    func updateNSView(_ view: PDFView, context: Context) {
+        // Preserve the user's zoom and scroll position during SwiftUI updates.
     }
 }
 

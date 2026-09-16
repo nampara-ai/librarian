@@ -190,6 +190,13 @@ struct APIClient {
         return try Self.decoder.decode(ContentPage.self, from: data)
     }
 
+    /// Fetch the stored original on demand when reviewing a completed run
+    /// from the Library, after its transient queue row has disappeared.
+    func sourceDocument(documentId: String) async throws -> Data {
+        let (data, _) = try await send("GET", "/documents/\(documentId)/source")
+        return data
+    }
+
     func cancelRun(id: String) async throws -> Run {
         let (data, _) = try await send("POST", "/runs/\(id)/cancel")
         return try Self.decoder.decode(Run.self, from: data)

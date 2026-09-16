@@ -30,7 +30,6 @@ final class AppModel: ObservableObject {
     /// indicators don't flash during launch.
     @Published var hasRefreshedOnce = false
 
-    private var documents: [Document] = []
     private var runs: [Run] = []
     private var exportsInFlight: Set<UUID> = []
     private var okfSyncTask: Task<Void, Never>?
@@ -200,11 +199,7 @@ final class AppModel: ObservableObject {
         }
         if hasActiveWork {
             do {
-                async let documentsPage = client.listDocuments()
-                async let runsPage = client.listRuns()
-                let (loadedDocuments, loadedRuns) = try await (documentsPage, runsPage)
-                documents = loadedDocuments.documents
-                runs = loadedRuns.runs
+                runs = try await client.listRuns().runs
             } catch {
                 // Transient fetch errors leave the queue as-is; the timeout
                 // below fails items that never make progress.
@@ -403,8 +398,8 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Fold backend documents and runs into queue stages, fire exports for
-    /// finished documents, and bound work that never reached a backend run.
+    /// Fold this app's exact backend runs into queue stages, export completed
+    /// results, and bound work that never reached a backend run.
     private func reconcileQueue() {
         let now = Date()
         for item in queue where !item.stage.isTerminal {
@@ -413,39 +408,33 @@ final class AppModel: ObservableObject {
                 continue
             }
             guard let documentID = item.documentID else { continue }
-            // Prefer the exact run we started for this item (item.runID); a
-            // document can accumulate several runs across retries, and matching
-            // only by document could pick a stale one. Fall back to the latest
-            // run for the document when we don't yet know the run id.
-            let run = item.runID.flatMap { id in runs.first { $0.id == id } }
-                ?? runs.first { $0.documentId == documentID }
-            let document = documents.first { $0.id == documentID }
+            // An upload can return an existing document with a previous
+            // successful run and export. Until createRun returns this item's
+            // run ID, neither that old run nor the document's "ready" state
+            // says anything about the new attempt.
+            guard let runID = item.runID,
+                  let run = runs.first(where: { $0.id == runID }) else { continue }
 
-            if let run, run.status == "failed" {
+            if run.status == "failed" {
                 setStage(
                     item.id,
                     .failed(reason: Copy.userFacingReason(for: run.error), retryable: true)
                 )
                 continue
             }
-            if let run, run.status == "canceled" {
+            if run.status == "canceled" {
                 // Canceled from this app or externally (CLI/API): stop the row
                 // instead of letting it spin until the stage timeout.
                 setStage(item.id, .failed(reason: Copy.reasonStopped, retryable: true))
                 continue
             }
-            if document?.status == "failed" {
-                setStage(
-                    item.id,
-                    .failed(reason: Copy.userFacingReason(for: run?.error), retryable: true)
-                )
-                continue
-            }
-            if document?.status == "ready" {
+            // Export only after this exact run has atomically published its
+            // output. A previous output remains available while reprocessing.
+            if run.status == "succeeded" {
                 startExport(itemID: item.id, documentID: documentID)
                 continue
             }
-            if let run, run.isActive {
+            if run.isActive {
                 setStage(item.id, stage(for: run))
             }
         }

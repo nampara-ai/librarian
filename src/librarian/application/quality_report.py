@@ -54,19 +54,8 @@ def audit_final_document(source: str, output: str, *, title: str | None) -> dict
     if title and first_title and _canonical(title) != _canonical(first_title):
         warnings.append("title-differs-from-source-heading")
     toc_entries = _TOC_ENTRY_RE.findall(output[: min(len(output), 75_000)])
-    heading_text = _canonical(" ".join(output_headings))
-    # Search the entire document while excluding the outline rows themselves;
-    # a fixed character cutoff can miss early chapters in books with long
-    # contents and figure lists.
-    body_text = _canonical(_TOC_ENTRY_RE.sub("", output))
-    unmatched_toc = sum(
-        1
-        for entry in toc_entries
-        if len(_canonical(entry).split()) >= 3
-        and _canonical(entry) not in heading_text
-        and _canonical(entry) not in body_text
-    )
-    if toc_entries and unmatched_toc / len(toc_entries) >= 0.01:
+    unmatched_toc = unmatched_toc_entries(output)
+    if toc_entries and len(unmatched_toc) / len(toc_entries) >= 0.01:
         warnings.append("toc-entries-unmatched")
     # Index letter headings are unambiguous; an out-of-order letter is a
     # useful warning, while books without this format remain unscored.
@@ -87,12 +76,29 @@ def audit_final_document(source: str, output: str, *, title: str | None) -> dict
         "page_boundaries": output_boundaries,
         "headings": len(output_headings),
         "toc_entries": len(toc_entries),
-        "toc_entries_without_matching_heading_or_body": unmatched_toc,
+        "toc_entries_without_matching_heading_or_body": len(unmatched_toc),
+        "toc_unmatched_entries": unmatched_toc,
         "index_letter_order_ok": index_order_ok,
         "oversized_table_rows": giant_rows,
         "fatal": fatal,
         "warnings": warnings,
     }
+
+
+def unmatched_toc_entries(output: str) -> list[str]:
+    """Return outline titles absent from headings and body for review in the app."""
+    entries = _TOC_ENTRY_RE.findall(output[: min(len(output), 75_000)])
+    heading_text = _canonical(" ".join(_HEADING_RE.findall(output)))
+    # Search the entire document while excluding the outline rows themselves;
+    # a fixed cutoff can miss early chapters in books with long figure lists.
+    body_text = _canonical(_TOC_ENTRY_RE.sub("", output))
+    return [
+        entry
+        for entry in entries
+        if len(_canonical(entry).split()) >= 3
+        and _canonical(entry) not in heading_text
+        and _canonical(entry) not in body_text
+    ]
 
 
 def _canonical(text: str) -> str:
