@@ -27,6 +27,7 @@ enum Copy {
     static let clearFinished = "Clear Finished"
     static let addFiles = "Add Files…"
     static let failureDetails = "Details"
+    static let qualityReport = "Quality"
     static let failureDetailsEmpty = "No further detail was recorded."
 
     static let libraryTitle = "Library"

@@ -96,6 +96,19 @@ def test_enrich_respects_max_figures() -> None:
     assert out.count("**Figure") == 2
 
 
+def test_enrich_prioritizes_pages_needing_figure_review() -> None:
+    md = "![](image_a.png)\n![](image_b.png)\n![](image_c.png)\n"
+    figures = [_fig("a", 1, 5000), _fig("b", 2, 5000), _fig("c", 3, 5000)]
+
+    out, count = _enrich(
+        md, figures, _FakeVision(), max_figures=1, page_priority={1: 0, 2: 3, 3: 10}
+    )
+
+    assert count == 1
+    assert "**Figure (page 3):**" in out
+    assert "**Figure (page 1):**" not in out
+
+
 def test_enrich_skips_tiny_and_huge_images() -> None:
     md = "![](image_tiny.png)\n![](image_ok.png)\n![](image_huge.png)\n"
     figures = [_fig("tiny", 1, 100), _fig("ok", 1, 5000), _fig("huge", 1, 9000)]

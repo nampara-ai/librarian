@@ -57,11 +57,7 @@ Second paragraph with [1].
 
 def test_validation_warns_for_context_leaks_or_malformed_markdown() -> None:
     result = validate_cleaned_text(
-        "[CONTEXT: This continues from previous chunk]\n\n"
-        "|\n"
-        "| Name | Value |\n"
-        "| Alice | 1 |\n"
-        "-",
+        "[CONTEXT: This continues from previous chunk]\n\n|\n| Name | Value |\n| Alice | 1 |\n-",
         input_size=200,
     )
 
@@ -99,9 +95,7 @@ def test_validation_repeated_tail_ignores_normal_short_repetition() -> None:
 
 
 def test_validation_detects_lost_images_numbers_and_substantial_content() -> None:
-    source = "![](image_p1_0.png)\n\n" + " ".join(
-        f"Detail {number}" for number in range(250)
-    )
+    source = "![](image_p1_0.png)\n\n" + " ".join(f"Detail {number}" for number in range(250))
     output = " ".join(f"Detail {number}" for number in range(100))
 
     result = validate_cleaned_text(output, input_size=len(source), source_text=source)
@@ -121,6 +115,15 @@ def test_validation_detects_added_numbers() -> None:
     )
 
     assert "added-verbatim-number" in result.warnings
+
+
+def test_validation_preserves_invisible_pdf_page_boundaries() -> None:
+    source = "First page.\n\n<!-- page-break -->\n\nSecond page."
+    result = validate_cleaned_text(
+        "First page. Second page.", input_size=len(source), source_text=source
+    )
+
+    assert "changed-page-breaks" in result.warnings
 
 
 def test_strip_repeated_context_handles_markdown_punctuation_changes() -> None:

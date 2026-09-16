@@ -128,9 +128,14 @@ required.
 | **Offline OCR data** | `LIBRARIAN_LITEPARSE_TESSDATA_PATH=/path/to/tessdata` | Point liteparse's OCR at local language data (the Mac app does this for you). |
 | **Higher-accuracy OCR** | `LIBRARIAN_LITEPARSE_OCR_SERVER_URL=...` | Offload OCR to a Surya/EasyOCR/PaddleOCR server. |
 | **Figure → data (vision)** | `LIBRARIAN_FIGURE_VISION_ENABLED=true` | A vision model describes each figure and **reconstructs chart data as a Markdown table**, injected next to the figure so the numbers become searchable text. |
-| **Extraction cache** | on by default | Re-ingesting unchanged files skips re-extraction (keyed by content hash + engine/OCR config). |
+| **Extraction cache** | on by default | Text-only files reuse the complete extraction; image-bearing PDFs resume from cached text and asset pages (keyed by content hash + engine/OCR config). |
 | **Parallel imports** | `LIBRARIAN_IMPORT_CONCURRENCY=N` (default 2) | Convert/ingest several files at once; order, resume, and per-file failure isolation preserved. |
 | **Extraction timeout** | `LIBRARIAN_EXTRACTION_TIMEOUT_SECONDS=N` | Bound a single document's extraction so one pathological file can't hang a batch. |
+
+PDF pages are classified and checked against their native text before cleaning. Verified pages
+keep their source text, while uncertain chunks use the configured model. Vector diagrams and
+embedded figures remain linked to image assets. The run's **Quality** view shows page repairs,
+cache reuse, and final document checks.
 
 ### OCR system tools (CLI/API only — the Mac app bundles these)
 
@@ -267,6 +272,7 @@ Primary endpoints:
 - `POST /imports`, `GET /imports/status`, `GET /imports/page-manifest`
 - `POST /runs`, `GET /runs`, `GET /runs/{id}`, `POST /runs/{id}/cancel`, `POST /runs/{id}/retry`
 - `GET /runs/{id}/events`, `GET /runs/{id}/events/stream`
+- `GET /runs/{id}/quality`
 - `GET /documents/{id}/content`, `GET /documents/{id}/export?format=json|txt|md`
 - `GET /export/okf`, `GET /documents/{id}/okf`
 - `POST /search`, `POST /search/results`, `POST /search/facets`

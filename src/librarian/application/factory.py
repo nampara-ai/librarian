@@ -80,14 +80,17 @@ async def build_ingest_container(
         liteparse_tessdata_path=resolved_settings.liteparse_tessdata_path,
         liteparse_dpi=resolved_settings.liteparse_dpi,
         liteparse_image_mode=resolved_settings.liteparse_image_mode,
+        liteparse_page_cache_root=(
+            resolved_settings.database_path.parent / "page-cache"
+            if resolved_settings.extraction_cache_enabled
+            else None
+        ),
         figure_vision_provider=(
             LazyLLMProvider(resolved_settings, metrics=metrics)
             if resolved_settings.figure_vision_enabled
             else None
         ),
-        figure_vision_model=(
-            resolved_settings.figure_vision_model or resolved_settings.llm_model
-        ),
+        figure_vision_model=(resolved_settings.figure_vision_model or resolved_settings.llm_model),
         figure_vision_max_figures=resolved_settings.figure_vision_max_figures,
         figure_vision_min_bytes=resolved_settings.figure_vision_min_bytes,
         figure_vision_max_bytes=resolved_settings.figure_vision_max_bytes,
@@ -194,9 +197,7 @@ def cache_wrap_extractor(
     extraction cache — re-importing unchanged files then skips re-extraction.
     """
     if settings.extraction_cache_enabled:
-        return CachingExtractor(
-            extractor, cache_store, config_signature=extractor.config_signature
-        )
+        return CachingExtractor(extractor, cache_store, config_signature=extractor.config_signature)
     return extractor
 
 

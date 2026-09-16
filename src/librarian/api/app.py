@@ -55,6 +55,7 @@ from librarian.application.factory import (
 from librarian.application.import_library import ImportLibrary, ImportProcessingMode
 from librarian.application.jobs import InProcessJobRunner
 from librarian.application.ports import SearchScope
+from librarian.application.quality_report import extraction_report_key, run_quality_key
 from librarian.config import Settings
 from librarian.domain.ids import DocumentId, RunId
 from librarian.domain.models import (
@@ -103,6 +104,8 @@ _READ_SCOPE_RESTRICTED_PATHS = frozenset(
 )
 _OPENAPI_ERROR_STATUS_CODES = ("400", "401", "403", "404", "413", "422", "429", "500", "503")
 _PRIVATE_INGEST_ERROR_DETAIL = "Document ingest failed"
+
+
 @dataclass(frozen=True, slots=True)
 class ApiCredential:
     """One configured API credential and its effective scope."""
@@ -265,6 +268,13 @@ class RunsResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class QualityReportResponse(BaseModel):
+    run_id: str
+    document_id: str
+    extraction: dict[str, Any] | None = None
+    processing: dict[str, Any] | None = None
 
 
 class ContentResponse(BaseModel):
@@ -754,9 +764,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(RequestBodyLimitMiddleware, max_bytes=settings.api_max_request_bytes)
 
     @app.exception_handler(StarletteHTTPException)
-    async def http_exception_handler(
-        request: Request, exc: StarletteHTTPException
-    ) -> JSONResponse:
+    async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         return JSONResponse(
             status_code=exc.status_code,
             content={
@@ -876,10 +884,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def rate_limit_requests(request: Request, call_next: Any):
-        if (
-            settings.api_rate_limit_per_minute <= 0
-            or request.url.path in {"/health", "/ready", "/version"}
-        ):
+        if settings.api_rate_limit_per_minute <= 0 or request.url.path in {
+            "/health",
+            "/ready",
+            "/version",
+        }:
             return await call_next(request)
         allowed, retry_after_seconds = rate_limiter.allow(
             _rate_limit_identity(request, settings),
@@ -1184,9 +1193,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         return _export_response(exported, export_format)
 
-    @app.get(
-        "/documents/{document_id}/assets", response_model=DocumentAssetsResponse
-    )
+    @app.get("/documents/{document_id}/assets", response_model=DocumentAssetsResponse)
     async def get_document_assets(document_id: str) -> DocumentAssetsResponse:
         container = await build_ingest_container(settings)
         document = await container.repository.get_document(DocumentId(document_id))
@@ -1283,6 +1290,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
         return _run_response(run)
+
+    @app.get("/runs/{run_id}/quality", response_model=QualityReportResponse)
+    async def get_run_quality(run_id: str) -> QualityReportResponse:
+        container = await build_ingest_container(settings)
+        run = await container.repository.get_run(RunId(run_id))
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+
+        async def read_report(key: str) -> dict[str, Any] | None:
+            try:
+                raw = await container.repository.get_text(key)
+            except KeyError:
+                return None
+            payload = json.loads(raw)
+            return cast("dict[str, Any]", payload) if isinstance(payload, dict) else None
+
+        return QualityReportResponse(
+            run_id=str(run.id),
+            document_id=str(run.document_id),
+            extraction=await read_report(extraction_report_key(run.document_id)),
+            processing=await read_report(run_quality_key(run.id)),
+        )
 
     @app.post("/runs/{run_id}/cancel", response_model=RunResponse)
     async def cancel_run(run_id: str) -> RunResponse:
@@ -1525,9 +1554,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=sanitize_error_message(exc)) from exc
         visible_pages = [
-            page
-            for page in pages
-            if not failures_only or str(page.get("status") or "") == "failed"
+            page for page in pages if not failures_only or str(page.get("status") or "") == "failed"
         ]
         page_window = visible_pages[offset : offset + limit]
         confidences = [
@@ -1813,9 +1840,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             llm_retry_base_delay_seconds=settings.llm_retry_base_delay_seconds,
             llm_retry_max_delay_seconds=settings.llm_retry_max_delay_seconds,
             llm_prompt_cost_per_1k_tokens_usd=settings.llm_prompt_cost_per_1k_tokens_usd,
-            llm_completion_cost_per_1k_tokens_usd=(
-                settings.llm_completion_cost_per_1k_tokens_usd
-            ),
+            llm_completion_cost_per_1k_tokens_usd=(settings.llm_completion_cost_per_1k_tokens_usd),
             llm_max_prompt_chars=settings.llm_max_prompt_chars,
             llm_max_response_chars=settings.llm_max_response_chars,
             cleaning_prompt_version=settings.cleaning_prompt_version,
@@ -1969,8 +1994,7 @@ def _public_ingest_error_detail(exc: Exception) -> str:
         return "Uploaded file exceeds configured size limit"
     if "No extractable content found in PDF" in detail:
         return (
-            "This PDF has no extractable text. If it is a scanned document, OCR could not "
-            "read it."
+            "This PDF has no extractable text. If it is a scanned document, OCR could not read it."
         )
     if "tesseract" in detail.lower() or "OCR" in detail:
         return "Scanned PDF OCR is unavailable or failed for this document"
@@ -2095,11 +2119,7 @@ def _manifest_warning_list(page: dict[str, object]) -> list[str]:
     warnings_obj = page.get("warnings")
     if not isinstance(warnings_obj, list):
         return []
-    return [
-        warning
-        for warning in cast(list[object], warnings_obj)
-        if isinstance(warning, str)
-    ]
+    return [warning for warning in cast(list[object], warnings_obj) if isinstance(warning, str)]
 
 
 def _manifest_int(value: object, *, default: int) -> int:
@@ -2506,8 +2526,7 @@ def _validate_import_budget_values(
         raise HTTPException(
             status_code=413,
             detail=(
-                f"Import contains {import_bytes} bytes, "
-                f"exceeding configured limit {max_bytes}"
+                f"Import contains {import_bytes} bytes, exceeding configured limit {max_bytes}"
             ),
         )
 
@@ -2565,9 +2584,7 @@ def _build_extractor(
         liteparse_dpi=settings.liteparse_dpi,
         liteparse_image_mode=settings.liteparse_image_mode,
         figure_vision_provider=(
-            LazyLLMProvider(settings, metrics=metrics)
-            if settings.figure_vision_enabled
-            else None
+            LazyLLMProvider(settings, metrics=metrics) if settings.figure_vision_enabled else None
         ),
         figure_vision_model=settings.figure_vision_model or settings.llm_model,
         figure_vision_max_figures=settings.figure_vision_max_figures,
@@ -2929,9 +2946,7 @@ def _job_runner(request: Request) -> InProcessJobRunner:
     return runner
 
 
-_TERMINAL_RUN_STATUSES = frozenset(
-    {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELED}
-)
+_TERMINAL_RUN_STATUSES = frozenset({RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELED})
 _EVENT_STREAM_PAGE = 500
 
 
@@ -3047,10 +3062,9 @@ def _export_filename(payload: ExportedDocument, format: str) -> str:
 
 def _content_disposition(filename: str) -> str:
     ascii_name = "".join(
-        char if 32 <= ord(char) < 127 and char not in {'"', "\\", ";"} else "_"
-        for char in filename
+        char if 32 <= ord(char) < 127 and char not in {'"', "\\", ";"} else "_" for char in filename
     ).strip()
     if not ascii_name:
         ascii_name = "document"
     encoded_name = quote(filename, safe="")
-    return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}'
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded_name}"

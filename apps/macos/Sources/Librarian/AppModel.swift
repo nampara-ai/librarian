@@ -751,6 +751,10 @@ final class AppModel: ObservableObject {
         (try? await client.runEvents(runId: runID)) ?? []
     }
 
+    func qualityReport(runID: String) async -> RunQualityReport? {
+        try? await client.runQuality(runId: runID)
+    }
+
     func clearFinished() {
         queue.removeAll { $0.stage.isDone }
     }

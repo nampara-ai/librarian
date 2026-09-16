@@ -16,6 +16,8 @@ to Applications, double-click, done.
   title was produced). Name collisions get " (2)" appended, never
   overwritten. Markdown output opens with a short synopsis, the
   classification, and topic tags above the cleaned text.
+  Completed rows also offer **Quality**, showing page-level extraction repairs,
+  cache reuse, and final document checks for the run.
 - **Destination strip** at the top: Save to (any folder; default
   `~/Documents/Librarian`) and Format (Markdown, Plain Text, JSON, or
   **Markdown (OKF bundle)**). In OKF-bundle mode the destination folder becomes
@@ -110,6 +112,7 @@ Your data lives in `~/Library/Application Support/Librarian`:
 | `uploads/` | original files you dropped in |
 | `converted/` | converted Markdown/text outputs |
 | `backend.log` | backend log (first stop for troubleshooting) |
+| `page-cache/` | resumable PDF text and image extraction, keyed by source and settings |
 | `.env` (optional) | backend configuration, see below |
 
 ### Connecting an LLM provider

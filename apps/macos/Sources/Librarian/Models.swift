@@ -50,6 +50,51 @@ struct RunEventsPage: Codable {
     let events: [RunEvent]
 }
 
+struct RunQualityReport: Codable {
+    let runId: String
+    let documentId: String
+    let extraction: ExtractionQuality?
+    let processing: ProcessingQuality?
+}
+
+struct ExtractionQuality: Codable {
+    let qualitySummary: ExtractionQualitySummary?
+    let figuresExtracted: Int?
+    let pagesReusedFromCache: Int?
+    let assetPagesReusedFromCache: Int?
+    let pages: [PageQuality]?
+}
+
+struct ExtractionQualitySummary: Codable {
+    let pages: Int
+    let pagesRequiringLayoutRepair: Int
+    let pagesWithWarnings: Int
+    let figureOcrLinesRemoved: Int
+}
+
+struct PageQuality: Codable, Identifiable {
+    let pageNumber: Int
+    let kind: String
+    let action: String
+    let nativeTextCoverage: Double
+    let imageReferences: Int
+    let figureOcrLinesRemoved: Int
+    let warnings: [String]
+
+    var id: Int { pageNumber }
+}
+
+struct ProcessingQuality: Codable {
+    let pages: Int?
+    let imageReferences: Int
+    let chunks: Int
+    let cachedCleanedChunks: Int
+    let verifiedSourceChunks: Int?
+    let sourcePreservedChunks: Int
+    let warnings: [String]
+    let fatal: [String]
+}
+
 struct ExportedDocument: Codable {
     let documentId: String
     let filename: String

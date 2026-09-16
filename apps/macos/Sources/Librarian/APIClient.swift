@@ -136,6 +136,11 @@ struct APIClient {
         return try Self.decoder.decode(RunEventsPage.self, from: data).events
     }
 
+    func runQuality(runId: String) async throws -> RunQualityReport {
+        let (data, _) = try await send("GET", "/runs/\(runId)/quality")
+        return try Self.decoder.decode(RunQualityReport.self, from: data)
+    }
+
     func export(documentId: String) async throws -> ExportedDocument {
         let (data, _) = try await send(
             "GET", "/documents/\(documentId)/export",

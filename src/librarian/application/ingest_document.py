@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import mimetypes
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from librarian.application.ports import (
     DocumentRepository,
     TextExtractor,
 )
+from librarian.application.quality_report import extraction_report_key
 from librarian.domain.ids import DocumentId
 from librarian.domain.models import (
     Document,
@@ -56,6 +58,7 @@ class IngestDocument:
                 raw_text = extracted.text
                 await self.content.put_text(raw_text_key(document_id), raw_text)
                 await self._save_assets(document_id, extracted)
+                await self._save_extraction_report(document_id)
             else:
                 # Databases created before asset persistence need one fresh
                 # extraction. The durable marker also distinguishes a valid
@@ -67,6 +70,7 @@ class IngestDocument:
                     raw_text = extracted.text
                     await self.content.put_text(raw_text_key(document_id), raw_text)
                     await self._save_assets(document_id, extracted)
+                    await self._save_extraction_report(document_id)
             return IngestedDocument(document=existing, raw_text=raw_text, duplicate=True)
 
         media_type = mimetypes.guess_type(source_path.name)[0] or "application/octet-stream"
@@ -93,7 +97,17 @@ class IngestDocument:
             await self.documents.save_document(document)
             await self.content.put_text(raw_text_key(document_id), raw_text)
         await self._save_assets(document_id, extracted)
+        await self._save_extraction_report(document_id)
         return IngestedDocument(document=document, raw_text=raw_text)
+
+    async def _save_extraction_report(self, document_id: DocumentId) -> None:
+        metadata = getattr(self.extractor, "last_metadata", None)
+        if not isinstance(metadata, dict):
+            return
+        await self.content.put_text(
+            extraction_report_key(document_id),
+            json.dumps(metadata, ensure_ascii=False, default=str),
+        )
 
     async def _save_assets(self, document_id: DocumentId, payload: ExtractionPayload) -> None:
         if self.assets is None:

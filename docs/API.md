@@ -101,6 +101,8 @@ validated before conversion starts and must not be symlinks or cross symlinked p
 - `GET /runs?limit=100&offset=0`: list runs. Responses include `total`, `limit`, and `offset`
   so operator clients can page through large run histories.
 - `GET /runs/{id}`: run status.
+- `GET /runs/{id}/quality`: extraction page types, per-page repair/fidelity results,
+  cache reuse, and final document checks. Reports can be absent for older runs.
 - `POST /runs/{id}/cancel`: mark a run canceled.
 - `POST /runs/{id}/retry`: replay a failed run as a new run.
 - `GET /runs/{id}/events?limit=500&offset=0`: run events. Responses include `events`,

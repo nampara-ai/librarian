@@ -12,6 +12,8 @@ from librarian.ingest.extractors import (
     CompositeExtractor,
     FallbackExtractor,
     LiteParseExtractor,
+    _chapter_openers,  # pyright: ignore[reportPrivateUsage]
+    _parse_liteparse_pages_incrementally,  # pyright: ignore[reportPrivateUsage]
     liteparse_available,
     normalize_spatial_markdown,
     reflow_multicolumn_markdown,
@@ -20,6 +22,54 @@ from librarian.ingest.extractors import (
 requires_liteparse = pytest.mark.skipif(
     not liteparse_available(), reason="liteparse extra not installed"
 )
+
+
+def test_chapter_opener_uses_layout_title_and_ignores_later_running_header() -> None:
+    def item(text: str, x: int, y: int) -> SimpleNamespace:
+        return SimpleNamespace(text=text, x=x, y=y, width=len(text) * 6, height=10)
+
+    pages = [
+        SimpleNamespace(
+            page_num=1,
+            width=600,
+            height=800,
+            text_items=[
+                item("C H A P T E R", 200, 28),
+                item("3", 310, 28),
+                item("Figure 3-0", 35, 92),
+                item("Listing 3-0", 35, 103),
+                item("Table 3-0", 35, 112),
+                item("Human", 200, 92),
+                item("Interface", 300, 92),
+                item("Design", 200, 123),
+            ],
+        ),
+        SimpleNamespace(
+            page_num=2,
+            width=600,
+            height=800,
+            text_items=[
+                item("C H A P T E R", 174, 29),
+                item("3", 235, 29),
+                item("Human Interface Design", 174, 56),
+                item("The first body paragraph is not a chapter title.", 174, 93),
+            ],
+        ),
+    ]
+
+    assert _chapter_openers(pages) == {1: "Chapter 3: Human Interface Design"}
+
+
+def test_spatial_normalization_keeps_blank_pdf_page_without_empty_code_fence() -> None:
+    page = SimpleNamespace(page_num=1, width=600, height=800, text="", text_items=[])
+    reports: list[dict[str, object]] = []
+
+    output, *_counts = normalize_spatial_markdown(
+        SimpleNamespace(text="```text\n\n```", pages=[page]), page_reports=reports
+    )
+
+    assert output == ""
+    assert reports[0]["action"] == "blank-page"
 
 
 def test_multicolumn_reflow_uses_spatial_column_order() -> None:
@@ -270,6 +320,114 @@ def test_spatial_normalization_preserves_unique_bottom_edge_content() -> None:
     output, _columns, _outlines, _tables = normalize_spatial_markdown(result)
 
     assert "Revenue 2024" in output
+
+
+def test_spatial_normalization_separates_screenshot_ocr_from_prose() -> None:
+    native = (
+        "Figure 4-42 shows a menu in a dialog box. The caption explains the picture.\n"
+        "Figure 4-42 Opening a pop-up menu\n"
+        "Users should choose a setting and then continue their work."
+    )
+    markdown = (
+        "Figure 4-42 shows a menu in a dialog box. The caption explains the picture.\n\n"
+        "**Figure 4-42** Opening a pop-up menu\n\n"
+        "![](image_p1_0.png)\n\n"
+        "Calendar\n\n2056\n\nveor:\n\n"
+        "Users should choose a setting and then continue their work."
+    )
+    page = SimpleNamespace(
+        page_num=1,
+        width=600,
+        height=500,
+        text=native,
+        text_items=[
+            SimpleNamespace(text=line, x=50, y=100 + index * 35, width=400, height=10)
+            for index, line in enumerate(native.splitlines())
+        ]
+        + [
+            SimpleNamespace(text=line, x=60, y=260 + index * 18, width=100, height=10)
+            for index, line in enumerate(("Calendar", "2056", "veor:"))
+        ],
+    )
+    reports: list[dict[str, object]] = []
+
+    output, _columns, _outlines, _tables = normalize_spatial_markdown(
+        SimpleNamespace(text=markdown, pages=[page]),
+        page_reports=reports,
+        figure_regions={1: [(50, 245, 180, 330)]},
+    )
+
+    assert "Calendar" not in output
+    assert "2056" not in output
+    assert "veor:" not in output
+    assert "**Figure 4-42** Opening a pop-up menu" in output
+    assert "Users should choose a setting" in output
+    assert output.count("![](image_p1_0.png)") == 1
+    assert reports[0]["figure_ocr_lines_removed"] == 3
+    assert reports[0]["warnings"] == []
+
+
+def test_spatial_normalization_falls_back_when_renderer_loses_native_text() -> None:
+    native = " ".join(
+        (
+            "The quarterly revenue increased by 12 percent across three regions.",
+            "The northern branch added five new accounts and lowered costs.",
+            "The western branch reported stable demand and improved margins.",
+        )
+    )
+    page = SimpleNamespace(
+        page_num=1,
+        width=600,
+        height=500,
+        text=native,
+        text_items=[SimpleNamespace(text=native, x=50, y=150, width=450, height=10)],
+    )
+    reports: list[dict[str, object]] = []
+
+    output, _columns, _outlines, _tables = normalize_spatial_markdown(
+        SimpleNamespace(text="Broken renderer output.", pages=[page]), page_reports=reports
+    )
+
+    assert output == native
+    assert reports[0]["action"] == "native-text-fallback"
+    assert reports[0]["native_text_coverage"] == 1.0
+
+
+def test_liteparse_page_cache_resumes_after_interrupted_batch(tmp_path: Path) -> None:
+    image_module = pytest.importorskip("PIL.Image")
+    image = image_module.new("RGB", (20, 20), "white")
+    source = tmp_path / "two-pages.pdf"
+    image.save(source, save_all=True, append_images=[image.copy()])
+    cache = tmp_path / "page-cache"
+    requested: list[str] = []
+
+    def parse_pages(selected: str) -> SimpleNamespace:
+        requested.append(selected)
+        if selected == "2" and requested.count("2") == 1:
+            raise RuntimeError("interrupted")
+        number = int(selected)
+        page = SimpleNamespace(
+            page_num=number,
+            width=600,
+            height=500,
+            text=f"Page {number}",
+            text_items=[SimpleNamespace(text=f"Page {number}", x=50, y=100, width=70, height=10)],
+        )
+        return SimpleNamespace(pages=[page], text=f"Page {number}")
+
+    with pytest.raises(RuntimeError, match="interrupted"):
+        _parse_liteparse_pages_incrementally(
+            source, cache_directory=cache, parse_pages=parse_pages, max_pages=2, batch_size=1
+        )
+
+    result, hits = _parse_liteparse_pages_incrementally(
+        source, cache_directory=cache, parse_pages=parse_pages, max_pages=2, batch_size=1
+    )
+
+    assert requested == ["1", "2", "2"]
+    assert hits == 1
+    assert [page.page_num for page in result.pages] == [1, 2]
+    assert "Page 1" in result.text and "Page 2" in result.text
 
 
 def _table_pdf_bytes() -> bytes:

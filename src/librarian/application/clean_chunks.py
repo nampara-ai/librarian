@@ -30,9 +30,7 @@ async def _run_workers(
     ``except ValueError`` / ``except ProcessingCanceled`` handlers still match
     (unlike ``asyncio.TaskGroup``, which wraps failures in an ExceptionGroup).
     """
-    tasks: list[asyncio.Task[None]] = [
-        asyncio.create_task(worker()) for _ in range(worker_count)
-    ]
+    tasks: list[asyncio.Task[None]] = [asyncio.create_task(worker()) for _ in range(worker_count)]
     try:
         await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
     except asyncio.CancelledError:
@@ -73,6 +71,7 @@ _FIDELITY_WARNINGS = frozenset(
         "collapsed-paragraphs",
         "context-marker-leak",
         "changed-markdown-images",
+        "changed-page-breaks",
         "empty-after-artifact-filter",
         "empty-output",
         "malformed-markdown-table",

@@ -38,6 +38,7 @@ CITATION_MARKER_REGEX = re.compile(
 LOCAL_IMAGE_REFERENCE_REGEX = re.compile(
     r"!\[[^\]]*\]\((?![a-z][a-z0-9+.-]*:|/|#)([^)\s]+)\)", re.IGNORECASE
 )
+PAGE_BREAK_REGEX = re.compile(r"<!--\s*page-break\s*-->", re.IGNORECASE)
 VERBATIM_NUMBER_REGEX = re.compile(r"(?<![\w])\d+(?:[.,]\d+)*(?![\w])")
 REPEATED_TAIL_MIN_PATTERN_CHARS = 12
 REPEATED_TAIL_MAX_PATTERN_CHARS = 240
@@ -120,6 +121,8 @@ def _markdown_quality_warnings(text: str, *, source_text: str | None) -> list[st
     output_images = Counter(LOCAL_IMAGE_REFERENCE_REGEX.findall(text))
     if source_images != output_images:
         warnings.append("changed-markdown-images")
+    if len(PAGE_BREAK_REGEX.findall(source_text)) != len(PAGE_BREAK_REGEX.findall(text)):
+        warnings.append("changed-page-breaks")
     source_numbers = Counter(VERBATIM_NUMBER_REGEX.findall(source_text))
     output_numbers = Counter(VERBATIM_NUMBER_REGEX.findall(text))
     if source_numbers - output_numbers:

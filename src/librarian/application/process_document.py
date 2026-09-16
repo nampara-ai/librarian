@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import bisect
+import json
 import logging
 import time
 import uuid
 from contextlib import suppress
 from dataclasses import dataclass, field
 from types import TracebackType
-from typing import Any
+from typing import Any, cast
 
 from librarian.application.assemble_document import assemble_cleaned_document
 from librarian.application.classify_document import ClassifyDocument
@@ -24,8 +26,14 @@ from librarian.application.ports import (
     OutputRepository,
     RunRepository,
 )
+from librarian.application.quality_report import (
+    audit_final_document,
+    extraction_report_key,
+    run_quality_key,
+)
 from librarian.domain.ids import DocumentId, RunId
 from librarian.domain.models import (
+    Chunk,
     CleanedOutput,
     DocumentStatus,
     ProcessingRun,
@@ -34,8 +42,59 @@ from librarian.domain.models import (
 )
 from librarian.observability import NoOpMetricsRecorder, sanitize_error_message, start_span
 from librarian.pipeline.chunking import ChunkingPolicy, chunk_text
+from librarian.pipeline.validation import PAGE_BREAK_REGEX
 
 logger = logging.getLogger("librarian.application.process_document")
+
+
+def select_pdf_chunks_for_cleaning(
+    chunks: list[Chunk], source: str, report: object
+) -> tuple[list[Chunk], list[CleanedChunk]]:
+    """Preserve verified PDF text and send uncertain pages through the model."""
+    if not isinstance(report, dict):
+        return chunks, []
+    typed_report = cast("dict[str, object]", report)
+    if typed_report.get("engine") != "liteparse":
+        return chunks, []
+    raw_pages = typed_report.get("pages")
+    boundaries = [match.start() for match in PAGE_BREAK_REGEX.finditer(source)]
+    if not isinstance(raw_pages, list):
+        return chunks, []
+    pages = cast("list[object]", raw_pages)
+    if len(pages) != len(boundaries) + 1:
+        return chunks, []
+    needing_cleaning: list[Chunk] = []
+    preserved: list[CleanedChunk] = []
+    for chunk in chunks:
+        first = bisect.bisect_right(boundaries, chunk.start_char)
+        last = bisect.bisect_left(boundaries, chunk.end_char)
+        touched = pages[first : last + 1]
+        safe = bool(touched) and all(_verified_pdf_page(page) for page in touched)
+        if safe:
+            preserved.append(
+                CleanedChunk(
+                    chunk=chunk,
+                    text=chunk.text.strip(),
+                    warnings=("verified-source-preserved",),
+                )
+            )
+        else:
+            needing_cleaning.append(chunk)
+    return needing_cleaning, preserved
+
+
+def _verified_pdf_page(page: object) -> bool:
+    if not isinstance(page, dict):
+        return False
+    page = cast("dict[str, object]", page)
+    coverage = page.get("native_text_coverage")
+    return (
+        isinstance(coverage, (int, float))
+        and coverage >= 0.9
+        and page.get("action") not in {"native-text-fallback", "vector-diagram-snapshot"}
+        and page.get("kind") not in {"contents", "figure-list", "index"}
+        and page.get("warnings") == []
+    )
 
 
 class ProcessingCanceled(RuntimeError):
@@ -143,15 +202,24 @@ class ProcessDocument:
                 )
                 await self.runs.save_run(run)
                 await self._raise_if_canceled(run_id)
+                extraction_report: object = None
+                if document.source.filename.lower().endswith(".pdf"):
+                    try:
+                        extraction_report = json.loads(
+                            await self.content.get_text(extraction_report_key(document_id))
+                        )
+                    except (KeyError, ValueError):
+                        pass
+                model_chunks, verified_chunks = select_pdf_chunks_for_cleaning(
+                    chunked, normalized_text, extraction_report
+                )
                 loaded_cached_chunks = await self.outputs.get_cached_cleaned_chunks(
-                    chunked,
+                    model_chunks,
                     prompt_version=self.cleaner.prompt_version,
                     model_provider=self.cleaner.provider.name,
                     model_name=self.cleaner.model,
                 )
-                cached_chunks = [
-                    self.cleaner.revalidate(chunk) for chunk in loaded_cached_chunks
-                ]
+                cached_chunks = [self.cleaner.revalidate(chunk) for chunk in loaded_cached_chunks]
                 if cached_chunks != loaded_cached_chunks:
                     # Upgrade stale cache entries to the current validation
                     # policy once, then reuse the safe result on later runs.
@@ -162,10 +230,10 @@ class ProcessDocument:
                         model_name=self.cleaner.model,
                     )
                 cached_ids = {chunk.chunk.id for chunk in cached_chunks}
-                missing_chunks = [chunk for chunk in chunked if chunk.id not in cached_ids]
+                missing_chunks = [chunk for chunk in model_chunks if chunk.id not in cached_ids]
                 # Persist live per-chunk progress so clients can render a
                 # real bar during long cleans; cache hits count immediately.
-                progress = {"completed": len(cached_chunks)}
+                progress = {"completed": len(cached_chunks) + len(verified_chunks)}
                 await self.runs.update_run_progress(
                     run_id,
                     completed_chunks=progress["completed"],
@@ -198,7 +266,7 @@ class ProcessDocument:
                 )
                 await self._raise_if_canceled(run_id)
                 cleaned_chunks = sorted(
-                    [*cached_chunks, *cleaned_missing],
+                    [*verified_chunks, *cached_chunks, *cleaned_missing],
                     key=lambda item: item.chunk.ordinal,
                 )
             async with self._timed_stage(RunStage.VALIDATE, run_id, document_id):
@@ -225,7 +293,8 @@ class ProcessDocument:
                 run_id,
                 RunStage.CLEAN,
                 f"cleaned {completed_chunks}/{len(chunked)} chunk(s) "
-                f"({len(cached_chunks)} cache hit(s))",
+                f"({len(cached_chunks)} cache hit(s), "
+                f"{len(verified_chunks)} verified source chunk(s))",
             )
             if fidelity_fallbacks:
                 await self.events.emit(
@@ -270,6 +339,41 @@ class ProcessDocument:
                     document_id,
                     assembled,
                     source_filename=document.source.filename,
+                )
+                final_quality = audit_final_document(
+                    normalized_text, assembled, title=classification.title
+                )
+                await self.content.put_text(
+                    run_quality_key(run_id),
+                    json.dumps(
+                        {
+                            **final_quality,
+                            "chunks": len(chunked),
+                            "cleaned_chunks": completed_chunks,
+                            "cached_cleaned_chunks": len(cached_chunks),
+                            "verified_source_chunks": len(verified_chunks),
+                            "source_preserved_chunks": fidelity_fallbacks,
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+                fatal = final_quality["fatal"]
+                if isinstance(fatal, list) and fatal:
+                    raise ValueError(
+                        "final document fidelity check failed: "
+                        + ", ".join(cast("list[str]", fatal))
+                    )
+                warnings = final_quality["warnings"]
+                warning_count = (
+                    len(cast("list[str]", warnings)) if isinstance(warnings, list) else 0
+                )
+                await self.events.emit(
+                    run_id,
+                    RunStage.VALIDATE,
+                    "quality report: "
+                    f"{final_quality['pages'] or 1} page(s), "
+                    f"{final_quality['image_references']} image reference(s), "
+                    f"{warning_count} document warning(s)",
                 )
             await self._raise_if_canceled(run_id)
             async with self._timed_stage(RunStage.INDEX, run_id, document_id):

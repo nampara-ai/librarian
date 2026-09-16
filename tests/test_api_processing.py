@@ -45,6 +45,12 @@ def test_api_upload_run_and_get_content(tmp_path: Path) -> None:
         assert run_status.status_code == 200
         assert run_status.json()["status"] == "succeeded"
 
+        quality = client.get(f"/runs/{run_id}/quality")
+        assert quality.status_code == 200
+        assert quality.json()["run_id"] == run_id
+        assert quality.json()["processing"]["chunks"] == 1
+        assert quality.json()["processing"]["fatal"] == []
+
         content = client.get(f"/documents/{document_id}/content")
         assert content.status_code == 200
         assert "Horse transcript" in content.json()["text"]
@@ -1153,8 +1159,7 @@ def test_api_single_upload_ingest_errors_do_not_expose_private_exception_text(
     [
         (
             ValueError("No extractable content found in PDF: /secret/path/scan.pdf"),
-            "This PDF has no extractable text. If it is a scanned document, OCR could not "
-            "read it.",
+            "This PDF has no extractable text. If it is a scanned document, OCR could not read it.",
         ),
         (
             RuntimeError("Scanned PDF OCR requires the 'tesseract' executable on PATH"),

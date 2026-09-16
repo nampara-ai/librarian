@@ -131,6 +131,9 @@ struct QueueRowView: View {
     @State private var showFailureDetails = false
     @State private var failureEvents: [RunEvent] = []
     @State private var isLoadingFailureEvents = false
+    @State private var showQuality = false
+    @State private var qualityReport: RunQualityReport?
+    @State private var isLoadingQuality = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -220,13 +223,17 @@ struct QueueRowView: View {
     private var trailingAction: some View {
         switch item.stage {
         case .done(let outputURL):
-            Button(Copy.showInFinder) {
-                model.revealInFinder(outputURL)
+            HStack(spacing: 8) {
+                qualityAction
+                Button(Copy.showInFinder) {
+                    model.revealInFinder(outputURL)
+                }
+                .buttonStyle(.link)
             }
-            .buttonStyle(.link)
             .transition(reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
         case .failed(_, let retryable):
             HStack(spacing: 8) {
+                qualityAction
                 if item.runID != nil {
                     Button(Copy.failureDetails) {
                         // Open immediately with a loading state; a slow or
@@ -267,6 +274,28 @@ struct QueueRowView: View {
             }
             .buttonStyle(.borderless)
             .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var qualityAction: some View {
+        if let runID = item.runID {
+            Button(Copy.qualityReport) {
+                showQuality = true
+                isLoadingQuality = true
+                Task { @MainActor in
+                    qualityReport = await model.qualityReport(runID: runID)
+                    isLoadingQuality = false
+                }
+            }
+            .buttonStyle(.link)
+            .popover(isPresented: $showQuality) {
+                QualityDetailsView(
+                    filename: item.filename,
+                    report: qualityReport,
+                    isLoading: isLoadingQuality
+                )
+            }
         }
     }
 
@@ -312,6 +341,70 @@ struct QueueRowView: View {
         default:
             return "doc.text"
         }
+    }
+}
+
+// MARK: - Quality details
+
+struct QualityDetailsView: View {
+    let filename: String
+    let report: RunQualityReport?
+    let isLoading: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(filename)
+                .font(.headline)
+                .lineLimit(1)
+            Text("Quality report")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Divider()
+            if isLoading {
+                ProgressView("Loading…").controlSize(.small)
+            } else if let report {
+                if let summary = report.extraction?.qualitySummary {
+                    Text("\(summary.pages) pages · \(summary.pagesRequiringLayoutRepair) layout repairs · \(summary.pagesWithWarnings) pages flagged")
+                    Text("\(summary.figureOcrLinesRemoved) figure OCR fragments separated · \(report.extraction?.figuresExtracted ?? 0) figures preserved")
+                    if let reused = report.extraction?.pagesReusedFromCache, reused > 0 {
+                        Text("\(reused) pages reused from cache")
+                    }
+                }
+                if let processing = report.processing {
+                    Text("\(processing.chunks) chunks · \(processing.cachedCleanedChunks) reused · \(processing.sourcePreservedChunks) kept verbatim for fidelity")
+                    if let verified = processing.verifiedSourceChunks, verified > 0 {
+                        Text("\(verified) verified source chunks skipped model cleaning")
+                    }
+                    Text("\(processing.imageReferences) image references in final output")
+                    ForEach(processing.warnings, id: \.self) { warning in
+                        Label(warning.replacingOccurrences(of: "-", with: " "), systemImage: "exclamationmark.triangle")
+                    }
+                }
+                let flagged = (report.extraction?.pages ?? []).filter { !$0.warnings.isEmpty }
+                if !flagged.isEmpty {
+                    Divider()
+                    Text("Pages to review")
+                        .font(.subheadline.weight(.semibold))
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(Array(flagged.prefix(20))) { page in
+                                Text("Page \(page.pageNumber): \(page.warnings.joined(separator: ", "))")
+                                    .font(.caption)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 180)
+                }
+            } else {
+                Text("No quality report is available for this run.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .font(.caption)
+        .padding(14)
+        .frame(width: 460, alignment: .leading)
     }
 }
 

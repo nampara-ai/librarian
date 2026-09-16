@@ -7,10 +7,12 @@ import base64
 import hashlib
 import importlib
 import importlib.util
+import io
 import json
 import logging
 import math
 import multiprocessing
+import os
 import queue
 import re
 import shutil
@@ -23,6 +25,7 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Literal, Protocol, cast
 
 from librarian.application.transcripts import (
@@ -165,6 +168,8 @@ _REFERENCE_ENTRY_RE = re.compile(
     r"(?:figure|fig\.?|table|chart|diagram|plate|exhibit)\s+\S+",
     re.IGNORECASE,
 )
+_PAGE_BREAK = "<!-- page-break -->"
+_QUALITY_WORD_RE = re.compile(r"\b[\w]+\b", re.UNICODE)
 
 
 def _group_text_items_into_lines(items: Sequence[Any]) -> list[list[Any]]:
@@ -347,6 +352,142 @@ def _render_plain_page_with_images(page: Any, markdown: str) -> str:
     )
     sections = [text, *image_tokens]
     return "\n\n".join(section for section in sections if section)
+
+
+def _item_inside_figure(item: Any, regions: Sequence[tuple[float, float, float, float]]) -> bool:
+    center_x = float(item.x) + float(item.width) / 2
+    center_y = float(item.y) + float(item.height) / 2
+    return any(
+        x0 <= center_x <= x1 and top <= center_y <= bottom for x0, top, x1, bottom in regions
+    )
+
+
+def _separate_figure_ocr(
+    page: Any,
+    markdown: str,
+    regions: Sequence[tuple[float, float, float, float]],
+) -> tuple[str, int]:
+    """Drop unanchored OCR fragments adjacent to a preserved figure asset.
+
+    LiteParse's Markdown renderer sometimes OCRs labels inside a screenshot
+    even when native PDF text has no such labels. Those fragments are usually
+    too noisy to read as prose. The referenced image remains available, while
+    native captions and following prose are retained. Scanned pages with no
+    substantial native text are excluded from this filter.
+    """
+    if not _has_local_image_references(markdown):
+        return markdown, 0
+    native_items = [item for item in page.text_items if not _item_inside_figure(item, regions)]
+    figure_items = [item for item in page.text_items if _item_inside_figure(item, regions)]
+    native_text = " ".join(str(item.text) for item in native_items)
+    if len(_QUALITY_WORD_RE.findall(native_text)) < 20 or not figure_items:
+        return markdown, 0
+    native_lines = {
+        key for line in _spatial_lines(native_items) if (key := _page_furniture_key(line.text))
+    }
+    native_joined = _page_furniture_key(native_text)
+    figure_lines = {
+        key for line in _spatial_lines(figure_items) if (key := _page_furniture_key(line.text))
+    }
+    figure_tokens = Counter(
+        word.casefold()
+        for item in figure_items
+        for word in _QUALITY_WORD_RE.findall(str(item.text))
+    )
+    result: list[str] = []
+    in_figure = False
+    removed = 0
+    for line in markdown.splitlines():
+        stripped = line.strip()
+        if _LOCAL_MARKDOWN_IMAGE_RE.fullmatch(stripped):
+            in_figure = True
+            result.append(line)
+            continue
+        if not in_figure or not stripped:
+            result.append(line)
+            continue
+        key = _page_furniture_key(stripped)
+        words = _QUALITY_WORD_RE.findall(key)
+        if (
+            key in native_lines
+            or (len(words) >= 3 and key in native_joined)
+            or len(words) > 10
+            or stripped.startswith("|")
+            or stripped.startswith("```")
+        ):
+            in_figure = False
+            result.append(line)
+            continue
+        matches_figure = key in figure_lines or (
+            bool(words)
+            and sum(min(count, figure_tokens[word]) for word, count in Counter(words).items())
+            / len(words)
+            >= 0.6
+        )
+        if matches_figure or (
+            len(stripped) <= 24
+            and not re.search(r"[A-Za-z]", stripped)
+            and re.fullmatch(r"[\W\d_]+", stripped)
+        ):
+            removed += 1
+        else:
+            result.append(line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(result)).strip(), removed
+
+
+def _page_kind(page: Any, markdown: str, *, page_index: int) -> str:
+    """Classify the page before deciding which normalization is appropriate."""
+    if _looks_like_index_page(page):
+        return "index"
+    if _looks_like_reference_list(page):
+        return "figure-list"
+    if _looks_like_outline_page(page):
+        return "contents"
+    native_words = len(_QUALITY_WORD_RE.findall(str(getattr(page, "text", ""))))
+    if native_words < 20 and len(_QUALITY_WORD_RE.findall(markdown)) >= 20:
+        return "scanned"
+    if _has_local_image_references(markdown) and native_words < 140:
+        return "figure-heavy"
+    if re.search(r"(?m)^\s*\|.*\|\s*$", markdown):
+        return "table"
+    if page_index < 3 and re.search(r"(?m)^#\s+\S", markdown):
+        return "front-matter"
+    return "prose"
+
+
+def _page_fidelity(
+    page: Any,
+    markdown: str,
+    source_markdown: str,
+    regions: Sequence[tuple[float, float, float, float]],
+) -> tuple[float, tuple[str, ...]]:
+    """Check native body words, numeric facts, and image references on one page."""
+    height = float(page.height)
+    native = " ".join(
+        str(item.text)
+        for item in page.text_items
+        if height * 0.085 <= float(item.y) <= height * 0.92
+        and str(item.text).strip()
+        and not _item_inside_figure(item, regions)
+    )
+    native_tokens = Counter(word.casefold() for word in _QUALITY_WORD_RE.findall(native))
+    rendered_tokens = Counter(word.casefold() for word in _QUALITY_WORD_RE.findall(markdown))
+    matched = sum((native_tokens & rendered_tokens).values())
+    coverage = matched / sum(native_tokens.values()) if native_tokens else 1.0
+    warnings: list[str] = []
+    if len(native_tokens) >= 25 and coverage < 0.88:
+        warnings.append("native-text-loss")
+    native_numbers = Counter(re.findall(r"(?<!\w)\d+(?!\w)", native))
+    rendered_numbers = Counter(re.findall(r"(?<!\w)\d+(?!\w)", markdown))
+    if sum(native_numbers.values()) >= 5 and sum((native_numbers - rendered_numbers).values()) > 1:
+        warnings.append("missing-numbers")
+    source_images = Counter(_LOCAL_MARKDOWN_IMAGE_RE.findall(source_markdown))
+    output_images = Counter(_LOCAL_MARKDOWN_IMAGE_RE.findall(markdown))
+    if source_images != output_images:
+        warnings.append("changed-images")
+    if _looks_like_collapsed_table_block(markdown):
+        warnings.append("collapsed-table")
+    return coverage, tuple(warnings)
 
 
 def _page_furniture_key(text: str) -> str:
@@ -595,7 +736,12 @@ def _reflow_two_column_page(page: Any, layout: _ColumnLayout) -> str:
     return "\n\n".join(section for section in sections if section.strip())
 
 
-def normalize_spatial_markdown(result: Any) -> tuple[str, int, int, int]:
+def normalize_spatial_markdown(
+    result: Any,
+    *,
+    page_reports: list[dict[str, object]] | None = None,
+    figure_regions: Mapping[int, Sequence[tuple[float, float, float, float]]] | None = None,
+) -> tuple[str, int, int, int]:
     """Repair outline and multicolumn pages from their positioned PDF text.
 
     LiteParse's document renderer can interleave columns row by row. Its page
@@ -613,30 +759,46 @@ def normalize_spatial_markdown(result: Any) -> tuple[str, int, int, int]:
     pages = list(raw_pages)
     if len(blocks) != len(pages):
         return str(result.text), 0, 0, 0
+    original_blocks = list(blocks)
+    kinds = [
+        _page_kind(page, block, page_index=index)
+        for index, (block, page) in enumerate(zip(blocks, pages, strict=True))
+    ]
+    actions = ["accepted"] * len(blocks)
     furniture_quotas = _page_furniture_quotas(pages)
     multicolumn_reflowed = 0
     outlines_normalized = 0
     collapsed_tables_normalized = 0
     for index, (block, page) in enumerate(zip(blocks, pages, strict=True)):
+        if not str(getattr(page, "text", "")).strip() and re.fullmatch(
+            r"\s*```(?:text)?\s*```\s*", block
+        ):
+            blocks[index] = ""
+            actions[index] = "blank-page"
+            continue
         outline_page = _looks_like_outline_page(page)
         if outline_page and _looks_like_reference_list(page):
             blocks[index] = _render_outline_page(page)
+            actions[index] = "outline-rebuilt"
             outlines_normalized += 1
             continue
         corrupted_outline = outline_page and _looks_like_corrupted_outline_block(block)
         index_page = outline_page and _looks_like_index_page(page)
         if corrupted_outline and not index_page:
             blocks[index] = _render_outline_page(page)
+            actions[index] = "outline-rebuilt"
             outlines_normalized += 1
             continue
         if _has_local_image_references(block):
             if _looks_like_collapsed_table_block(block):
                 blocks[index] = _render_plain_page_with_images(page, block)
+                actions[index] = "collapsed-table-replaced"
                 collapsed_tables_normalized += 1
             continue
         layout = _detect_two_column_layout(page)
         if layout is not None:
             blocks[index] = _reflow_two_column_page(page, layout)
+            actions[index] = "columns-reflowed"
             multicolumn_reflowed += 1
             continue
         if corrupted_outline:
@@ -648,20 +810,54 @@ def normalize_spatial_markdown(result: Any) -> tuple[str, int, int, int]:
                 layout = _detect_two_column_layout(page, min_column_items=2, min_paired_lines=2)
             if layout is not None:
                 blocks[index] = _reflow_two_column_page(page, layout)
+                actions[index] = "columns-reflowed"
                 multicolumn_reflowed += 1
                 continue
         if _looks_like_collapsed_table_block(block):
             blocks[index] = _render_plain_page_with_images(page, block)
+            actions[index] = "collapsed-table-replaced"
             collapsed_tables_normalized += 1
             continue
         if corrupted_outline:
             blocks[index] = _render_outline_page(page)
+            actions[index] = "outline-rebuilt"
             outlines_normalized += 1
     for index, (top_quota, bottom_quota) in enumerate(furniture_quotas):
         blocks[index] = _strip_page_furniture(blocks[index], top_quota, bottom_quota)
     blocks = _strip_recurring_rendered_footers(blocks)
+    for index, (page, source_block) in enumerate(zip(pages, original_blocks, strict=True)):
+        page_number = int(getattr(page, "page_num", index + 1))
+        regions = figure_regions.get(page_number, ()) if figure_regions is not None else ()
+        blocks[index], figure_ocr_removed = _separate_figure_ocr(page, blocks[index], regions)
+        coverage, warnings = _page_fidelity(page, blocks[index], source_block, regions)
+        if "native-text-loss" in warnings or "changed-images" in warnings:
+            alternate = _render_plain_page_with_images(page, source_block)
+            alternate = _strip_page_furniture(alternate, *furniture_quotas[index])
+            alternate, _unused_removed = _separate_figure_ocr(page, alternate, regions)
+            alternate_coverage, alternate_warnings = _page_fidelity(
+                page, alternate, source_block, regions
+            )
+            if (
+                alternate_coverage > coverage + 0.05
+                or ("changed-images" in warnings and "changed-images" not in alternate_warnings)
+            ) and "changed-images" not in alternate_warnings:
+                blocks[index] = alternate
+                coverage, warnings = alternate_coverage, alternate_warnings
+                actions[index] = "native-text-fallback"
+        if page_reports is not None:
+            page_reports.append(
+                {
+                    "page_number": page_number,
+                    "kind": kinds[index],
+                    "action": actions[index],
+                    "native_text_coverage": round(coverage, 3),
+                    "image_references": len(_LOCAL_MARKDOWN_IMAGE_RE.findall(blocks[index])),
+                    "figure_ocr_lines_removed": figure_ocr_removed,
+                    "warnings": list(warnings),
+                }
+            )
     return (
-        "\n\n-----\n\n".join(blocks),
+        f"\n\n{_PAGE_BREAK}\n\n".join(blocks),
         multicolumn_reflowed,
         outlines_normalized,
         collapsed_tables_normalized,
@@ -1425,6 +1621,7 @@ async def enrich_markdown_figures(
     max_concurrency: int,
     max_response_chars: int,
     temperature: float = 0.0,
+    page_priority: Mapping[int, int] | None = None,
 ) -> tuple[str, int]:
     """Inject vision-LLM descriptions next to figure placeholders in the markdown.
 
@@ -1447,8 +1644,9 @@ async def enrich_markdown_figures(
         if min_bytes <= len(figure.data) <= max_bytes:
             eligible.append((figure, placeholder))
             seen_placeholders.add(placeholder)
-        if len(eligible) >= max_figures:
-            break
+    if page_priority:
+        eligible.sort(key=lambda entry: -page_priority.get(entry[0].page, 0))
+    eligible = eligible[:max_figures]
     if not eligible:
         return markdown, 0
 
@@ -1494,6 +1692,381 @@ async def enrich_markdown_figures(
     return enriched, count
 
 
+def _atomic_page_cache_write(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _load_cached_liteparse_page(cache_directory: Path, page_number: int) -> tuple[Any, str] | None:
+    path = cache_directory / f"text-{page_number:05d}.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("page_number") != page_number or payload.get("version") != 1:
+            return None
+        items = [SimpleNamespace(**item) for item in payload["text_items"]]
+        page = SimpleNamespace(
+            page_num=page_number,
+            width=float(payload["width"]),
+            height=float(payload["height"]),
+            text=str(payload["text"]),
+            text_items=items,
+        )
+        return page, str(payload["markdown"])
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def _save_cached_liteparse_page(cache_directory: Path, page: Any, markdown: str) -> None:
+    page_number = int(page.page_num)
+    _atomic_page_cache_write(
+        cache_directory / f"text-{page_number:05d}.json",
+        {
+            "version": 1,
+            "page_number": page_number,
+            "width": float(page.width),
+            "height": float(page.height),
+            "text": str(page.text),
+            "markdown": markdown,
+            "text_items": [
+                {
+                    "text": str(item.text),
+                    "x": float(item.x),
+                    "y": float(item.y),
+                    "width": float(item.width),
+                    "height": float(item.height),
+                }
+                for item in page.text_items
+            ],
+        },
+    )
+
+
+def _load_cached_liteparse_assets(
+    cache_directory: Path, page_number: int
+) -> list[FigureImage] | None:
+    path = cache_directory / f"assets-{page_number:05d}.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("page_number") != page_number or payload.get("version") != 1:
+            return None
+        return [
+            FigureImage(
+                id=str(item["id"]),
+                page=page_number,
+                media_type=str(item["media_type"]),
+                data=base64.b64decode(item["data"], validate=True),
+            )
+            for item in payload["figures"]
+        ]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def _save_cached_liteparse_assets(
+    cache_directory: Path, page_number: int, figures: Sequence[FigureImage]
+) -> None:
+    _atomic_page_cache_write(
+        cache_directory / f"assets-{page_number:05d}.json",
+        {
+            "version": 1,
+            "page_number": page_number,
+            "figures": [
+                {
+                    "id": figure.id,
+                    "media_type": figure.media_type,
+                    "data": base64.b64encode(figure.data).decode("ascii"),
+                }
+                for figure in figures
+            ],
+        },
+    )
+
+
+def _parse_liteparse_pages_incrementally(
+    source: Path,
+    *,
+    cache_directory: Path,
+    parse_pages: Callable[[str], Any],
+    max_pages: int | None,
+    batch_size: int = 20,
+) -> tuple[Any, int]:
+    """Parse and checkpoint PDF pages independently for resumable extraction."""
+    pdfplumber = importlib.import_module("pdfplumber")
+    with pdfplumber.open(source) as pdf:
+        page_count = len(pdf.pages)
+    if max_pages is not None and page_count > max_pages:
+        raise ValueError(f"PDF has {page_count} pages, exceeding configured limit {max_pages}")
+    if page_count == 0:
+        raise ValueError(f"PDF contains no pages: {source.name}")
+    cached_pages: dict[int, tuple[Any, str]] = {}
+    cache_hits = 0
+    for start in range(1, page_count + 1, batch_size):
+        numbers = list(range(start, min(start + batch_size, page_count + 1)))
+        missing: list[int] = []
+        for number in numbers:
+            cached = _load_cached_liteparse_page(cache_directory, number)
+            if cached is None:
+                missing.append(number)
+            else:
+                cached_pages[number] = cached
+                cache_hits += 1
+        if not missing:
+            continue
+        result = parse_pages(",".join(map(str, missing)))
+        blocks = re.split(r"\n\s*-{5,}\s*\n", str(result.text))
+        parsed_pages = list(result.pages)
+        actual_numbers = [int(page.page_num) for page in parsed_pages]
+        if len(blocks) != len(missing) or actual_numbers != missing:
+            raise ValueError(
+                "LiteParse returned pages that do not match the requested batch "
+                f"({actual_numbers} != {missing})"
+            )
+        for page, block in zip(parsed_pages, blocks, strict=True):
+            _save_cached_liteparse_page(cache_directory, page, block)
+            cached_pages[int(page.page_num)] = (page, block)
+    ordered = [cached_pages[number] for number in range(1, page_count + 1)]
+    return SimpleNamespace(
+        pages=[page for page, _block in ordered],
+        text="\n\n-----\n\n".join(block for _page, block in ordered),
+        images=[],
+    ), cache_hits
+
+
+def _pdf_image_regions(
+    source: Path, page_numbers: set[int]
+) -> dict[int, list[tuple[float, float, float, float]]]:
+    """Locate substantial raster figures so their OCR is not treated as prose."""
+    if not page_numbers:
+        return {}
+    pdfplumber = importlib.import_module("pdfplumber")
+    regions: dict[int, list[tuple[float, float, float, float]]] = {}
+    with pdfplumber.open(source) as pdf:
+        for number in sorted(page_numbers):
+            if not 1 <= number <= len(pdf.pages):
+                continue
+            page = pdf.pages[number - 1]
+            page_area = float(page.width) * float(page.height)
+            boxes = [
+                (
+                    float(image["x0"]),
+                    float(image["top"]),
+                    float(image["x1"]),
+                    float(image["bottom"]),
+                )
+                for image in page.images
+                if float(image["width"]) >= 35
+                and float(image["height"]) >= 25
+                and float(image["width"]) * float(image["height"]) >= page_area * 0.0015
+            ]
+            if boxes:
+                regions[number] = boxes
+    return regions
+
+
+def _chapter_number_from_page(page: Any) -> int | None:
+    height = float(page.height)
+    chapter_items = [item for item in page.text_items if float(item.y) < height * 0.07]
+    if not chapter_items:
+        return None
+    first = re.sub(
+        r"\s+",
+        "",
+        "".join(str(item.text) for item in sorted(chapter_items, key=lambda item: item.x)),
+    ).upper()
+    match = re.fullmatch(r"CHAPTER(\d{1,3})", first)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _chapter_opening_title(page: Any, next_page: Any | None) -> str | None:
+    """Read a chapter opener's title without mistaking its running header for one."""
+    chapter_number = _chapter_number_from_page(page)
+    if chapter_number is None:
+        return None
+    height = float(page.height)
+    width = float(page.width)
+    nav = " ".join(
+        str(item.text).casefold()
+        for item in page.text_items
+        if height * 0.08 <= float(item.y) <= height * 0.16 and float(item.x) < width * 0.28
+    )
+    if not all(label in nav for label in ("figure", "listing", "table")):
+        return None
+    title_items = [
+        item
+        for item in page.text_items
+        if height * 0.08 <= float(item.y) <= height * 0.18
+        and width * 0.28 <= float(item.x) <= width * 0.84
+        and re.search(r"[A-Za-z]", str(item.text))
+    ]
+    if not title_items:
+        # Some full-page illustrations have no text-layer title. The next
+        # page's running chapter heading supplies it without guessing from OCR.
+        if next_page is None or _chapter_number_from_page(next_page) != chapter_number:
+            return None
+        title_items = [
+            item
+            for item in next_page.text_items
+            if float(next_page.height) * 0.05 <= float(item.y) <= float(next_page.height) * 0.09
+            and re.search(r"[A-Za-z]", str(item.text))
+            and len(str(item.text).split()) <= 8
+        ]
+    title = re.sub(
+        r"\s+",
+        " ",
+        " ".join(
+            str(item.text)
+            for item in sorted(title_items, key=lambda item: (round(float(item.y) / 8), item.x))
+        ),
+    ).strip()
+    if not title or len(title) > 100:
+        return None
+    return f"Chapter {chapter_number}: {title}"
+
+
+def _chapter_openers(pages: Sequence[Any]) -> dict[int, str]:
+    return {
+        int(page.page_num): title
+        for index, page in enumerate(pages)
+        if (
+            title := _chapter_opening_title(
+                page, pages[index + 1] if index + 1 < len(pages) else None
+            )
+        )
+        is not None
+    }
+
+
+def _vector_curve_regions(page: Any) -> list[tuple[float, float, float, float]]:
+    """Group dense vector drawing strokes into one or more figure bounds."""
+    curves = sorted(page.curves, key=lambda curve: float(curve["top"]))
+    if len(curves) < 150:
+        return []
+    groups: list[list[Any]] = []
+    group_bottom = -1.0
+    for curve in curves:
+        top = float(curve["top"])
+        bottom = float(curve["bottom"])
+        if not groups or top > group_bottom + 45:
+            groups.append([curve])
+            group_bottom = bottom
+        else:
+            groups[-1].append(curve)
+            group_bottom = max(group_bottom, bottom)
+    regions: list[tuple[float, float, float, float]] = []
+    for group in groups:
+        if len(group) < 40:
+            continue
+        raw_x0 = min(float(curve["x0"]) for curve in group)
+        raw_top = min(float(curve["top"]) for curve in group)
+        raw_x1 = max(float(curve["x1"]) for curve in group)
+        raw_bottom = max(float(curve["bottom"]) for curve in group)
+        if (raw_x1 - raw_x0) * (raw_bottom - raw_top) < float(page.width * page.height) * 0.03:
+            continue
+        # Diagram callouts often sit just outside the drawing strokes. Keep
+        # them inside both the snapshot and the OCR-suppression region.
+        regions.append(
+            (
+                max(0.0, raw_x0 - 56),
+                max(0.0, raw_top - 8),
+                min(float(page.width), raw_x1 + 24),
+                min(float(page.height), raw_bottom + 20),
+            )
+        )
+    return regions
+
+
+def _snapshot_vector_diagrams(
+    source: Path,
+    result: Any,
+    markdown: str,
+    reports: list[dict[str, object]],
+) -> tuple[str, list[FigureImage]]:
+    """Preserve complex vector figures as cropped image assets on failed pages."""
+    if not getattr(result, "pages", None) or not reports:
+        return markdown, []
+    chapter_openers = _chapter_openers(result.pages)
+    candidates = [
+        index
+        for index, report in enumerate(reports)
+        if report["image_references"] == 0
+        and (
+            int(result.pages[index].page_num) in chapter_openers
+            or report["action"] == "native-text-fallback"
+            or cast(float, report["native_text_coverage"]) < 0.65
+        )
+    ]
+    if not candidates:
+        return markdown, []
+    pdfplumber = importlib.import_module("pdfplumber")
+    pdfium = importlib.import_module("pypdfium2")
+    blocks = markdown.split(f"\n\n{_PAGE_BREAK}\n\n")
+    if len(blocks) != len(result.pages):
+        return markdown, []
+    snapshots: list[FigureImage] = []
+    furniture = _page_furniture_quotas(result.pages)
+    with pdfplumber.open(source) as source_pdf:
+        rendered_pdf = pdfium.PdfDocument(str(source))
+        for index in candidates:
+            page = result.pages[index]
+            number = int(page.page_num)
+            if not 1 <= number <= len(source_pdf.pages):
+                continue
+            regions = _vector_curve_regions(source_pdf.pages[number - 1])
+            if not regions:
+                continue
+            # Keep native prose outside the drawn figure. The drawing itself is
+            # represented by a cropped snapshot, avoiding vector-label OCR
+            # garbage while retaining the original visual information.
+            chapter = chapter_openers.get(number)
+            chapter_number = chapter.split(":", 1)[0] if chapter else None
+            is_chapter_opener = chapter is not None
+            outside = [
+                item
+                for item in page.text_items
+                if not _item_inside_figure(item, regions)
+                and not (is_chapter_opener and float(item.y) < float(page.height) * 0.17)
+                and not (
+                    chapter_number is not None
+                    and str(item.text).strip() == chapter_number.removeprefix("Chapter ")
+                    and float(item.x) > float(page.width) * 0.8
+                )
+            ]
+            events: list[tuple[float, str]] = [
+                (line.y, line.text) for line in _spatial_lines(outside)
+            ]
+            bitmap = rendered_pdf[number - 1].render(scale=2).to_pil()
+            for ordinal, (x0, top, x1, bottom) in enumerate(regions):
+                crop = bitmap.crop(
+                    (round(x0 * 2), round(top * 2), round(x1 * 2), round(bottom * 2))
+                )
+                buffer = io.BytesIO()
+                crop.save(buffer, format="PNG", optimize=True)
+                figure = FigureImage(
+                    id=f"p{number}_vector{ordinal}",
+                    page=number,
+                    media_type="image/png",
+                    data=buffer.getvalue(),
+                )
+                snapshots.append(figure)
+                events.append((top, figure.placeholder_candidates[1]))
+            rebuilt = "\n\n".join(text for _y, text in sorted(events, key=lambda event: event[0]))
+            rebuilt = _strip_page_furniture(rebuilt, *furniture[index])
+            if chapter is not None and is_chapter_opener:
+                rebuilt = f"## {chapter}\n\n{rebuilt}"
+            blocks[index] = rebuilt
+            reports[index]["action"] = "vector-diagram-snapshot"
+            reports[index]["image_references"] = len(regions)
+            reports[index]["warnings"] = []
+    return f"\n\n{_PAGE_BREAK}\n\n".join(blocks), snapshots
+
+
 class LiteParseExtractor:
     """Extract PDFs and images to rich Markdown via the liteparse engine.
 
@@ -1525,6 +2098,7 @@ class LiteParseExtractor:
         vision_max_bytes: int = 8 * 1024 * 1024,
         vision_max_concurrency: int = 2,
         vision_max_response_chars: int = 16 * 1024,
+        page_cache_root: Path | None = None,
     ) -> None:
         self.ocr_language = ocr_language
         self.ocr_server_url = ocr_server_url
@@ -1542,7 +2116,11 @@ class LiteParseExtractor:
         self.vision_max_bytes = vision_max_bytes
         self.vision_max_concurrency = vision_max_concurrency
         self.vision_max_response_chars = vision_max_response_chars
+        self.page_cache_root = page_cache_root
         self.last_metadata: dict[str, object] | None = None
+        self._last_page_reports: list[dict[str, object]] = []
+        self._last_page_cache_hits = 0
+        self._last_asset_cache_hits = 0
 
     @property
     def vision_active(self) -> bool:
@@ -1571,8 +2149,31 @@ class LiteParseExtractor:
             "multicolumn_pages_reflowed": reflowed_pages,
             "outline_pages_normalized": normalized_outlines,
             "collapsed_table_pages_normalized": normalized_tables,
+            "pages_reused_from_cache": self._last_page_cache_hits,
+            "asset_pages_reused_from_cache": self._last_asset_cache_hits,
+            "pages": self._last_page_reports,
+        }
+        metadata["quality_summary"] = {
+            "pages": len(self._last_page_reports),
+            "pages_requiring_layout_repair": sum(
+                report["action"] != "accepted" for report in self._last_page_reports
+            ),
+            "pages_with_warnings": sum(
+                bool(report["warnings"]) for report in self._last_page_reports
+            ),
+            "figure_ocr_lines_removed": sum(
+                cast(int, report["figure_ocr_lines_removed"]) for report in self._last_page_reports
+            ),
         }
         if self.vision_provider is not None and figures:
+            page_priority = {
+                cast(int, report["page_number"]): (
+                    (20 if report["action"] == "vector-diagram-snapshot" else 0)
+                    + (10 if report["kind"] == "figure-heavy" else 0)
+                    + min(10, cast(int, report["figure_ocr_lines_removed"]))
+                )
+                for report in self._last_page_reports
+            }
             text, described = await enrich_markdown_figures(
                 text,
                 figures,
@@ -1583,6 +2184,7 @@ class LiteParseExtractor:
                 max_bytes=self.vision_max_bytes,
                 max_concurrency=self.vision_max_concurrency,
                 max_response_chars=self.vision_max_response_chars,
+                page_priority=page_priority,
             )
             if described:
                 metadata["figures_described"] = described
@@ -1614,10 +2216,12 @@ class LiteParseExtractor:
         except ImportError as exc:  # pragma: no cover - guarded by liteparse_available
             raise RuntimeError("PDF/image extraction requires the 'liteparse' extra") from exc
 
-        def parser(*, image_mode: str, target_pages: str | None = None) -> Any:
+        def parser(
+            *, image_mode: str, target_pages: str | None = None, ocr_enabled: bool | None = None
+        ) -> Any:
             return liteparse.LiteParse(
                 output_format="markdown",
-                ocr_enabled=target_pages is None,
+                ocr_enabled=(target_pages is None) if ocr_enabled is None else ocr_enabled,
                 ocr_server_url=self.ocr_server_url,
                 ocr_language=self.ocr_language,
                 tessdata_path=self.tessdata_path,
@@ -1629,27 +2233,104 @@ class LiteParseExtractor:
             )
 
         def parse(source: Path) -> tuple[str, list[FigureImage], int, int, int]:
-            # A whole-document embed parse can retain every decoded image in
-            # native memory at once. Parse text cheaply, then fetch only pages
-            # that produced local references in bounded batches.
+            # Parse text in durable page batches when the cache is enabled.
+            # A crash then resumes from the last completed batch rather than
+            # reparsing hundreds of pages. Assets have independent page cache
+            # entries, so a failed image pass does not discard text work.
             text_mode = "off" if self.image_mode == "off" else "placeholder"
-            result = parser(image_mode=text_mode).parse(str(source))
+            cache_directory = self._page_cache_directory(source)
+            if cache_directory is None:
+                self._last_page_cache_hits = 0
+                result = parser(image_mode=text_mode).parse(str(source))
+            else:
+                result, self._last_page_cache_hits = _parse_liteparse_pages_incrementally(
+                    source,
+                    cache_directory=cache_directory,
+                    parse_pages=lambda selected: parser(
+                        image_mode=text_mode,
+                        target_pages=selected,
+                        ocr_enabled=True,
+                    ).parse(str(source)),
+                    max_pages=self.max_pages,
+                )
+            figure_pages = {
+                int(match) for match in _LITEPARSE_IMAGE_PAGE_RE.findall(str(result.text))
+            }
+            figure_regions = _pdf_image_regions(source, figure_pages)
             (
                 text,
                 _unused_figures,
                 reflowed_pages,
                 normalized_outlines,
                 normalized_tables,
-            ) = self._collect_result(result)
+            ) = self._collect_result(result, figure_regions=figure_regions)
+            text, vector_figures = _snapshot_vector_diagrams(
+                source, result, text, self._last_page_reports
+            )
             referenced_pages = sorted(
                 {int(match) for match in _LITEPARSE_IMAGE_PAGE_RE.findall(text)}
             )
             figures: list[FigureImage] = []
-            for start in range(0, len(referenced_pages), _LITEPARSE_ASSET_PAGE_BATCH):
-                page_batch = referenced_pages[start : start + _LITEPARSE_ASSET_PAGE_BATCH]
+            self._last_asset_cache_hits = 0
+            missing_asset_pages: list[int] = []
+            for page_number in referenced_pages:
+                cached_figures = (
+                    _load_cached_liteparse_assets(cache_directory, page_number)
+                    if cache_directory is not None
+                    else None
+                )
+                if cached_figures is None:
+                    missing_asset_pages.append(page_number)
+                else:
+                    figures.extend(cached_figures)
+                    self._last_asset_cache_hits += 1
+            for start in range(0, len(missing_asset_pages), _LITEPARSE_ASSET_PAGE_BATCH):
+                page_batch = missing_asset_pages[start : start + _LITEPARSE_ASSET_PAGE_BATCH]
                 selected = ",".join(str(page) for page in page_batch)
                 embedded = parser(image_mode="embed", target_pages=selected).parse(str(source))
-                figures.extend(self._figures_from_result(embedded))
+                batch_figures = self._figures_from_result(embedded)
+                figures.extend(batch_figures)
+                if cache_directory is not None:
+                    for page_number in page_batch:
+                        _save_cached_liteparse_assets(
+                            cache_directory,
+                            page_number,
+                            [figure for figure in batch_figures if figure.page == page_number],
+                        )
+            figures.extend(vector_figures)
+            referenced_names = set(_LOCAL_MARKDOWN_IMAGE_RE.findall(text))
+            figure_names = {
+                placeholder.removeprefix("![](").removesuffix(")")
+                for figure in figures
+                if (placeholder := figure.find_placeholder(text)) is not None
+            }
+            unresolved = [
+                page_number
+                for page_number in referenced_pages
+                if any(f"_p{page_number}_" in name for name in referenced_names - figure_names)
+            ]
+            if unresolved:
+                # A stale/partial asset entry must not make an image-bearing
+                # document appear complete. Retry only the missing pages once.
+                for page_number in unresolved:
+                    embedded = parser(image_mode="embed", target_pages=str(page_number)).parse(
+                        str(source)
+                    )
+                    recovered = self._figures_from_result(embedded)
+                    figures = [figure for figure in figures if figure.page != page_number]
+                    figures.extend(recovered)
+                    if cache_directory is not None:
+                        _save_cached_liteparse_assets(cache_directory, page_number, recovered)
+            figure_names = {
+                placeholder.removeprefix("![](").removesuffix(")")
+                for figure in figures
+                if (placeholder := figure.find_placeholder(text)) is not None
+            }
+            if referenced_names - figure_names:
+                raise ValueError(
+                    f"Figure assets missing for {len(referenced_names - figure_names)} "
+                    "Markdown reference(s)"
+                )
             return text, figures, reflowed_pages, normalized_outlines, normalized_tables
 
         # liteparse parses PDFs natively but converts loose images to PDF first,
@@ -1668,6 +2349,21 @@ class LiteParseExtractor:
                 return parse(pdf_path)
         return parse(path)
 
+    def _page_cache_directory(self, source: Path) -> Path | None:
+        if self.page_cache_root is None:
+            return None
+        config = {
+            "version": _LITEPARSE_RAW_CACHE_VERSION,
+            "ocr_language": self.ocr_language,
+            "ocr_server_url": self.ocr_server_url,
+            "tessdata_path": self.tessdata_path,
+            "dpi": self.dpi,
+            "image_mode": self.image_mode,
+            "max_pages": self.max_pages,
+        }
+        config_key = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()[:24]
+        return self.page_cache_root / _file_sha256(source) / config_key
+
     @staticmethod
     def _figures_from_result(result: Any) -> list[FigureImage]:
         return [
@@ -1680,11 +2376,18 @@ class LiteParseExtractor:
             for image in result.images
         ]
 
-    def _collect_result(self, result: Any) -> tuple[str, list[FigureImage], int, int, int]:
+    def _collect_result(
+        self,
+        result: Any,
+        *,
+        figure_regions: Mapping[int, Sequence[tuple[float, float, float, float]]] | None = None,
+    ) -> tuple[str, list[FigureImage], int, int, int]:
         figures = self._figures_from_result(result)
+        page_reports: list[dict[str, object]] = []
         text, reflowed_pages, normalized_outlines, normalized_tables = normalize_spatial_markdown(
-            result
+            result, page_reports=page_reports, figure_regions=figure_regions
         )
+        self._last_page_reports = page_reports
         return text, figures, reflowed_pages, normalized_outlines, normalized_tables
 
 
@@ -1757,7 +2460,10 @@ def _extractor_metadata(extractor: object) -> dict[str, object] | None:
 
 # Bump when extraction output for a given config could change materially, to
 # invalidate every cached entry without a data migration.
-_EXTRACTION_CACHE_VERSION = 3
+_EXTRACTION_CACHE_VERSION = 4
+# Raw LiteParse pages have not changed; keep their resumable cache while
+# invalidating cached finalized Markdown after the normalization improvements.
+_LITEPARSE_RAW_CACHE_VERSION = 3
 
 
 def extraction_config_signature(params: Mapping[str, object]) -> str:
@@ -1906,6 +2612,7 @@ class CompositeExtractor:
         liteparse_tessdata_path: str | None = None,
         liteparse_dpi: int = 150,
         liteparse_image_mode: str = "placeholder",
+        liteparse_page_cache_root: Path | None = None,
         figure_vision_provider: FigureVisionProvider | None = None,
         figure_vision_model: str = "mock-cleaner",
         figure_vision_max_figures: int = 20,
@@ -1976,6 +2683,7 @@ class CompositeExtractor:
                 tessdata_path=liteparse_tessdata_path,
                 dpi=liteparse_dpi,
                 image_mode=liteparse_image_mode,
+                page_cache_root=liteparse_page_cache_root,
                 max_pages=pdf_max_pages,
                 max_input_bytes=pdf_max_input_bytes,
                 ocr_timeout_seconds=ocr_timeout_seconds,

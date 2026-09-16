@@ -10,7 +10,7 @@ from librarian.application.classify_document import ClassifyDocument
 from librarian.application.clean_chunks import CleanChunks
 from librarian.application.factory import build_container
 from librarian.application.ports import EventSink, OutputRepository
-from librarian.application.process_document import ProcessDocument
+from librarian.application.process_document import ProcessDocument, select_pdf_chunks_for_cleaning
 from librarian.config import Settings
 from librarian.domain.ids import ChunkId, DocumentId, RunId
 from librarian.domain.models import (
@@ -21,6 +21,7 @@ from librarian.domain.models import (
     RunStage,
     RunStatus,
 )
+from librarian.pipeline.chunking import ChunkingPolicy, chunk_text
 from librarian.prompts import PromptCatalog
 from librarian.taxonomy.dewey import DeweyTaxonomy
 
@@ -53,6 +54,42 @@ class FakeTracer:
         span = FakeSpan(name, attributes)
         self.spans.append(span)
         return span
+
+
+def test_pdf_cleaning_preserves_only_verified_page_chunks() -> None:
+    source = (
+        "A verified prose page. " * 8
+        + "\n\n<!-- page-break -->\n\n"
+        + "Index\n\nAmbiguous table of contents 2\n"
+    )
+    chunks = chunk_text(
+        DocumentId("doc_pdf"),
+        source,
+        ChunkingPolicy(target_chars=80, overlap_chars=0, min_chunk_chars=0),
+    )
+    report: dict[str, object] = {
+        "engine": "liteparse",
+        "pages": [
+            {
+                "native_text_coverage": 1.0,
+                "action": "accepted",
+                "kind": "prose",
+                "warnings": [],
+            },
+            {
+                "native_text_coverage": 1.0,
+                "action": "accepted",
+                "kind": "index",
+                "warnings": [],
+            },
+        ],
+    }
+    model_chunks, preserved = select_pdf_chunks_for_cleaning(chunks, source, report)
+    assert preserved
+    assert model_chunks
+    assert all("verified-source-preserved" in chunk.warnings for chunk in preserved)
+    assert all("Index" not in chunk.text for chunk in preserved)
+    assert select_pdf_chunks_for_cleaning(chunks, source, None) == (chunks, [])
 
 
 @pytest.mark.asyncio
@@ -193,9 +230,7 @@ async def test_processing_emits_stage_tracing_spans(tmp_path: Path) -> None:
         "classify",
         "index",
     }
-    clean_span = next(
-        span for span in stage_spans if span.attributes["librarian.stage"] == "clean"
-    )
+    clean_span = next(span for span in stage_spans if span.attributes["librarian.stage"] == "clean")
     assert clean_span.attributes["librarian.run_id"] == str(run.id)
     assert clean_span.attributes["librarian.document_id"] == str(ingested.document.id)
     assert clean_span.attributes["librarian.status"] == "succeeded"
