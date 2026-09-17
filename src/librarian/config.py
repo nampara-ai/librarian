@@ -64,6 +64,11 @@ class Settings(BaseSettings):
     # return a fully-cleaned chunk (~chunk_target_chars); token-dense text
     # (CJK, tables, dense OCR) needs headroom or the provider truncates.
     llm_max_output_tokens: int = Field(default=16_384, gt=0)
+    final_refinement_enabled: bool = Field(default=True)
+    # A bounded number of one-call, source-grounded fixes prevents a noisy
+    # report from turning one document into hundreds of provider requests.
+    final_refinement_max_actions: int = Field(default=32, ge=0, le=200)
+    final_refinement_max_page_chars: int = Field(default=12_000, gt=0)
     # Output token budget for classification JSON (summary + description +
     # title + tags + series fields). 500 was too small for dewey_v5's schema.
     classification_max_output_tokens: int = Field(default=2_048, gt=0)

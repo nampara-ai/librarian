@@ -98,8 +98,25 @@ struct ProcessingQuality: Codable {
     let cachedCleanedChunks: Int
     let verifiedSourceChunks: Int?
     let sourcePreservedChunks: Int
+    let refinement: RefinementQuality?
     let warnings: [String]
     let fatal: [String]
+}
+
+struct RefinementQuality: Codable {
+    let attempted: Int
+    let applied: Int
+    let rejected: Int
+    let deferred: Int
+    let actions: [RefinementActionQuality]
+}
+
+struct RefinementActionQuality: Codable {
+    let kind: String
+    let label: String
+    let status: String
+    let reason: String?
+    let pageNumber: Int?
 }
 
 struct ExportedDocument: Codable {
@@ -222,6 +239,7 @@ struct QueueItem: Identifiable {
         case uploading(progress: Double?)
         case converting(progress: Double?)
         case cleaning(progress: Double)
+        case refining
         case classifying(progress: Double?)
         case done(outputURL: URL)
         case failed(reason: String, retryable: Bool)

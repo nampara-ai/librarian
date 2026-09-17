@@ -189,6 +189,8 @@ struct QueueRowView: View {
             stageBar(Copy.stageConverting, progress: progress)
         case .cleaning(let progress):
             stageBar(Copy.stageCleaning, progress: progress)
+        case .refining:
+            stageBar(Copy.stageRefining, progress: nil)
         case .classifying(let progress):
             stageBar(Copy.stageClassifying, progress: progress)
         case .done:
@@ -314,6 +316,7 @@ struct QueueRowView: View {
         case .uploading: return Copy.stageSending
         case .converting: return Copy.stageConverting
         case .cleaning: return Copy.stageCleaning
+        case .refining: return Copy.stageRefining
         case .classifying: return Copy.stageClassifying
         case .done: return Copy.stageSaved
         case .failed(let reason, _): return reason
@@ -453,6 +456,24 @@ struct QualityDetailsView: View {
                 Text("\(verified) verified source chunks skipped model cleaning")
             }
             Text("\(processing.imageReferences) image references in final output")
+            if let refinement = processing.refinement,
+               refinement.attempted > 0 || refinement.deferred > 0 {
+                Divider()
+                Text("Final refinement: \(refinement.applied) of \(refinement.attempted) actions applied")
+                    .font(.subheadline.weight(.semibold))
+                if refinement.rejected > 0 || refinement.deferred > 0 {
+                    Text("\(refinement.rejected) rejected by checks or provider · \(refinement.deferred) deferred for lack of safe context or the action limit")
+                        .foregroundStyle(.secondary)
+                }
+                DisclosureGroup("Review refinement actions") {
+                    ForEach(refinement.actions.indices, id: \.self) { index in
+                        let action = refinement.actions[index]
+                        Text("\(action.label): \(action.status.replacingOccurrences(of: "-", with: " "))\(action.reason.map { " (\($0.replacingOccurrences(of: "-", with: " ")))" } ?? "")")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
             if let unmatched = processing.tocEntriesWithoutMatchingHeadingOrBody,
                unmatched > 0 {
                 Divider()
@@ -492,8 +513,17 @@ struct QualityDetailsView: View {
                 .foregroundStyle(.secondary)
             ForEach(flagged) { page in
                 HStack(alignment: .firstTextBaseline) {
-                    Text("PDF page \(page.pageNumber): \(page.warnings.joined(separator: ", ").replacingOccurrences(of: "-", with: " "))")
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("PDF page \(page.pageNumber): \(page.warnings.joined(separator: ", ").replacingOccurrences(of: "-", with: " "))")
+                        if report.processing?.refinement?.actions.contains(where: {
+                            $0.kind == "page" && $0.pageNumber == page.pageNumber && $0.status == "applied"
+                        }) == true {
+                            Text("Source-backed final edit applied")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     if filename.lowercased().hasSuffix(".pdf") {
                         Button("Review page") { reviewPage(page.pageNumber) }
                             .buttonStyle(.link)

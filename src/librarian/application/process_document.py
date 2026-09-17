@@ -16,6 +16,7 @@ from typing import Any, cast
 from librarian.application.assemble_document import assemble_cleaned_document
 from librarian.application.classify_document import ClassifyDocument
 from librarian.application.clean_chunks import CleanChunks, CleanedChunk
+from librarian.application.final_refinement import FinalRefiner
 from librarian.application.ingest_document import IngestDocument, raw_text_key
 from librarian.application.ports import (
     ApplicationMetrics,
@@ -114,6 +115,7 @@ class ProcessDocument:
     cleaner: CleanChunks
     classifier: ClassifyDocument
     chunking_policy: ChunkingPolicy
+    refiner: FinalRefiner | None = None
     ingest_document: IngestDocument | None = None
     metrics: ApplicationMetrics = field(default_factory=NoOpMetricsRecorder)
     tracer: Any | None = None
@@ -333,6 +335,37 @@ class ProcessDocument:
                     f"({len(chunked)} chunk(s) all blank) — refusing to publish empty result"
                 )
             await self._raise_if_canceled(run_id)
+            refinement_report: dict[str, object] = {
+                "attempted": 0,
+                "applied": 0,
+                "rejected": 0,
+                "deferred": 0,
+                "actions": [],
+            }
+            if self.refiner is not None:
+                async with self._timed_stage(RunStage.REFINE, run_id, document_id):
+                    await self.runs.update_status(
+                        run_id,
+                        status=RunStatus.RUNNING,
+                        stage=RunStage.REFINE,
+                    )
+                    refined = await self.refiner.execute(
+                        source=normalized_text,
+                        output=assembled,
+                        extraction_report=extraction_report,
+                        source_path=document.source.path,
+                        before_action=lambda: self._raise_if_canceled(run_id),
+                    )
+                    assembled = refined.text
+                    refinement_report = refined.report
+                await self.events.emit(
+                    run_id,
+                    RunStage.REFINE,
+                    "final refinement: "
+                    f"{refinement_report['applied']}/{refinement_report['attempted']} "
+                    "source-grounded edit(s) applied",
+                )
+            await self._raise_if_canceled(run_id)
             output = CleanedOutput(
                 document_id=document_id,
                 run_id=run_id,
@@ -365,6 +398,7 @@ class ProcessDocument:
                             "cached_cleaned_chunks": len(cached_chunks),
                             "verified_source_chunks": len(verified_chunks),
                             "source_preserved_chunks": fidelity_fallbacks,
+                            "refinement": refinement_report,
                         },
                         ensure_ascii=False,
                     ),

@@ -444,6 +444,8 @@ final class AppModel: ObservableObject {
         switch run.stage {
         case "clean", "validate", "assemble":
             return .cleaning(progress: min(max(run.fractionComplete, 0), 1))
+        case "refine":
+            return .refining
         case "classify", "index", "complete":
             return .classifying(progress: nil)
         default:

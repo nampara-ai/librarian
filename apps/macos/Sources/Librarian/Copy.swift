@@ -16,6 +16,7 @@ enum Copy {
     static let stageSending = "Sending…"
     static let stageConverting = "Converting"
     static let stageCleaning = "Cleaning"
+    static let stageRefining = "Refining"
     static let stageClassifying = "Classifying"
     static let stageSaved = "Saved"
 

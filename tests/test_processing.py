@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from dataclasses import replace
 from pathlib import Path
@@ -11,6 +12,7 @@ from librarian.application.clean_chunks import CleanChunks
 from librarian.application.factory import build_container
 from librarian.application.ports import EventSink, OutputRepository
 from librarian.application.process_document import ProcessDocument, select_pdf_chunks_for_cleaning
+from librarian.application.quality_report import run_quality_key
 from librarian.config import Settings
 from librarian.domain.ids import ChunkId, DocumentId, RunId
 from librarian.domain.models import (
@@ -146,6 +148,14 @@ async def test_ingest_process_and_search_round_trip(tmp_path: Path) -> None:
     assert classification.code == "636.1"
     assert classification.title == "Horses & Equines Notes"
     assert classification.tags == ("horses", "equines")
+    quality = json.loads(await container.repository.get_text(run_quality_key(run.id)))
+    assert quality["refinement"] == {
+        "attempted": 0,
+        "applied": 0,
+        "rejected": 0,
+        "deferred": 0,
+        "actions": [],
+    }
     assert ingested.document.id in results
     assert detailed_results[0].document_id == ingested.document.id
     assert detailed_results[0].run_id == run.id

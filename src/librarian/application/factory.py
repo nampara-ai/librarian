@@ -7,6 +7,7 @@ from typing import Any
 
 from librarian.application.classify_document import ClassifyDocument
 from librarian.application.clean_chunks import CleanChunks
+from librarian.application.final_refinement import FinalRefiner
 from librarian.application.ingest_document import IngestDocument
 from librarian.application.ports import ApplicationMetrics, LLMProvider
 from librarian.application.process_document import ProcessDocument
@@ -170,6 +171,19 @@ async def build_container(
         events=repository,
         cleaner=cleaner,
         classifier=classifier,
+        refiner=(
+            FinalRefiner(
+                provider=provider,
+                model=resolved_settings.llm_model,
+                max_tokens=resolved_settings.llm_max_output_tokens,
+                max_response_chars=resolved_settings.llm_max_response_chars,
+                max_actions=resolved_settings.final_refinement_max_actions,
+                max_page_chars=resolved_settings.final_refinement_max_page_chars,
+            )
+            if resolved_settings.final_refinement_enabled
+            and resolved_settings.final_refinement_max_actions > 0
+            else None
+        ),
         chunking_policy=policy,
         ingest_document=ingest_container.ingest_document,
         metrics=metrics or NoOpMetricsRecorder(),
