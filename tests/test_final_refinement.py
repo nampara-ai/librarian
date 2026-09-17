@@ -9,7 +9,12 @@ from pathlib import Path
 import pytest
 
 from librarian.application import final_refinement
-from librarian.application.final_refinement import FinalRefiner
+from librarian.application.final_refinement import (
+    FinalRefiner,
+    _adds_ungrounded_heading_number,  # pyright: ignore[reportPrivateUsage]
+    _checked_page_replacement,  # pyright: ignore[reportPrivateUsage]
+    _strip_margin_number_suffixes,  # pyright: ignore[reportPrivateUsage]
+)
 
 
 class ScriptedProvider:
@@ -65,6 +70,43 @@ def native_page_loader(
         return {number: texts[number] for number in numbers if number in texts}
 
     return load
+
+
+def test_pdf_margin_numerals_are_not_heading_text() -> None:
+    words = [
+        ("Window", 204.0, 234.0, 380.5),
+        ("Control", 237.0, 256.0, 380.5),
+        ("Behavior", 259.0, 297.0, 380.5),
+        ("6", 545.0, 552.0, 380.5),
+        ("Required", 204.0, 260.0, 420.0),
+        ("6", 272.0, 279.0, 420.0),
+    ]
+    native = "Window Control Behavior 6\nRequired 6"
+    cleaned = _strip_margin_number_suffixes(native, words, 612.0)
+
+    assert cleaned == "Window Control Behavior\nRequired 6"
+    assert _adds_ungrounded_heading_number(
+        "Previous paragraph.",
+        "Previous paragraph.\n\n#### Window Control Behavior 6",
+        cleaned,
+    )
+    assert not _adds_ungrounded_heading_number(
+        "Previous paragraph.",
+        "Previous paragraph.\n\n#### Window Control Behavior",
+        cleaned,
+    )
+    original = (
+        "#### Window Control Behavior 6\n\nKeep the controls visible while the window stays open."
+    )
+    replacement = _checked_page_replacement(
+        original,
+        original,
+        cleaned + "\nKeep the controls visible while the window stays open.",
+        ("missing-numbers",),
+    )
+    assert replacement is not None
+    assert "#### Window Control Behavior\n" in replacement
+    assert "Behavior 6" not in replacement
 
 
 @pytest.mark.asyncio
