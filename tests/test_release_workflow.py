@@ -4,6 +4,8 @@ from types import ModuleType
 
 import pytest
 
+from librarian.version import __version__
+
 
 def _load_release_notes_module() -> ModuleType:
     loader = SourceFileLoader(
@@ -74,7 +76,7 @@ def test_release_docs_describe_stable_surface() -> None:
     operations = Path("docs/OPERATIONS.md").read_text(encoding="utf-8")
     changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
 
-    assert "Version `1.8.4` is the stable production release." in readme
+    assert f"Version `{__version__}` is the stable production release." in readme
     assert "librarian admin page-manifest" in operations
     assert "librarian maintainer eval" in operations
     assert "## 1.0.0 - 2026-05-22" in changelog

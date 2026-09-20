@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.9.0 - 2026-09-20
+
+PDF fidelity, reliable long-running processing, and an actionable final quality review.
+
+- Improve extraction of complex and scanned PDFs: normalize damaged table-of-contents layouts,
+  remove repeated page furniture, retain source-grounded titles and numeric facts, recover content
+  from figure-heavy pages, and preserve figures with portable exports.
+- Make processing more resilient to provider throttling and slow jobs. Retry transient model failures,
+  keep partial progress, refresh stale extraction when reprocessing, and continue tracking backend
+  jobs that outlast the app's initial wait.
+- Add source-grounded quality reports and a final refinement pass that addresses reported document
+  issues before export. Guard refinements against invented or omitted numbers and ignore PDF margin
+  numerals that are not document content.
+- Make review items actionable in the Mac app, and export only completed runs so unfinished output
+  is not mistaken for a finished document.
+- Refresh locked dependencies with fixes for recent advisories in anyio, httpcore2, httpx2, and
+  soupsieve; the macOS bundle and Docker image use these exact locked versions.
+
 ## 1.8.4 - 2026-09-12
 
 The first signed and notarized macOS app, plus the LLM provider fix for current OpenAI models.
