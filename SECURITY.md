@@ -22,7 +22,8 @@ We will acknowledge reports within 5 business days and coordinate a fix or discl
 
 - Never commit API keys, `.env` files, private transcripts, provider logs, or eval outputs that
   contain private text.
-- Use environment variables for provider credentials.
+- Use environment variables for provider credentials in CLI/API deployments. The Mac app stores
+  provider keys in the macOS Keychain and passes them to its backend through the environment.
 - Redact `OPENAI_API_KEY`, custom provider keys, `LIBRARIAN_API_KEY`, and `LIBRARIAN_API_KEYS` in
   issues and logs.
 - Test data must be synthetic, public-domain, or explicitly approved for open-source use.

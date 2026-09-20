@@ -8,8 +8,12 @@ hexagonal boundaries in `docs/ARCHITECTURE.md`.
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev,pdf]"
+pip install -e ".[dev,all]"
 ```
+
+The full extras match CI and exercise optional extraction integrations. Install Tesseract and
+Poppler separately if you want to test scanned PDFs with an unbundled backend. On macOS, the
+native app also requires Xcode; see [its development guide](apps/macos/README.md#develop-for-contributors).
 
 ## Checks
 

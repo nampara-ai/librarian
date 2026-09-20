@@ -8,7 +8,7 @@ to Applications, double-click, done.
 ## How it's organized
 
 - **The window is the queue.** Every dropped file shows its stage (Waiting →
-  Sending → Converting → Cleaning → Classifying → Saved) and ends with
+  Sending → Converting → Cleaning → Refining → Classifying → Saved) and ends with
   **Show in Finder** or a plain-words failure with **Retry**. The cleaned
   file is saved to your destination folder automatically under a library
   filename — the Dewey code plus an AI-generated title, like
@@ -17,20 +17,21 @@ to Applications, double-click, done.
   overwritten. Markdown output opens with a short synopsis, the
   classification, and topic tags above the cleaned text.
   Completed rows also offer **Quality**, showing page-level extraction repairs,
-  cache reuse, and final document checks for the run.
+  cache reuse, final refinement actions, and document checks for the run. Use
+  **Review page** to compare a flagged PDF page with the source; warnings and
+  deferred actions still need human review.
 - **Destination strip** at the top: Save to (any folder; default
   `~/Documents/Librarian`) and Format (Markdown, Plain Text, JSON, or
   **Markdown (OKF bundle)**). In OKF-bundle mode the destination folder becomes
   a single [Open Knowledge Format](../../docs/OKF.md) bundle — a Dewey-organized,
   cross-linked, indexed tree of concept files — rebuilt as documents finish,
   rather than one file per document.
-- **Settings (⌘, or the gear)**: one pane. Provider (Anthropic / OpenAI /
-  OpenAI-compatible / Ollama / None), model, API key with inline validation.
-  Keys are stored in the macOS Keychain — never on disk — and handed to the
-  engine through its environment. With Provider = None, files are converted
-  and organized without AI cleaning, so the app works with zero setup.
-  Advanced (collapsed): keep originals alongside outputs, or connect to a
-  remote Librarian server.
+- **Settings (⌘, or the gear)**: provider (Anthropic, OpenAI, DeepSeek,
+  Ollama, LM Studio, or Custom), model, and API key or local-server address.
+  Provider keys are kept in the macOS Keychain and handed to the engine through
+  its environment. Before you connect a provider, files are converted and
+  organized without AI cleaning. Advanced settings include cleaning style,
+  optional figure descriptions, keeping originals, and a remote server.
 - **Tools menu** (menu bar): Convert File, Convert Folder, Normalize
   Transcript, Find in Transcript — the CLI's file utilities.
 - **Help → Diagnostics…**: engine capability checks (`doctor`), readiness,
@@ -38,7 +39,7 @@ to Applications, double-click, done.
 
 ## Install (for users)
 
-1. Download **Librarian-AppleSilicon.dmg** (Apple Silicon — M1/M2/M3/M4 Macs)
+1. Download **Librarian-AppleSilicon.dmg** (Apple Silicon — M-series Macs)
    from the assets of the
    [latest release](https://github.com/nampara-ai/librarian/releases/latest).
 
@@ -57,7 +58,7 @@ to Applications, double-click, done.
 macOS 14 (Sonoma) or newer is required.
 
 **First launch:** release DMGs (v1.8.4 and later) are signed with a Developer
-ID and notarized by Apple, so they open with no Gatekeeper warning at all.
+ID and notarized by Apple, so they pass normal macOS Gatekeeper checks.
 
 **Only if you built the app yourself without a signing certificate** (a local
 `make` or a fork without the signing secrets below): such a build is *ad-hoc*
@@ -100,9 +101,7 @@ is built on a native-architecture runner so the bundled OCR binaries match the
 target Mac.
 
 Each launch generates a random API key and passes it to the backend through
-`LIBRARIAN_API_KEY`, so other local processes cannot read or modify your
-corpus over localhost — only the app holds the credential for its own
-backend instance.
+`LIBRARIAN_API_KEY`. API requests to the loopback server require that key.
 
 Your data lives in `~/Library/Application Support/Librarian`:
 
@@ -129,25 +128,37 @@ seconds. Until a provider is connected, files are still converted and
 organized, just without AI cleaning.
 
 API keys are stored in the macOS Keychain and passed to the engine through
-its process environment — they are never written to disk. Non-secret
+its process environment — not written to the app's `.env` file. Keychain items
+persist across app reinstalls and live in macOS's protected credential store. Non-secret
 settings (provider, model, base URL) live in
 `~/Library/Application Support/Librarian/.env`, which you can also edit by
 hand; a key found in a legacy `.env` is migrated into the Keychain
 automatically.
 
-Restart the backend (quit and reopen the app, or use the status pill →
-Restart) to apply changes. Any `LIBRARIAN_*` setting from
+Selecting a model or changing engine options restarts the embedded backend as needed. If you edit
+`.env` by hand, quit and reopen the app to apply the change. Any `LIBRARIAN_*` setting from
 [docs/DEPLOYMENT.md](../../docs/DEPLOYMENT.md) works here.
 
 ### OCR for scanned documents
 
-Embedded-text PDFs, DOCX, Markdown, text, and transcripts work out of the box.
-OCR for scanned PDFs and images additionally needs the Tesseract and Poppler
-command-line tools:
+The release DMG already includes Tesseract, Poppler, and English OCR language data. No Homebrew
+install is needed for scanned PDFs or images. If you run an unbundled developer build against a
+separately installed backend, install the system OCR tools for that backend:
 
 ```bash
 brew install tesseract poppler
 ```
+
+### Resetting the app for a fresh test
+
+Quit Librarian and move `/Applications/Librarian.app`,
+`~/Library/Application Support/Librarian`, `~/Library/Caches/ai.nampara.librarian`, and
+`~/Library/Preferences/ai.nampara.librarian.plist` to Trash before installing a newly downloaded
+release. This resets the app's database, uploads, extraction cache, backend logs, and settings.
+Exports already saved to `~/Documents/Librarian` are separate files and are not removed by this
+reset. The macOS Keychain can still hold previously saved provider API keys under the service
+`ai.nampara.librarian`; remove those entries in Keychain Access only if you also want a fresh
+credential setup.
 
 ### Using a remote backend instead
 
@@ -161,8 +172,8 @@ bundled backend fall back to this mode automatically (default
 Requirements: Xcode 15+ or a recent Swift toolchain.
 
 ```bash
-# Backend for the app to talk to (the dev build has no bundled backend):
-pip install -e "../..[all]" && librarian api
+# From the repository root, in a separate terminal:
+pip install -e ".[all]" && librarian api
 
 # App:
 cd apps/macos

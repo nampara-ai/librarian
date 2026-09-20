@@ -308,7 +308,7 @@ final class BackendController: ObservableObject {
         // under Contents/Resources invalidate the code-signature resource seal
         // of a signed/notarized app. (The Docker image sets the same.)
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
-        // Provider API keys live in the Keychain, not on disk; hand them to
+        // Provider API keys live in the Keychain, not in the app's .env; hand them to
         // the backend through its environment.
         for (name, value) in ProviderCredentials.environmentOverlay() {
             environment[name] = value

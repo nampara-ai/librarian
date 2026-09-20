@@ -3,27 +3,27 @@
 ### Drop in messy documents. Get back a clean, classified, searchable library.
 
 Librarian is a local-first **parser + copy-editor + librarian** in one. Hand it transcripts, PDFs,
-DOCX, images, or scans; it extracts the text at near-commercial fidelity, **cleans it with an LLM to
-Chicago-Manual style without inventing or dropping a single fact**, files every document under a
+DOCX, images, or scans; it extracts the text, **can use an LLM to clean it in Chicago Manual of Style
+while preserving source facts**, checks for fidelity problems, files each document under a
 Dewey-style classification, and makes the whole collection full-text searchable. Runs as a native
 **Mac app**, a scriptable **CLI**, and a **FastAPI service** — all on the same engine, all on your
 own machine.
 
 ⬇️ [**Download the Mac app**](https://github.com/nampara-ai/librarian/releases/latest) ·
 🚀 [Quick start](#-quick-start-60-seconds) ·
-⌨️ [CLI reference](#️-cli-reference-every-command) ·
+⌨️ [CLI reference](#cli-reference) ·
 🔌 [API](#-api) ·
 🏛️ [Architecture](docs/ARCHITECTURE.md)
 
 > This is not just a PDF-to-text converter. Plenty of tools turn a PDF into a wall of text.
 > Librarian's job starts *after* extraction: it copy-edits the result, gives it a clean title and a
 > Dewey number, writes an 80–100 word synopsis and metadata tags, and drops it into a searchable,
-> exportable library. The extractor is best-in-class; the **clean-up and organization are what make
-> it Librarian**.
+> exportable library. The **clean-up and organization are what make it Librarian**.
 
-Version `1.9.0` is the stable production release. Everything runs locally by default — source files
-and generated outputs live in a SQLite-backed workspace on your disk, and text leaves your machine
-only when *you* point cleaning, classification, or OCR-correction at an external model provider.
+Version `1.9.0` is the stable production release. The library and extraction cache live on your
+disk; exports go to a folder you choose. With the default mock provider, processing stays local.
+When you connect an external provider, document text or figure images needed for cleaning,
+classification, OCR correction, or figure descriptions are sent to that provider.
 
 ---
 
@@ -35,7 +35,9 @@ only when *you* point cleaning, classification, or OCR-correction at an external
 | ⌨️ **CLI** | The whole pipeline as composable commands, every query command speaks `--json`. | Scripting, automation, bulk corpora. |
 | 🔌 **API** | A local FastAPI service with the same engine behind an HTTP surface. | Wiring Librarian into other tools/agents. |
 
-All three run the **same engine** and the **same local SQLite library**.
+All three run the **same engine**. The Mac app uses
+`~/Library/Application Support/Librarian`; the CLI and API use `./.librarian` by default. To share
+one library, configure the CLI/API with `LIBRARIAN_DATA_DIR` set to the Mac app's data directory.
 
 ---
 
@@ -46,9 +48,10 @@ All three run the **same engine** and the **same local SQLite library**.
 1. Download [**Librarian-AppleSilicon.dmg**](https://github.com/nampara-ai/librarian/releases/latest/download/Librarian-AppleSilicon.dmg)
    (Apple Silicon — M-series). If a direct link doesn't resolve, grab the DMG from the [latest release](https://github.com/nampara-ai/librarian/releases/latest) assets.
 2. Open the DMG and drag **Librarian** to **Applications**, then open it like any other app. Release
-   builds are signed with a Developer ID and notarized by Apple, so there is no Gatekeeper warning
-   and nothing to click through.
-3. Drop files anywhere in the window.
+   builds are signed with a Developer ID and notarized by Apple, so they pass normal macOS
+   Gatekeeper checks.
+3. Drop files anywhere in the window. For AI cleaning, open Settings and connect a provider or a
+   local model; without one, the app still converts and organizes files.
 
 > **Intel Macs:** the native app is Apple Silicon only — a security-patched
 > self-contained Intel build is no longer possible (a bundled dependency
@@ -97,17 +100,19 @@ librarian import ./input --recursive --format md --process
 
 ## 🧠 What actually happens to a document
 
-Each file flows through five stages — and you can stop at any of them:
+From import to export, a document goes through these steps:
 
 1. **Extract** — PDFs, DOCX, images, transcripts, and 20+ formats → clean Markdown. Tables,
    headings, lists, and figures are reconstructed; only the pages that *need* OCR get it.
-2. **Clean** — an LLM copy-edits the Markdown to Chicago-Manual-of-Style prose, fixing OCR noise,
-   line-break artifacts, and spacing **without summarizing, reordering, or inventing**. Source
-   fidelity is validated, not assumed.
-3. **Classify** — a Dewey-style code, a human title, an 80–100 word synopsis, and metadata tags.
+2. **Clean** — with a configured model, copy-edit the Markdown while preserving source facts and
+   order. Chunk checks reject likely truncation, lost numbers, tables, and image references.
+3. **Refine and check** — inspect extraction and whole-document reports, try bounded,
+   source-grounded fixes for flagged issues, and record what was applied, rejected, or deferred.
+   Warnings still need review against the source; a report is not a guarantee of perfect output.
+4. **Classify** — a Dewey-style code, a human title, an 80–100 word synopsis, and metadata tags.
    Recurring publications are linked into series across editions.
-4. **Search** — everything is indexed for fast full-text search with facets and citation lookup.
-5. **Export** — single documents as Markdown/JSON/text, or the whole library as an
+5. **Search** — successful outputs are indexed for full-text search with facets and citation lookup.
+6. **Export** — completed outputs as Markdown/JSON/text, or the whole library as an
    [Open Knowledge Format](docs/OKF.md) bundle for handing to another agent or knowledge tool.
 
 ---
@@ -127,7 +132,7 @@ required.
 | **Engine select** | `LIBRARIAN_PDF_ENGINE=auto\|liteparse\|legacy` | `auto` (default) uses liteparse when installed, else built-in. |
 | **Offline OCR data** | `LIBRARIAN_LITEPARSE_TESSDATA_PATH=/path/to/tessdata` | Point liteparse's OCR at local language data (the Mac app does this for you). |
 | **Higher-accuracy OCR** | `LIBRARIAN_LITEPARSE_OCR_SERVER_URL=...` | Offload OCR to a Surya/EasyOCR/PaddleOCR server. |
-| **Figure → data (vision)** | `LIBRARIAN_FIGURE_VISION_ENABLED=true` | A vision model describes each figure and **reconstructs chart data as a Markdown table**, injected next to the figure so the numbers become searchable text. |
+| **Figure → data (vision)** | `LIBRARIAN_FIGURE_VISION_ENABLED=true` | A vision model describes figures and may render chart values as Markdown tables; verify important values against the source. |
 | **Extraction cache** | on by default | Text-only files reuse the complete extraction; image-bearing PDFs resume from cached text and asset pages (keyed by content hash + engine/OCR config). |
 | **Parallel imports** | `LIBRARIAN_IMPORT_CONCURRENCY=N` (default 2) | Convert/ingest several files at once; order, resume, and per-file failure isolation preserved. |
 | **Extraction timeout** | `LIBRARIAN_EXTRACTION_TIMEOUT_SECONDS=N` | Bound a single document's extraction so one pathological file can't hang a batch. |
@@ -136,7 +141,8 @@ PDF pages are classified and checked against their native text before cleaning. 
 keep their source text, while uncertain chunks use the configured model. The extractor restores
 prose lines and embedded-image references the PDF renderer omitted, repairs collapsed table
 headings, and snapshots dense vector diagrams. The run's **Quality** view shows page repairs,
-cache reuse, and final document checks.
+cache reuse, final refinement actions, and document checks. Open flagged PDF pages from that view
+to compare with the source. Some actions may be rejected or deferred when evidence is insufficient.
 
 When processing a document already in the library, Librarian refreshes its stored extraction if
 the extractor version or extraction settings changed, then updates its text, assets, and quality
@@ -160,6 +166,8 @@ instead of garbage (it only rotates when detection is confident, never flipping 
 On by default; set `LIBRARIAN_OCR_AUTO_ORIENT=false` to disable.
 
 ---
+
+<a id="cli-reference"></a>
 
 ## ⌨️ CLI reference (every command)
 
@@ -242,7 +250,9 @@ The essentials:
 | `LIBRARIAN_LLM_MODEL` | `mock-cleaner` | Model name for cleaning + classification. |
 | `LIBRARIAN_LLM_BASE_URL` | – | Base URL for an OpenAI-compatible endpoint. |
 | `OPENAI_API_KEY` | – | API key (env-var name configurable via `LIBRARIAN_LLM_API_KEY_ENV`). |
-| `LIBRARIAN_LLM_MAX_CONCURRENCY` | `8` | Parallel chunk-cleaning requests. |
+| `LIBRARIAN_LLM_MAX_CONCURRENCY` | `8` | Parallel chunk-cleaning requests; lower this on rate-limited providers. |
+| `LIBRARIAN_LLM_MAX_RETRIES` | `5` | Retries for transient provider failures. |
+| `LIBRARIAN_FINAL_REFINEMENT_ENABLED` | `true` | Source-grounded final pass on reported issues, capped by `LIBRARIAN_FINAL_REFINEMENT_MAX_ACTIONS` (default `32`). |
 | `LIBRARIAN_PDF_ENGINE` | `auto` | Extraction engine (see [the engine](#-the-extraction-engine)). |
 | `LIBRARIAN_FIGURE_VISION_ENABLED` | `false` | Vision pass that turns charts into data tables. |
 | `LIBRARIAN_IMPORT_CONCURRENCY` | `2` | Files converted/ingested in parallel. |
@@ -278,7 +288,7 @@ Primary endpoints:
 - `POST /runs`, `GET /runs`, `GET /runs/{id}`, `POST /runs/{id}/cancel`, `POST /runs/{id}/retry`
 - `GET /runs/{id}/events`, `GET /runs/{id}/events/stream`
 - `GET /runs/{id}/quality`
-- `GET /documents/{id}/content`, `GET /documents/{id}/export?format=json|txt|md`
+- `GET /documents/{id}/content`, `GET /documents/{id}/source`, `GET /documents/{id}/assets`, `GET /documents/{id}/export?format=json|txt|md`
 - `GET /export/okf`, `GET /documents/{id}/okf`
 - `POST /search`, `POST /search/results`, `POST /search/facets`
 - `GET /metrics`, `GET /metrics/prometheus`
@@ -306,11 +316,12 @@ converted files `new-directory`, `original`, or `subdirectory` instead. Back the
 
 ## 🔒 Private by default
 
-Librarian stores everything locally. Text is sent to a model provider **only** when cleaning,
-classification, or OCR-correction actually needs LLM work — and only to the provider you configure.
-With the default `mock` provider, nothing leaves your machine. Keep API keys in environment variables
-or `.env`, never in Git. CI runs secret scanning, dependency audit, type checking, the full test
-suite, a wheel smoke-install, and Docker build checks on every change.
+Librarian stores its library locally. Document text or figure images are sent to a model provider
+when the configured provider is needed for cleaning, classification, OCR correction, final
+refinement, or figure descriptions. With the default `mock` provider, nothing leaves your machine.
+Keep CLI/API provider keys in environment variables or `.env`, and Mac app keys in Keychain; never
+commit them. CI runs secret scanning, dependency audit, type checking, the full test suite, a wheel
+smoke-install, and Docker build checks on every change.
 
 ---
 

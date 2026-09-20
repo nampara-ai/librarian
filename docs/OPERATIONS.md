@@ -4,7 +4,7 @@ This runbook covers the stable single-node production profile: local CLI use, on
 
 ## Storage
 
-SQLite is the supported 1.0 storage backend. Librarian opens connections with WAL mode, foreign keys, `synchronous=NORMAL`, and a 5-second busy timeout. Use a persistent disk or volume and run migrations before starting API or worker processes when startup ordering matters.
+SQLite is the supported storage backend. Librarian opens connections with WAL mode, foreign keys, `synchronous=NORMAL`, and a 5-second busy timeout. Use a persistent disk or volume and run migrations before starting API or worker processes when startup ordering matters.
 
 ```bash
 librarian migrate
@@ -70,12 +70,38 @@ Archive formats are rejected by default, and common archive signatures are rejec
 
 Librarian does not log source text or generated document content. Persisted error strings are redacted and length-capped before status APIs expose them. JSON and text logging redact common credential patterns, bearer tokens, and `sk-...` provider keys.
 
+## Run Quality And Provider Failures
+
+For a completed Mac app run, open **Quality** on its row. The view shows page extraction repairs,
+whole-document warnings, and final refinement actions. Use **Review page** for a flagged PDF page;
+compare the exported Markdown with the stored source. An `applied` action passed the edit checks;
+`rejected` or `deferred` means the issue still needs review. The final pass has an action budget
+(`LIBRARIAN_FINAL_REFINEMENT_MAX_ACTIONS`, default 32), so large or noisy documents may retain
+warnings. The API exposes the same reports at `GET /runs/{id}/quality` and run progress at
+`GET /runs/{id}/events`.
+
+If a provider returns rate limits or timeouts, inspect the run status and the Mac backend log or
+API/worker logs, then lower
+`LIBRARIAN_LLM_MAX_CONCURRENCY` (default 8) or `LIBRARIAN_IMPORT_CONCURRENCY` (default 2) before
+retrying. `LIBRARIAN_LLM_MAX_RETRIES` (default 5) controls retries for transient model failures;
+`LIBRARIAN_LLM_TIMEOUT_SECONDS` (default 120) bounds each request. A content refusal or persistent
+provider error may require a different provider or model. `POST /runs/{id}/retry` starts a new run
+for a failed one. A failed reprocess leaves any previous successful export available.
+
+The extraction cache is enabled by default. Reprocessing a document may reuse extracted pages or
+cleaned chunks when their cache keys still match; inspect the quality report's cache counts when
+comparing a repeated run with a fresh import. For a true first-run test, use a fresh data directory
+or reset the Mac app as described in [its guide](../apps/macos/README.md#resetting-the-app-for-a-fresh-test).
+
 ## Performance
 
 Performance depends on provider, model, document type, OCR path, and concurrency settings. Record these values when comparing runs:
 
 - model/provider/base URL
 - `LIBRARIAN_LLM_MAX_CONCURRENCY`
+- `LIBRARIAN_LLM_MAX_OUTPUT_TOKENS`
+- `LIBRARIAN_FINAL_REFINEMENT_MAX_ACTIONS`
+- `LIBRARIAN_IMPORT_CONCURRENCY`
 - `LIBRARIAN_OCR_PAGE_CONCURRENCY`
 - `LIBRARIAN_OCR_LLM_CORRECTION`
 - `LIBRARIAN_OCR_ROTATION_RETRY`

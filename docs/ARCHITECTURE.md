@@ -63,8 +63,9 @@ The pipeline is a resumable DAG:
 4. Clean chunks concurrently where the selected coherence mode allows it.
 5. Validate chunk outputs.
 6. Assemble the document.
-7. Classify and tag.
-8. Index for search.
+7. Audit the whole document and attempt bounded, source-grounded repairs for flagged issues.
+8. Classify and tag; run the final document fidelity check.
+9. Publish the successful output and index it for search.
 
 The default execution model should favor throughput:
 
@@ -86,9 +87,9 @@ The default production mode is `balanced`, which keeps local context while prese
 ## Content Storage
 
 The content store persists raw text, chunks, cleaned chunks, final outputs, and the FTS mirror
-in SQLite. This keeps the first release portable and easy to back up, but it duplicates large text
+in SQLite. This keeps local deployments portable and easy to back up, but it duplicates large text
 payloads. A filesystem or object-store content adapter remains a future option for very large
-hosted deployments; SQLite is the supported 1.0 backend.
+hosted deployments; SQLite is the supported backend.
 
 Search goes through the application-layer `SearchIndex` port. The default adapter is SQLite FTS over
 cleaned and raw outputs, with snippets, facets, pagination, and filters. Results use BM25 ranking
@@ -100,13 +101,11 @@ rather than changing API or CLI route code.
 ## Prompt Governance
 
 Prompts live under `src/librarian/prompts`. Prompt text is versioned and recorded in run metadata.
-The default cleaning prompt is `cmos_v4`, which layers three additions onto the prototype's CMOS
-copy-editing intent: explicit OCR-cleanup/structure/context-marker/chunk-fidelity instructions
-(`cmos_v2`), verbatim preservation of numbers, dates, identifiers, and tables (`cmos_v3`), and
-tightly-scoped implicit-structure rendering — plain-text titles and standalone chapter/section
-lines become Markdown headings, and running title blocks repeated between chapters collapse to
-one (`cmos_v4`). Earlier versions remain bundled so older run provenance and cache keys stay
-resolvable. Classification prompts are versioned the same way (`dewey_v1`–`dewey_v5`).
+The default cleaning prompt is `cmos_v5`. It adds explicit source-fidelity and structure rules to
+the earlier CMOS prompts: preserve substantive content, numbers, tables, page markers, and image
+references while fixing OCR and copy-editing errors. Earlier versions remain bundled so older run
+provenance and cache keys stay resolvable. Classification prompts are versioned the same way;
+`dewey_v5` is the default.
 Startup settings reject prompt versions that are not bundled with the package.
 
 ## Migrations

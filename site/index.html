@@ -63,13 +63,13 @@
 <body>
   <section class="hero">
     <h1>📖 Librarian</h1>
-    <p class="tagline">Drop in your documents. Get back a clean, classified, searchable library. Everything stays on your Mac.</p>
+    <p class="tagline">Drop in your documents. Get back a clean, classified, searchable library. Processing stays local until you connect an external AI provider.</p>
     <div class="buttons">
       <a class="button primary" href="https://github.com/nampara-ai/librarian/releases/latest/download/Librarian-AppleSilicon.dmg">
         Download for Apple&nbsp;Silicon
       </a>
-      <a class="button secondary" href="https://github.com/nampara-ai/librarian/releases/latest/download/Librarian-Intel.dmg">
-        Download for Intel&nbsp;Macs
+      <a class="button secondary" href="https://github.com/nampara-ai/librarian#the-cli--api-python-312">
+        Intel Mac: CLI / API
       </a>
     </div>
     <p class="fineprint">
@@ -86,7 +86,7 @@
       </div>
       <div class="feature">
         <h3>✨ Cleaned &amp; classified</h3>
-        <p>Documents are converted, cleaned, and filed under Dewey-style labels automatically, with live progress for every step.</p>
+        <p>Documents are converted and filed under Dewey-style labels, with optional AI cleaning, source-grounded refinement, and live progress.</p>
       </div>
       <div class="feature">
         <h3>🔍 Instant full-text search</h3>
@@ -101,21 +101,20 @@
     <div class="install">
       <h2>Install in three steps</h2>
       <ol>
-        <li>Download the DMG for your Mac (Apple&nbsp;menu&nbsp;→ About&nbsp;This&nbsp;Mac shows your chip).</li>
+        <li>Download the Apple&nbsp;Silicon DMG (Apple&nbsp;menu&nbsp;→ About&nbsp;This&nbsp;Mac shows your chip).</li>
         <li>Open it and drag <strong>Librarian</strong> into <strong>Applications</strong>.</li>
-        <li>Launch Librarian and drop in your first file.</li>
+        <li>Launch Librarian, connect a model in Settings if you want AI cleaning, and drop in your first file.</li>
       </ol>
       <p style="margin-top:14px; color: var(--muted); font-size: 15px;">
-        First launch on an unsigned build: right-click the app, choose <em>Open</em>, then <em>Open</em> again —
-        or allow it under System&nbsp;Settings&nbsp;→ Privacy&nbsp;&amp;&nbsp;Security.
+        Release DMGs are signed and notarized for macOS 14 or newer. Intel Macs can run the Python CLI/API; no Intel DMG is published.
       </p>
     </div>
   </main>
 
   <footer>
     <a href="https://github.com/nampara-ai/librarian">Source on GitHub</a> ·
-    Apache-2.0 · Built with the Librarian engine — also available as a
-    <a href="https://github.com/nampara-ai/librarian#install">CLI and API</a>.
+    MIT · Built with the Librarian engine — also available as a
+    <a href="https://github.com/nampara-ai/librarian#the-cli--api-python-312">CLI and API</a>.
   </footer>
 </body>
 </html>

@@ -30,6 +30,10 @@ Requests above `LIBRARIAN_API_MAX_REQUEST_BYTES` are rejected before routing, ei
 - `GET /documents/{id}/content?offset=0&limit=...`: latest cleaned output as a bounded JSON page.
   When `limit` is omitted, the response is capped by `LIBRARIAN_API_MAX_CONTENT_CHARS`; full
   downloads should use `/export`.
+- `GET /documents/{id}/source`: download the stored original file for source-page review;
+  `404` if the document or stored file is unavailable.
+- `GET /documents/{id}/assets`: list extracted document assets with `filename`, `media_type`,
+  `sha256`, and base64-encoded `data_base64`; `404` if the document is unavailable.
 - `GET /documents/{id}/export?format=json|txt|md`: export latest output. JSON exports return
   `document_id`, `filename`, `classification`, `title`, `summary`, `tags`, `suggested_stem`, and
   `text`; `txt` and `md` exports return `text/plain` and `text/markdown` bodies respectively.
@@ -42,7 +46,9 @@ Requests above `LIBRARIAN_API_MAX_REQUEST_BYTES` are rejected before routing, ei
   `citation_quote` when the original source is a timestamped transcript to include optional
   quote-grounded `transcript_citation` evidence in JSON and Markdown exports. Unsupported `format`
   values return `code: "bad_request"` before document lookup.
-- `GET /export/okf?classification_prefix=&tag=&limit=`: render all processed documents as an
+  Content and export endpoints read the latest *successful* run, so a failed reprocess does not
+  replace an earlier successful output.
+- `GET /export/okf?classification_prefix=&tag=&series=&limit=`: render all processed documents as an
   [Open Knowledge Format](OKF.md) v0.1 bundle. Returns `{ "okf_version", "files": {path: content},
   "skipped": [ids] }` where `files` is the complete bundle (concept markdown + generated
   `index.md` files), organized by Dewey classification. Documents without a cleaned output and
@@ -101,8 +107,14 @@ validated before conversion starts and must not be symlinks or cross symlinked p
 - `GET /runs?limit=100&offset=0`: list runs. Responses include `total`, `limit`, and `offset`
   so operator clients can page through large run histories.
 - `GET /runs/{id}`: run status.
-- `GET /runs/{id}/quality`: extraction page types, per-page repair/fidelity results,
-  cache reuse, and final document checks. Reports can be absent for older runs.
+- `GET /runs/{id}/quality`: returns `run_id`, `document_id`, and nullable `extraction` and
+  `processing` reports. Extraction includes page types and per-page repair/fidelity results.
+  Processing includes chunk/cache counts, document checks (`warnings` and `fatal`), unmatched
+  table-of-contents entries, and `refinement` when available. The refinement report has
+  `attempted`, `applied`, `rejected`, `deferred`, and `actions`; each action has a `kind`, `label`,
+  `status`, optional `reason`, and optional `page_number`. A rejected or deferred action is still
+  a review item, and no warning count guarantees the export matches the source perfectly. Reports
+  can be absent for older runs or runs that did not reach the relevant stage.
 - `POST /runs/{id}/cancel`: mark a run canceled.
 - `POST /runs/{id}/retry`: replay a failed run as a new run.
 - `GET /runs/{id}/events?limit=500&offset=0`: run events. Responses include `events`,
