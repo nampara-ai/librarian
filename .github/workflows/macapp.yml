@@ -296,7 +296,7 @@ jobs:
       # after the fact. Tag builds publish the DMG as a workflow artifact;
       # the Release workflow collects both artifacts and includes them in
       # its single atomic `gh release create`.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: apps/macos/dist/${{ matrix.artifact }}.dmg
