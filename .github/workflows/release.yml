@@ -169,7 +169,7 @@ jobs:
             constraints.txt
             SHA256SUMS.txt
       - name: Upload distributions
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v6
         with:
           name: release-${{ github.ref_name }}
           retention-days: 30
