@@ -72,6 +72,14 @@ Librarian does not log source text or generated document content. Persisted erro
 
 ## Run Quality And Provider Failures
 
+Chunk fidelity failures trigger up to `LIBRARIAN_CLEANING_FIDELITY_MAX_RETRIES` (default 2)
+additional cleaning attempts. Each retry uses the original source and explicit validation
+diagnostics, including numeric-token counts. This budget is separate from transport retries.
+If the model still loses content or changes protected data, the run fails and keeps the original
+source available. Raw source is never substituted for a successful cleaned chunk. Prior successful
+exports remain available, and passing chunks are cached for a later retry. Legacy cached source
+fallbacks are re-cleaned rather than accepted as completed work.
+
 For a completed Mac app run, open **Quality** on its row. The view shows page extraction repairs,
 whole-document warnings, and final refinement actions. Use **Review page** for a flagged PDF page;
 compare the exported Markdown with the stored source. An `applied` action passed the edit checks;

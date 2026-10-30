@@ -8,7 +8,7 @@ from typing import Any, cast
 import pytest
 
 from librarian.application.classify_document import ClassifyDocument
-from librarian.application.clean_chunks import CleanChunks
+from librarian.application.clean_chunks import CleanChunks, CleanedChunk, FidelityValidationError
 from librarian.application.factory import build_container
 from librarian.application.ports import EventSink, OutputRepository
 from librarian.application.process_document import ProcessDocument, select_pdf_chunks_for_cleaning
@@ -181,6 +181,64 @@ async def test_ingest_process_and_search_round_trip(tmp_path: Path) -> None:
     events = await container.repository.list_events(second_run.id)
 
     assert any("1 cache hit(s)" in event for event in events)
+
+
+@pytest.mark.asyncio
+async def test_failed_fidelity_repair_preserves_previous_published_output(tmp_path: Path) -> None:
+    source = tmp_path / "numeric-notes.txt"
+    source.write_text("The timeout must remain 120 seconds.", encoding="utf-8")
+    container = await build_container(Settings(data_dir=tmp_path / "data"))
+    ingested = await container.ingest_document.execute(source)
+    original_run = await container.process_document.execute(ingested.document.id)
+
+    class LosingProvider:
+        name = "losing-provider"
+        calls = 0
+
+        async def complete(self, **_: object) -> str:
+            self.calls += 1
+            return "The timeout must remain unchanged."
+
+    provider = LosingProvider()
+    cleaner = replace(container.process_document.cleaner, provider=provider)  # type: ignore[arg-type]
+    process = replace(container.process_document, cleaner=cleaner)
+    queued = await process.start(ingested.document.id)
+
+    with pytest.raises(FidelityValidationError, match="missing-verbatim-number"):
+        await process.execute_existing(queued.id)
+
+    latest = await container.repository.get_run(queued.id)
+    output = await container.repository.get_cleaned_output(ingested.document.id)
+    assert latest is not None and latest.status == RunStatus.FAILED
+    assert output is not None and output.run_id == original_run.id
+    assert "120 seconds" in output.text
+    assert provider.calls == 3
+    assert source.read_text() == "The timeout must remain 120 seconds."
+
+
+@pytest.mark.asyncio
+async def test_processing_recleans_legacy_raw_fallback_cache(tmp_path: Path) -> None:
+    source = tmp_path / "cached-notes.txt"
+    source.write_text("The timeout is 120 seconds.", encoding="utf-8")
+    container = await build_container(Settings(data_dir=tmp_path / "data"))
+    ingested = await container.ingest_document.execute(source)
+    cleaner = container.process_document.cleaner
+    chunks = chunk_text(
+        ingested.document.id, ingested.raw_text, container.process_document.chunking_policy
+    )
+    await container.repository.save_cleaned_chunk_cache(
+        [CleanedChunk(chunks[0], chunks[0].text, ("source-preserved-after-fidelity-check",))],
+        prompt_version=cleaner.prompt_version,
+        model_provider=cleaner.provider.name,
+        model_name=cleaner.model,
+    )
+
+    run = await container.process_document.execute(ingested.document.id)
+
+    quality = json.loads(await container.repository.get_text(run_quality_key(run.id)))
+    assert run.status == RunStatus.SUCCEEDED
+    assert quality["cached_cleaned_chunks"] == 0
+    assert quality["source_preserved_chunks"] == 0
 
 
 @pytest.mark.asyncio
@@ -445,7 +503,7 @@ async def test_balanced_coherence_carries_context_within_parallel_groups() -> No
         ) -> str:
             del system_prompt, model, max_tokens, temperature
             self.prompts.append(user_prompt)
-            return user_prompt
+            return user_prompt.split("]\n\n", 1)[-1]
 
     provider = RecordingProvider()
     cleaner = CleanChunks(
@@ -522,12 +580,12 @@ async def test_clean_chunks_preserves_markdown_quality_warnings() -> None:
         model="test",
     )
 
-    results = await cleaner.execute([chunk])
-
-    assert "missing-markdown-heading" in results[0].warnings
-    assert "missing-markdown-list" in results[0].warnings
-    assert "missing-markdown-table" in results[0].warnings
-    assert "missing-citation-marker" in results[0].warnings
+    with pytest.raises(FidelityValidationError) as failure:
+        await cleaner.execute([chunk])
+    assert "missing-markdown-heading" in failure.value.warnings
+    assert "missing-markdown-list" in failure.value.warnings
+    assert "missing-markdown-table" in failure.value.warnings
+    assert "missing-citation-marker" in failure.value.warnings
 
 
 @pytest.mark.asyncio
@@ -1045,7 +1103,7 @@ async def test_failed_clean_preserves_completed_chunks_for_retry(tmp_path: Path)
             if len(self.calls) == 2:
                 raise RuntimeError("provider failed on second chunk")
             if user_prompt.startswith("[CONTEXT:"):
-                return user_prompt.split("\n\n", 1)[-1]
+                return user_prompt.split("]\n\n", 1)[-1]
             return user_prompt
 
     provider = FailOnceProvider()
@@ -1160,7 +1218,7 @@ async def test_clean_chunks_reports_per_chunk_progress(coherence_mode: str) -> N
             temperature: float,
         ) -> str:
             del system_prompt, model, max_tokens, temperature
-            return user_prompt
+            return user_prompt.split("]\n\n", 1)[-1]
 
     chunks = [
         Chunk(

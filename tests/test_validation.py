@@ -1,7 +1,12 @@
 import pytest
 from pydantic import ValidationError
 
-from librarian.application.clean_chunks import CleanChunks, CleanedChunk, strip_repeated_context
+from librarian.application.clean_chunks import (
+    CleanChunks,
+    CleanedChunk,
+    FidelityValidationError,
+    strip_repeated_context,
+)
 from librarian.config import Settings
 from librarian.domain.ids import ChunkId, DocumentId
 from librarian.domain.models import Chunk, RunStage
@@ -141,7 +146,7 @@ def test_strip_repeated_context_handles_markdown_punctuation_changes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cleaner_preserves_source_when_model_loses_a_figure() -> None:
+async def test_cleaner_fails_after_retries_when_model_loses_a_figure() -> None:
     source = "Figure 1\n\n![](image_p1_0.png)\n\nDetailed caption text."
 
     class DropsFigureProvider:
@@ -166,15 +171,14 @@ async def test_cleaner_preserves_source_when_model_loses_a_figure() -> None:
         model="test",
     )
 
-    result = (await cleaner.execute([chunk]))[0]
-
-    assert result.text == source
-    assert "changed-markdown-images" in result.warnings
-    assert "source-preserved-after-fidelity-check" in result.warnings
+    with pytest.raises(FidelityValidationError, match="changed-markdown-images") as failure:
+        await cleaner.execute([chunk])
+    assert failure.value.attempts == 3
+    assert failure.value.chunk.text == source
 
 
 @pytest.mark.asyncio
-async def test_cleaner_preserves_source_when_model_loses_a_number() -> None:
+async def test_cleaner_fails_after_retries_when_model_loses_a_number() -> None:
     source = "Keep the timeout at 120 seconds for all production requests."
 
     class DropsNumberProvider:
@@ -199,15 +203,12 @@ async def test_cleaner_preserves_source_when_model_loses_a_number() -> None:
         model="test",
     )
 
-    result = (await cleaner.execute([chunk]))[0]
-
-    assert result.text == source
-    assert "missing-verbatim-number" in result.warnings
-    assert "source-preserved-after-fidelity-check" in result.warnings
+    with pytest.raises(FidelityValidationError, match="missing-verbatim-number"):
+        await cleaner.execute([chunk])
 
 
 @pytest.mark.asyncio
-async def test_cleaner_preserves_source_when_model_adds_a_number() -> None:
+async def test_cleaner_fails_after_retries_when_model_adds_a_number() -> None:
     source = "Keep the timeout at 120 seconds for all production requests."
 
     class AddsNumberProvider:
@@ -232,11 +233,67 @@ async def test_cleaner_preserves_source_when_model_adds_a_number() -> None:
         model="test",
     )
 
-    result = (await cleaner.execute([chunk]))[0]
+    with pytest.raises(FidelityValidationError, match="added-verbatim-number"):
+        await cleaner.execute([chunk])
+
+
+@pytest.mark.asyncio
+async def test_cleaner_repairs_failed_output_from_original_with_numeric_diagnostics() -> None:
+    source = "The timeout is 120 seconds and the retry limit is 3."
+
+    class RepairingProvider:
+        name = "repairing"
+
+        def __init__(self) -> None:
+            self.prompts: list[tuple[str, str]] = []
+
+        async def complete(self, *, system_prompt: str, user_prompt: str, **_: object) -> str:
+            self.prompts.append((system_prompt, user_prompt))
+            return "The timeout is 120 seconds." if len(self.prompts) == 1 else source
+
+    provider = RepairingProvider()
+    chunk = Chunk(ChunkId("retry"), DocumentId("retry-doc"), 0, source, 0, len(source), "a" * 64)
+    cleaner = CleanChunks(provider, PromptCatalog(), "cmos_v5", "test")  # type: ignore[arg-type]
+    completed: list[CleanedChunk] = []
+
+    async def note(result: CleanedChunk) -> None:
+        completed.append(result)
+
+    result = (await cleaner.execute([chunk], on_chunk_cleaned=note))[0]
 
     assert result.text == source
-    assert "added-verbatim-number" in result.warnings
-    assert "source-preserved-after-fidelity-check" in result.warnings
+    assert result.warnings == ()
+    assert completed == [result]
+    assert len(provider.prompts) == 2
+    assert all(user == source for _, user in provider.prompts)
+    assert "missing-verbatim-number" in provider.prompts[1][0]
+    assert '"120": 1' in provider.prompts[1][0]
+    assert '"3": 1' in provider.prompts[1][0]
+
+
+@pytest.mark.asyncio
+async def test_fidelity_retry_budget_can_be_disabled() -> None:
+    class EmptyProvider:
+        name = "empty"
+        calls = 0
+
+        async def complete(self, **_: object) -> str:
+            self.calls += 1
+            return ""
+
+    source = "A substantive sentence."
+    chunk = Chunk(ChunkId("empty"), DocumentId("empty-doc"), 0, source, 0, len(source), "b" * 64)
+    provider = EmptyProvider()
+    cleaner = CleanChunks(
+        provider,
+        PromptCatalog(),
+        "cmos_v5",
+        "test",
+        max_fidelity_retries=0,  # type: ignore[arg-type]
+    )
+    with pytest.raises(FidelityValidationError, match="after 1 attempt"):
+        await cleaner.execute([chunk])
+    assert provider.calls == 1
 
 
 def test_cleaner_revalidates_stale_cached_output() -> None:

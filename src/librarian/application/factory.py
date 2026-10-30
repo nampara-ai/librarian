@@ -146,6 +146,7 @@ async def build_container(
         coherence_mode=resolved_settings.coherence_mode,
         max_parallel_chunks=resolved_settings.llm_max_concurrency,
         max_response_chars=resolved_settings.llm_max_response_chars,
+        max_fidelity_retries=resolved_settings.cleaning_fidelity_max_retries,
         context_chars=resolved_settings.chunk_overlap_chars,
     )
     taxonomy = ingest_container.taxonomy

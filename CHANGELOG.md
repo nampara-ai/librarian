@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Retry failed chunk fidelity checks with source-grounded repair instructions and a bounded
+  budget. Fail unresolved cleaning instead of publishing raw source as a successful clean;
+  reprocess legacy raw-fallback cache entries.
+
 ## 1.9.0 - 2026-09-20
 
 PDF fidelity, reliable long-running processing, and an actionable final quality review.

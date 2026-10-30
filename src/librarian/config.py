@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     # return a fully-cleaned chunk (~chunk_target_chars); token-dense text
     # (CJK, tables, dense OCR) needs headroom or the provider truncates.
     llm_max_output_tokens: int = Field(default=16_384, gt=0)
+    cleaning_fidelity_max_retries: int = Field(default=2, ge=0, le=5)
     final_refinement_enabled: bool = Field(default=True)
     # A bounded number of one-call, source-grounded fixes prevents a noisy
     # report from turning one document into hundreds of provider requests.

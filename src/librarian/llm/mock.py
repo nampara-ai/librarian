@@ -72,6 +72,8 @@ class MockLLMProvider:
 
 def _normalize_cleaned_text(value: str) -> str:
     """Normalize intra-line whitespace while preserving document structure."""
+    if value.startswith("[CONTEXT:"):
+        value = value.split("]\n\n", 1)[-1]
     lines = [
         _normalize_common_ocr_noise(" ".join(line.split()))
         for line in value.splitlines()

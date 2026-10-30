@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
+from collections import Counter
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -11,7 +13,7 @@ from typing import Any, Literal
 from librarian.application.ports import LLMProvider
 from librarian.domain.models import Chunk
 from librarian.observability import sanitize_error_message
-from librarian.pipeline.validation import validate_cleaned_text
+from librarian.pipeline.validation import VERBATIM_NUMBER_REGEX, validate_cleaned_text
 from librarian.prompts.loader import PromptCatalog
 
 CoherenceMode = Literal["fast", "balanced", "max-coherence"]
@@ -61,6 +63,26 @@ class CleanedChunk:
     chunk: Chunk
     text: str
     warnings: tuple[str, ...]
+
+    @property
+    def fidelity_failed(self) -> bool:
+        return bool(_FIDELITY_WARNINGS.intersection(self.warnings)) or (
+            "source-preserved-after-fidelity-check" in self.warnings
+        )
+
+
+class FidelityValidationError(ValueError):
+    """Cleaning exhausted its bounded repair budget without a faithful result."""
+
+    def __init__(self, chunk: Chunk, attempts: int, warnings: tuple[str, ...]) -> None:
+        self.chunk = chunk
+        self.attempts = attempts
+        self.warnings = warnings
+        super().__init__(
+            f"Cleaning chunk {chunk.ordinal + 1} failed fidelity checks after {attempts} "
+            f"attempt(s): {', '.join(warnings)}. Original source remains available; "
+            "no uncleaned replacement was published."
+        )
 
 
 ChunkCleanedCallback = Callable[[CleanedChunk], Awaitable[None]]
@@ -124,6 +146,7 @@ class CleanChunks:
     max_parallel_chunks: int = 8
     balanced_group_size: int = 4
     max_response_chars: int = 2 * 1024 * 1024
+    max_fidelity_retries: int = 2
     # Trailing characters of the preceding chunk handed to the cleaner as
     # read-only continuity context. Chunks no longer overlap in the source, so
     # this replaces the (previously duplicated) overlap for boundary coherence.
@@ -241,32 +264,49 @@ class CleanChunks:
         if previous_context:
             user_prompt = f"[CONTEXT: This continues from: {previous_context}]\n\n{chunk.text}"
 
-        try:
-            raw = await self.provider.complete(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                model=self.model,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
+        warnings: tuple[str, ...] = ()
+        for attempt in range(max(0, self.max_fidelity_retries) + 1):
+            prompt = system_prompt
+            if attempt:
+                diagnostics = {
+                    "failed_checks": list(warnings),
+                    "numeric_tokens_and_counts": dict(
+                        Counter(VERBATIM_NUMBER_REGEX.findall(chunk.text))
+                    ),
+                    "source_word_count": len(re.findall(r"\b\w+\b", chunk.text)),
+                }
+                prompt += "\n\n" + self.prompt_catalog.get("repair", "fidelity_v1")
+                prompt += "\n\nValidation diagnostics:\n" + json.dumps(diagnostics)
+            try:
+                raw = await self.provider.complete(
+                    system_prompt=prompt,
+                    user_prompt=user_prompt,
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    temperature=self.temperature,
+                )
+            except Exception as exc:  # noqa: BLE001 - identify the chunk without its source text
+                raise RuntimeError(
+                    f"Cleaning chunk {chunk.ordinal + 1} failed: {sanitize_error_message(exc)}"
+                ) from None
+            if len(raw) > self.max_response_chars:
+                raise ValueError(
+                    "cleaning provider response exceeded configured character limit "
+                    f"({len(raw)} > {self.max_response_chars})"
+                )
+            raw, stripped_context = strip_repeated_context(raw, previous_context)
+            validated = validate_cleaned_text(
+                raw, input_size=len(chunk.text), source_text=chunk.text
             )
-        except Exception as exc:  # noqa: BLE001 - identify the failed chunk without its text
-            raise RuntimeError(
-                f"Cleaning chunk {chunk.ordinal + 1} failed: {sanitize_error_message(exc)}"
-            ) from None
-        if len(raw) > self.max_response_chars:
-            raise ValueError(
-                "cleaning provider response exceeded configured character limit "
-                f"({len(raw)} > {self.max_response_chars})"
-            )
-        raw, stripped_context = strip_repeated_context(raw, previous_context)
-        extra_warnings = ("repeated-context-stripped",) if stripped_context else ()
-        return self.revalidate(
-            CleanedChunk(
-                chunk=chunk,
-                text=raw,
-                warnings=extra_warnings,
-            )
-        )
+            warnings = validated.warnings
+            if not _FIDELITY_WARNINGS.intersection(warnings):
+                return CleanedChunk(
+                    chunk=chunk,
+                    text=validated.text,
+                    warnings=(("repeated-context-stripped",) if stripped_context else ())
+                    + warnings,
+                )
+        raise FidelityValidationError(chunk, max(0, self.max_fidelity_retries) + 1, warnings)
 
     def revalidate(self, cleaned: CleanedChunk) -> CleanedChunk:
         """Apply current output and fidelity rules to a fresh or cached chunk.

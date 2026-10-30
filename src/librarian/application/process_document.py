@@ -233,7 +233,11 @@ class ProcessDocument:
                     model_provider=self.cleaner.provider.name,
                     model_name=self.cleaner.model,
                 )
-                cached_chunks = [self.cleaner.revalidate(chunk) for chunk in loaded_cached_chunks]
+                cached_chunks = [
+                    validated
+                    for chunk in loaded_cached_chunks
+                    if not (validated := self.cleaner.revalidate(chunk)).fidelity_failed
+                ]
                 if cached_chunks != loaded_cached_chunks:
                     # Upgrade stale cache entries to the current validation
                     # policy once, then reuse the safe result on later runs.
@@ -290,6 +294,12 @@ class ProcessDocument:
                     stage=RunStage.VALIDATE,
                 )
                 await self.outputs.save_cleaned_chunks(run_id, cleaned_chunks)
+                unresolved = [chunk for chunk in cleaned_chunks if chunk.fidelity_failed]
+                if unresolved:
+                    raise ValueError(
+                        f"Cleaning incomplete: {len(unresolved)} chunk(s) failed fidelity checks; "
+                        "refusing to publish raw source as cleaned output"
+                    )
                 failed_chunks = sum(1 for chunk in cleaned_chunks if not chunk.text.strip())
                 completed_chunks = len(cleaned_chunks) - failed_chunks
                 fidelity_fallbacks = sum(
