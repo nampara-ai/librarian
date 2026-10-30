@@ -25,3 +25,40 @@ def test_chunking_policy_rejects_invalid_overlap() -> None:
         assert "overlap_chars" in str(exc)
     else:
         raise AssertionError("expected invalid policy to fail")
+
+
+def test_unpunctuated_transcript_never_splits_words() -> None:
+    text = " ".join("presupposes amazing things happen" for _ in range(80))
+    chunks = chunk_text(
+        DocumentId("words"),
+        text,
+        ChunkingPolicy(target_chars=67, overlap_chars=5, min_chunk_chars=5),
+    )
+    assert len(chunks) > 3
+    for chunk in chunks:
+        assert text[chunk.start_char : chunk.end_char] == chunk.text
+        assert chunk.start_char == 0 or text[chunk.start_char - 1].isspace()
+        assert chunk.end_char == len(text) or text[chunk.end_char].isspace()
+    assert " ".join(chunk.text for chunk in chunks) == text
+
+
+def test_chunker_keeps_large_code_blocks_and_tables_atomic() -> None:
+    code = "```python\n" + "if ready:\n    run()\n" * 20 + "```"
+    table = "| Name | Value |\n|---|---|\n" + "| Alice | 120 |\n" * 20
+    text = "Before the code.\n\n" + code + "\n\nBetween blocks.\n\n" + table + "\nAfter."
+    chunks = chunk_text(
+        DocumentId("blocks"),
+        text,
+        ChunkingPolicy(target_chars=100, overlap_chars=10, min_chunk_chars=5),
+    )
+    assert sum(code in chunk.text for chunk in chunks) == 1
+    assert sum(table.strip() in chunk.text for chunk in chunks) == 1
+    assert all(chunk.text.count("```") in (0, 2) for chunk in chunks)
+
+
+def test_chunker_does_not_cut_a_long_identifier_without_whitespace() -> None:
+    text = "identifier" * 100
+    chunks = chunk_text(
+        DocumentId("identifier"), text, ChunkingPolicy(target_chars=50, overlap_chars=0)
+    )
+    assert [chunk.text for chunk in chunks] == [text]

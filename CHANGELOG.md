@@ -5,6 +5,8 @@
 - Retry failed chunk fidelity checks with source-grounded repair instructions and a bounded
   budget. Fail unresolved cleaning instead of publishing raw source as a successful clean;
   reprocess legacy raw-fallback cache entries.
+- Keep words, fenced code, and Markdown tables intact at chunk boundaries. Preserve source
+  quotations, code indentation, hard line breaks, and intentional repetition during cleanup.
 
 ## 1.9.0 - 2026-09-20
 

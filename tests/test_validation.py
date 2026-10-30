@@ -33,6 +33,21 @@ def test_validation_reports_empty_output() -> None:
     assert result.warnings == ("empty-output",)
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        'She said, "I cannot read the inscription."\nThe meeting ended.',
+        "I cannot read the inscription.\nThe meeting ended.",
+        '```python\nif ready:\n    print("I cannot read")\n\n\n\n    run()\n```',
+        "- Main item\n    - Nested item\n\nA hard line break.  \nNext line.",
+    ],
+)
+def test_validation_preserves_source_quotes_code_and_markdown_whitespace(source: str) -> None:
+    result = validate_cleaned_text(source, input_size=len(source), source_text=source)
+    assert result.text == source
+    assert "artifact-filtered" not in result.warnings
+
+
 def test_validation_warns_when_markdown_structure_is_lost() -> None:
     source = """# Visit Notes
 

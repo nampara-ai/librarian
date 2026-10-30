@@ -6,6 +6,8 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
+from librarian.pipeline.markdown import normalize_markdown_whitespace, transform_prose
+
 ARTIFACT_PATTERNS = [
     r"I am ready to (?:begin|process)",
     r"I'm ready to (?:begin|process|edit)",
@@ -70,10 +72,10 @@ def validate_cleaned_text(
     if not text:
         return ValidationResult(text="", warnings=("empty-output",))
 
-    if ARTIFACT_REGEX.search(text):
+    filtered = filter_artifact_lines(text, source_text=source_text)
+    if filtered != text:
         warnings.append("artifact-filtered")
-        lines = [line for line in text.splitlines() if not ARTIFACT_REGEX.search(line)]
-        text = "\n".join(lines).strip()
+        text = filtered
 
     if not text:
         warnings.append("empty-after-artifact-filter")
@@ -88,10 +90,22 @@ def validate_cleaned_text(
 
 
 def _normalize_output_whitespace(text: str) -> str:
-    text = re.sub(r"\n{4,}", "\n\n\n", text)
-    text = re.sub(r"[ \t]+\n", "\n", text)
-    text = re.sub(r"\n[ \t]+", "\n", text)
-    return text.strip()
+    return normalize_markdown_whitespace(text)
+
+
+def filter_artifact_lines(text: str, *, source_text: str | None = None) -> str:
+    """Remove generated assistant lines, never quoted source or code containing the same words."""
+    source = (source_text or "").casefold()
+
+    def filter_prose(prose: str) -> str:
+        kept: list[str] = []
+        for line in prose.splitlines(keepends=True):
+            match = ARTIFACT_REGEX.match(line.lstrip())
+            if match is None or match.group().casefold() in source:
+                kept.append(line)
+        return "".join(kept)
+
+    return transform_prose(text, filter_prose).strip()
 
 
 def _markdown_quality_warnings(text: str, *, source_text: str | None) -> list[str]:

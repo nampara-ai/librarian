@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from librarian.application.assemble_document import assemble_cleaned_document
 from librarian.application.clean_chunks import CleanedChunk
 from librarian.domain.ids import ChunkId, DocumentId
@@ -75,6 +77,23 @@ def test_assembly_removes_empty_code_fences() -> None:
     )
 
     assert assembled == "Before.\n\nAfter."
+
+
+def test_assembly_preserves_intentional_repetition_and_code() -> None:
+    source = (
+        "Never again. Never again. We meant it.\n\n"
+        'She said, "I cannot read the inscription."\n\n'
+        "```python\nif ready:\n    run()\n\n\n\n    run()\n```"
+    )
+    chunk = _cleaned_chunk(0, source)
+    chunk = replace(chunk, chunk=replace(chunk.chunk, text=source))
+    assert assemble_cleaned_document([chunk]) == source
+
+
+def test_assembly_preserves_repetition_that_exists_in_both_source_chunks() -> None:
+    chunks = [_cleaned_chunk(0, "Never again."), _cleaned_chunk(1, "Never again. We meant it.")]
+    chunks = [replace(chunk, chunk=replace(chunk.chunk, text=chunk.text)) for chunk in chunks]
+    assert assemble_cleaned_document(chunks) == "Never again.\n\nNever again. We meant it."
 
 
 def _cleaned_chunk(ordinal: int, text: str) -> CleanedChunk:
