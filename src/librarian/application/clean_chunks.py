@@ -3,21 +3,27 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import time
 from collections import Counter
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from librarian.application.async_progress import await_with_progress
 from librarian.application.errors import ProcessingCanceled
 from librarian.application.ports import LLMProvider
+from librarian.domain.ids import ChunkId
 from librarian.domain.models import Chunk
 from librarian.observability import sanitize_error_message
 from librarian.pipeline.editing import EditUnit, decode_edits, editing_units, verification_pairs
-from librarian.pipeline.validation import VERBATIM_NUMBER_REGEX, validate_cleaned_text
+from librarian.pipeline.validation import (
+    FIDELITY_WARNINGS,
+    VERBATIM_NUMBER_REGEX,
+    validate_cleaned_text,
+)
 from librarian.prompts.loader import PromptCatalog
 
 CoherenceMode = Literal["fast", "balanced", "max-coherence"]
@@ -70,7 +76,7 @@ class CleanedChunk:
 
     @property
     def fidelity_failed(self) -> bool:
-        return bool(_FIDELITY_WARNINGS.intersection(self.warnings)) or (
+        return bool(FIDELITY_WARNINGS.intersection(self.warnings)) or (
             "source-preserved-after-fidelity-check" in self.warnings
         )
 
@@ -114,32 +120,7 @@ class CleaningAttempt:
 
 AttemptCallback = Callable[[CleaningAttempt], Awaitable[None]]
 
-_FIDELITY_WARNINGS = frozenset(
-    {
-        "added-verbatim-number",
-        "collapsed-paragraphs",
-        "context-marker-leak",
-        "changed-markdown-images",
-        "changed-page-breaks",
-        "empty-after-artifact-filter",
-        "empty-output",
-        "malformed-markdown-table",
-        "missing-citation-marker",
-        "missing-markdown-heading",
-        "missing-markdown-list",
-        "missing-markdown-table",
-        "missing-verbatim-number",
-        "repeated-tail",
-        "substantial-content-loss",
-        "suspiciously-short-output",
-        "invalid-edit-structure",
-        "changed-code-block",
-        "changed-table-shape",
-        "changed-table-values",
-        "semantic-fidelity-failed",
-        "invalid-fidelity-verification",
-    }
-)
+
 _CONTEXT_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 _MIN_DUPLICATED_CONTEXT_TOKENS = 15
 
@@ -183,39 +164,72 @@ class CleanChunks:
     on_attempt: AttemptCallback | None = None
     verify_semantics: bool = True
     editorial_context: str = ""
+    provider_endpoint: str = ""
     progress_interval_seconds: float = 10.0
     # Trailing characters of the preceding chunk handed to the cleaner as
     # read-only continuity context. Chunks no longer overlap in the source, so
     # this replaces the (previously duplicated) overlap for boundary coherence.
     context_chars: int = 800
 
+    def cache_version(self, source: str) -> str:
+        """Invalidate paid-work caches when source context or editorial policy changes."""
+        prompts = {"cleaning": self.prompt_catalog.get("cleaning", self.prompt_version)}
+        for name in (
+            "fidelity_v1",
+            "unit_fidelity_v1",
+            "meaning_v1",
+            "confirm_meaning_v1",
+            "context_v1",
+        ):
+            prompts[name] = self.prompt_catalog.get("repair", name)
+        policy = json.dumps(
+            {
+                "policy": 1,
+                "source": hashlib.sha256(source.encode()).hexdigest(),
+                "prompts": prompts,
+                "semantic_verification": self.verify_semantics,
+                "endpoint": self.provider_endpoint,
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature,
+                "coherence_mode": self.coherence_mode,
+                "balanced_group_size": self.balanced_group_size,
+                "context_chars": self.context_chars,
+            },
+            sort_keys=True,
+        )
+        return self.prompt_version + ":" + hashlib.sha256(policy.encode()).hexdigest()
+
     async def execute(
         self,
         chunks: list[Chunk],
         *,
         on_chunk_cleaned: ChunkCleanedCallback | None = None,
+        cached_chunks: list[CleanedChunk] | None = None,
     ) -> list[CleanedChunk]:
         """Clean chunks, invoking on_chunk_cleaned after each completion."""
+        reused = {item.chunk.id: item for item in cached_chunks or []}
         if self.coherence_mode == "fast":
-            return await self._clean_parallel(chunks, on_chunk_cleaned)
+            return await self._clean_parallel(chunks, on_chunk_cleaned, reused)
         if self.coherence_mode == "balanced":
-            return await self._clean_balanced(chunks, on_chunk_cleaned)
+            return await self._clean_balanced(chunks, on_chunk_cleaned, reused)
         if self.coherence_mode == "max-coherence":
-            return await self._clean_sequential(chunks, on_chunk_cleaned)
+            return await self._clean_sequential(chunks, on_chunk_cleaned, reused)
         raise ValueError(f"Unsupported coherence mode: {self.coherence_mode}")
 
     async def _clean_parallel(
         self,
         chunks: list[Chunk],
         on_chunk_cleaned: ChunkCleanedCallback | None,
+        reused: dict[ChunkId, CleanedChunk],
     ) -> list[CleanedChunk]:
         if not chunks:
             return []
         worker_count = max(1, min(self.max_parallel_chunks, len(chunks)))
         queue: asyncio.Queue[Chunk] = asyncio.Queue()
         for chunk in chunks:
-            queue.put_nowait(chunk)
-        results: list[CleanedChunk | None] = [None] * len(chunks)
+            if chunk.id not in reused:
+                queue.put_nowait(chunk)
+        results: list[CleanedChunk | None] = [reused.get(chunk.id) for chunk in chunks]
         positions = {chunk.id: index for index, chunk in enumerate(chunks)}
 
         async def worker() -> None:
@@ -249,6 +263,7 @@ class CleanChunks:
         self,
         chunks: list[Chunk],
         on_chunk_cleaned: ChunkCleanedCallback | None,
+        reused: dict[ChunkId, CleanedChunk],
     ) -> list[CleanedChunk]:
         if not chunks:
             return []
@@ -268,7 +283,7 @@ class CleanChunks:
                     return
                 try:
                     group_results[group_index] = await self._clean_sequential(
-                        group, on_chunk_cleaned
+                        group, on_chunk_cleaned, reused
                     )
                 finally:
                     queue.task_done()
@@ -284,16 +299,56 @@ class CleanChunks:
         self,
         chunks: list[Chunk],
         on_chunk_cleaned: ChunkCleanedCallback | None = None,
+        reused: dict[ChunkId, CleanedChunk] | None = None,
     ) -> list[CleanedChunk]:
+        reused = reused or {}
         results: list[CleanedChunk] = []
         previous_context = ""
         for chunk in chunks:
-            result = await self._clean_one(chunk, previous_context=previous_context)
+            cached = reused.get(chunk.id)
+            result = cached or await self._clean_one(chunk, previous_context=previous_context)
             results.append(result)
             previous_context = result.text[-self.context_chars :]
-            if on_chunk_cleaned is not None:
+            if cached is None and on_chunk_cleaned is not None:
                 await on_chunk_cleaned(result)
         return results
+
+    def _attempt_prompt(
+        self,
+        system_prompt: str,
+        chunk: Chunk,
+        attempt: int,
+        warnings: tuple[str, ...],
+        unit_failures: dict[str, list[str]],
+        *,
+        structured: bool,
+    ) -> str:
+        prompt = system_prompt
+        if attempt:
+            diagnostics: dict[str, object] = {
+                "failed_checks": list(warnings),
+                "unit_failures": unit_failures,
+            }
+            if structured:
+                prompt += "\n\n" + self.prompt_catalog.get("repair", "unit_fidelity_v1")
+            else:
+                diagnostics["numeric_tokens_and_counts"] = dict(
+                    Counter(VERBATIM_NUMBER_REGEX.findall(chunk.text))
+                )
+                diagnostics["source_word_count"] = len(re.findall(r"\b\w+\b", chunk.text))
+                prompt += "\n\n" + self.prompt_catalog.get("repair", "fidelity_v1")
+            prompt += "\n\nValidation diagnostics:\n" + json.dumps(diagnostics)
+            if structured and attempt == max(0, self.max_fidelity_retries):
+                prompt += (
+                    "\n\nFinal fidelity repair: use a conservative copyedit of the original "
+                    "unit. Keep its substantive wording and order; fix punctuation, grammar, "
+                    "spelling, and pure stutters. Do not paraphrase or compress claims. "
+                    "A previous candidate may contain invented relationships: the original "
+                    "source, not that candidate, is authoritative. Preserve 'supposed to', "
+                    "'seems', and other markers of the speaker's interpretation; do not "
+                    "convert them into claims that an instruction or event actually occurred."
+                )
+        return prompt
 
     async def _clean_one(self, chunk: Chunk, *, previous_context: str) -> CleanedChunk:
         system_prompt = self.prompt_catalog.get("cleaning", self.prompt_version)
@@ -301,8 +356,8 @@ class CleanChunks:
             system_prompt += (
                 "\n\nSource-grounded document spelling sheet:\n" + self.editorial_context
             )
-        units: list[EditUnit] = (
-            editing_units(chunk.text) if self.prompt_version == "cmos_v6" else []
+        units: tuple[EditUnit, ...] = (
+            tuple(editing_units(chunk.text)) if self.prompt_version == "cmos_v6" else ()
         )
         user_prompt = chunk.text
         if units:
@@ -323,21 +378,9 @@ class CleanChunks:
             if self.on_attempt is not None:
                 await self.on_attempt(CleaningAttempt(chunk, attempt + 1, limit, "started"))
             started = time.monotonic()
-            prompt = system_prompt
-            if attempt:
-                diagnostics: dict[str, object] = {
-                    "failed_checks": list(warnings),
-                    "unit_failures": unit_failures,
-                }
-                if units:
-                    prompt += "\n\n" + self.prompt_catalog.get("repair", "unit_fidelity_v1")
-                else:
-                    diagnostics["numeric_tokens_and_counts"] = dict(
-                        Counter(VERBATIM_NUMBER_REGEX.findall(chunk.text))
-                    )
-                    diagnostics["source_word_count"] = len(re.findall(r"\b\w+\b", chunk.text))
-                    prompt += "\n\n" + self.prompt_catalog.get("repair", "fidelity_v1")
-                prompt += "\n\nValidation diagnostics:\n" + json.dumps(diagnostics)
+            prompt = self._attempt_prompt(
+                system_prompt, chunk, attempt, warnings, unit_failures, structured=bool(units)
+            )
             try:
                 if units:
                     operation = self._edit_units(
@@ -424,7 +467,7 @@ class CleanChunks:
                 raw, input_size=len(chunk.text), source_text=chunk.text
             )
             warnings = tuple(dict.fromkeys((*unit_warnings, *validated.warnings)))
-            structural_failures = _FIDELITY_WARNINGS.intersection(warnings)
+            structural_failures = FIDELITY_WARNINGS.intersection(warnings)
             if (
                 units
                 and self.verify_semantics
@@ -469,7 +512,7 @@ class CleanChunks:
                             time.monotonic() - started,
                         )
                     )
-            accepted = not _FIDELITY_WARNINGS.intersection(warnings)
+            accepted = not FIDELITY_WARNINGS.intersection(warnings)
             if self.on_attempt is not None:
                 await self.on_attempt(
                     CleaningAttempt(
@@ -493,7 +536,7 @@ class CleanChunks:
 
     async def _edit_units(
         self,
-        units: list[EditUnit],
+        units: Sequence[EditUnit],
         previous_context: str,
         system_prompt: str,
         edits: dict[str, str],
@@ -644,8 +687,14 @@ class CleanChunks:
             input_size=len(cleaned.chunk.text),
             source_text=cleaned.chunk.text,
         )
-        warnings = list(dict.fromkeys((*cleaned.warnings, *validated.warnings)))
-        if _FIDELITY_WARNINGS.intersection(warnings):
+        validation_warnings = validated.warnings
+        if self.prompt_version == "cmos_v6" and self.verify_semantics:
+            # Only current policy-namespaced, audited edits reach this cache path.
+            validation_warnings = tuple(
+                w for w in validation_warnings if w != "substantial-content-loss"
+            )
+        warnings = list(dict.fromkeys((*cleaned.warnings, *validation_warnings)))
+        if FIDELITY_WARNINGS.intersection(warnings):
             warnings.append("source-preserved-after-fidelity-check")
             return CleanedChunk(
                 chunk=cleaned.chunk,

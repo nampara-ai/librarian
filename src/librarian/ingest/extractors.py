@@ -35,7 +35,7 @@ from librarian.application.transcripts import (
 )
 from librarian.domain.models import ExtractedAsset, ExtractionPayload
 from librarian.observability import sanitize_error_message
-from librarian.pipeline.validation import validate_cleaned_text
+from librarian.pipeline.validation import FIDELITY_WARNINGS, validate_cleaned_text
 
 _LOGGER = logging.getLogger("librarian.ingest.extractors")
 
@@ -1429,7 +1429,14 @@ class PdfExtractor:
                     )
                     await write_manifest()
 
-        await asyncio.gather(*(recover_page(page_number) for page_number in empty_pages))
+        recovery_tasks = [asyncio.create_task(recover_page(number)) for number in empty_pages]
+        try:
+            await asyncio.gather(*recovery_tasks)
+        except BaseException:
+            for task in recovery_tasks:
+                task.cancel()
+            await asyncio.gather(*recovery_tasks, return_exceptions=True)
+            raise
         final_pages = [page for page in page_results if page is not None]
         if not any(page.text.strip() for page in final_pages):
             raise ValueError(f"No extractable content found in PDF: {path}")
@@ -1497,6 +1504,7 @@ class PdfExtractor:
 
     def _extraction_config(self) -> dict[str, object]:
         return {
+            "ocr_fidelity_policy": 1,
             "ocr_language": self.ocr_language,
             "ocr_timeout_seconds": self.ocr_timeout_seconds,
             "ocr_pdf_dpi": self.ocr_pdf_dpi,
@@ -1631,36 +1639,43 @@ class PdfExtractor:
         if self.ocr_correction_mode == "never":
             return OcrCorrectionResult(text=text)
         if self.ocr_correction_mode == "low-confidence" and (
-            confidence is None or confidence >= self.ocr_low_confidence_threshold
+            confidence is not None and confidence >= self.ocr_low_confidence_threshold
         ):
             return OcrCorrectionResult(text=text)
         provider = self.ocr_correction_provider
         if provider is None:
             raise RuntimeError("LLM OCR correction is enabled but no LLM provider is configured")
-        corrected = await provider.complete(
-            system_prompt=OCR_CORRECTION_PROMPT,
-            user_prompt=(
-                f"Correct OCR text from PDF page {page_number}. "
-                "Return only corrected text.\n\n"
-                f"{text}"
-            ),
-            model=self.ocr_correction_model,
-            max_tokens=8192,
-            temperature=0.0,
-        )
-        clean = str(corrected).strip()
-        if len(clean) > self.ocr_max_correction_response_chars:
-            raise ValueError(
-                f"LLM OCR correction returned {len(clean)} characters for page {page_number}, "
-                "exceeding configured limit "
-                f"{self.ocr_max_correction_response_chars}"
+        checks: tuple[str, ...] = ()
+        for attempt in range(3):
+            diagnostics = (
+                "\nThe previous candidate failed: " + ", ".join(checks)
+                + ". Repair those failures using the original OCR below."
+                if attempt else ""
             )
-        if not clean:
-            raise ValueError(f"LLM OCR correction returned empty text for page {page_number}")
-        validated = validate_cleaned_text(clean, input_size=len(text), source_text=text)
-        if not validated.ok:
-            raise ValueError(f"LLM OCR correction returned empty text for page {page_number}")
-        return OcrCorrectionResult(text=validated.text, warnings=validated.warnings)
+            corrected = await provider.complete(
+                system_prompt=OCR_CORRECTION_PROMPT,
+                user_prompt=(
+                    f"Correct OCR text from PDF page {page_number}. "
+                    "Return only corrected text." + diagnostics + "\n\n" + text
+                ),
+                model=self.ocr_correction_model,
+                max_tokens=8192,
+                temperature=0.0,
+            )
+            clean = str(corrected).strip()
+            if len(clean) > self.ocr_max_correction_response_chars:
+                raise ValueError(
+                    f"LLM OCR correction returned {len(clean)} characters for page {page_number}, "
+                    f"exceeding configured limit {self.ocr_max_correction_response_chars}"
+                )
+            validated = validate_cleaned_text(clean, input_size=len(text), source_text=text)
+            checks = tuple(w for w in validated.warnings if w in FIDELITY_WARNINGS)
+            if validated.ok and not checks:
+                return OcrCorrectionResult(text=validated.text, warnings=validated.warnings)
+        raise ValueError(
+            f"LLM OCR correction failed fidelity checks for page {page_number} after 3 attempts: "
+            + ", ".join(checks)
+        )
 
 
 class ImageOcrExtractor:
@@ -4453,6 +4468,11 @@ def _paragraph_text(paragraph: Any) -> str:
     if not text:
         return ""
     style_name = str(getattr(getattr(paragraph, "style", None), "name", "")).lower()
+    heading = re.fullmatch(r"heading\s+([1-6])", style_name)
+    if heading:
+        return "#" * int(heading.group(1)) + " " + text
+    if style_name == "title":
+        return "# " + text
     if "list bullet" in style_name:
         return f"- {text}"
     if "list number" in style_name:
@@ -4461,10 +4481,18 @@ def _paragraph_text(paragraph: Any) -> str:
 
 
 def _table_text(table: Any) -> str:
-    rows: list[str] = []
+    rows: list[list[str]] = []
     for row in table.rows:
-        cells = [_paragraph_text(cell) for cell in row.cells]
-        rendered = " | ".join(cell for cell in cells if cell)
-        if rendered:
-            rows.append(rendered)
-    return "\n".join(rows)
+        # Empty cells carry position: dropping one can associate a value with
+        # the wrong column. A cell is not a paragraph and has no paragraph style.
+        rows.append(
+            [str(cell.text).strip().replace("|", r"\|").replace("\n", "<br>") for cell in row.cells]
+        )
+    if not rows:
+        return ""
+    columns = max(len(row) for row in rows)
+    if not columns:
+        return ""
+    rendered = ["| " + " | ".join(row + [""] * (columns - len(row))) + " |" for row in rows]
+    rendered.insert(1, "| " + " | ".join(["---"] * columns) + " |")
+    return "\n".join(rendered)

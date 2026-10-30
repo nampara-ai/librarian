@@ -67,6 +67,15 @@ def test_edit_decoder_keeps_code_verbatim() -> None:
     assert "changed-code-block" in warnings
 
 
+def test_edit_decoder_rejects_untouched_unpunctuated_transcript() -> None:
+    source = " ".join(["uh i think we should explain this clearly"] * 20)
+    units = editing_units(source)
+    raw = json.dumps({"edits": [{"id": unit.id, "text": unit.text} for unit in units]})
+    _, warnings, failures = decode_edits(raw, units)
+    assert "unchanged-unclean-prose" in warnings
+    assert failures
+
+
 @pytest.mark.asyncio
 async def test_source_aligned_cleaner_repairs_a_semantically_reversed_claim() -> None:
     class EditingProvider:

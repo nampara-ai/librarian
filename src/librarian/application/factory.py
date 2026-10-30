@@ -148,6 +148,7 @@ async def build_container(
         max_response_chars=resolved_settings.llm_max_response_chars,
         max_fidelity_retries=resolved_settings.cleaning_fidelity_max_retries,
         verify_semantics=resolved_settings.cleaning_semantic_verification,
+        provider_endpoint=resolved_settings.llm_base_url or "",
         context_chars=resolved_settings.chunk_overlap_chars,
     )
     taxonomy = ingest_container.taxonomy

@@ -57,9 +57,11 @@ logger = logging.getLogger("librarian.application.process_document")
 
 
 def select_pdf_chunks_for_cleaning(
-    chunks: list[Chunk], source: str, report: object
+    chunks: list[Chunk], source: str, report: object, *, preserve_verified: bool = False
 ) -> tuple[list[Chunk], list[CleanedChunk]]:
-    """Preserve verified PDF text and send uncertain pages through the model."""
+    """Extraction confidence alone does not establish that prose is copyedited."""
+    if not preserve_verified:
+        return chunks, []
     if not isinstance(report, dict):
         return chunks, []
     typed_report = cast("dict[str, object]", report)
@@ -263,9 +265,10 @@ class ProcessDocument:
                 model_chunks, verified_chunks = select_pdf_chunks_for_cleaning(
                     chunked, normalized_text, extraction_report
                 )
+                cache_version = self.cleaner.cache_version(normalized_text)
                 loaded_cached_chunks = await self.outputs.get_cached_cleaned_chunks(
                     model_chunks,
-                    prompt_version=self.cleaner.prompt_version,
+                    prompt_version=cache_version,
                     model_provider=self.cleaner.provider.name,
                     model_name=self.cleaner.model,
                 )
@@ -279,12 +282,10 @@ class ProcessDocument:
                     # policy once, then reuse the safe result on later runs.
                     await self.outputs.save_cleaned_chunk_cache(
                         cached_chunks,
-                        prompt_version=self.cleaner.prompt_version,
+                        prompt_version=cache_version,
                         model_provider=self.cleaner.provider.name,
                         model_name=self.cleaner.model,
                     )
-                cached_ids = {chunk.chunk.id for chunk in cached_chunks}
-                missing_chunks = [chunk for chunk in model_chunks if chunk.id not in cached_ids]
                 # Persist live per-chunk progress so clients can render a
                 # real bar during long cleans; cache hits count immediately.
                 progress = {"completed": len(cached_chunks) + len(verified_chunks)}
@@ -303,7 +304,7 @@ class ProcessDocument:
                     if cleaned_chunk.text.strip():
                         await self.outputs.save_cleaned_chunk_cache(
                             [cleaned_chunk],
-                            prompt_version=self.cleaner.prompt_version,
+                            prompt_version=cache_version,
                             model_provider=self.cleaner.provider.name,
                             model_name=self.cleaner.model,
                         )
@@ -351,11 +352,11 @@ class ProcessDocument:
                     editorial_context=spelling_sheet,
                 )
                 cleaned_missing = await cleaner.execute(
-                    missing_chunks, on_chunk_cleaned=_note_chunk_cleaned
+                    model_chunks, on_chunk_cleaned=_note_chunk_cleaned, cached_chunks=cached_chunks
                 )
                 await self._raise_if_canceled(run_id)
                 cleaned_chunks = sorted(
-                    [*verified_chunks, *cached_chunks, *cleaned_missing],
+                    [*verified_chunks, *cleaned_missing],
                     key=lambda item: item.chunk.ordinal,
                 )
             async with self._timed_stage(RunStage.VALIDATE, run_id, document_id):
@@ -451,7 +452,7 @@ class ProcessDocument:
                 document_id=document_id,
                 run_id=run_id,
                 text=assembled,
-                prompt_version=self.cleaner.prompt_version,
+                prompt_version=cache_version,
                 model_provider=self.cleaner.provider.name,
                 model_name=self.cleaner.model,
             )
@@ -565,14 +566,29 @@ class ProcessDocument:
             if published:
                 raise
             error_message = sanitize_error_message(exc)
-            if isinstance(exc, FidelityValidationError):
+            latest = await self.runs.get_run(run_id)
+            if isinstance(exc, FidelityValidationError) or (
+                latest is not None and latest.stage == RunStage.CLEAN
+            ):
+                fidelity_failure = isinstance(exc, FidelityValidationError)
+                failed_attempt = next(
+                    (item for item in reversed(cleaning_attempts) if item["status"] == "error"),
+                    None,
+                )
+                failed_chunk = (
+                    exc.chunk.ordinal + 1
+                    if isinstance(exc, FidelityValidationError)
+                    else failed_attempt.get("chunk")
+                    if failed_attempt
+                    else None
+                )
+                failed_chunks = 1 if failed_chunk is not None else 0
                 await self.runs.update_run_progress(
                     run_id,
                     completed_chunks=progress["completed"],
-                    failed_chunks=1,
-                    stage=RunStage.VALIDATE,
+                    failed_chunks=failed_chunks,
+                    stage=RunStage.CLEAN,
                 )
-                latest = await self.runs.get_run(run_id)
                 report = {
                     "pages": None,
                     "image_references": 0,
@@ -580,13 +596,19 @@ class ProcessDocument:
                     "cleaned_chunks": progress["completed"],
                     "cached_cleaned_chunks": 0,
                     "source_preserved_chunks": 0,
-                    "failed_chunks": 1,
+                    "failed_chunks": failed_chunks,
                     "cleaning_status": "failed",
                     "output_available": False,
-                    "fatal": ["cleaning-fidelity-failed"],
-                    "warnings": list(exc.warnings),
+                    "fatal": [
+                        "cleaning-fidelity-failed" if fidelity_failure else "cleaning-failed"
+                    ],
+                    "warnings": list(exc.warnings)
+                    if isinstance(exc, FidelityValidationError)
+                    else [],
                     "cleaning_attempts": cleaning_attempts,
-                    "failed_chunk": exc.chunk.ordinal + 1,
+                    "failed_chunk": failed_chunk,
+                    "error_stage": RunStage.CLEAN.value,
+                    "error_type": type(exc).__name__,
                 }
                 try:
                     await self.content.put_text(run_quality_key(run_id), json.dumps(report))

@@ -86,7 +86,10 @@ def test_pdf_cleaning_preserves_only_verified_page_chunks() -> None:
             },
         ],
     }
-    model_chunks, preserved = select_pdf_chunks_for_cleaning(chunks, source, report)
+    assert select_pdf_chunks_for_cleaning(chunks, source, report) == (chunks, [])
+    model_chunks, preserved = select_pdf_chunks_for_cleaning(
+        chunks, source, report, preserve_verified=True
+    )
     assert preserved
     assert model_chunks
     assert all("verified-source-preserved" in chunk.warnings for chunk in preserved)
@@ -1133,10 +1136,18 @@ async def test_failed_clean_preserves_completed_chunks_for_retry(tmp_path: Path)
     with pytest.raises(RuntimeError, match="Cleaning chunk 2 failed: provider failed"):
         await process.execute(ingested.document.id)
 
+    failed_run = (await container.repository.list_runs())[0]
+    failure_quality = json.loads(
+        await container.repository.get_text(run_quality_key(failed_run.id))
+    )
+    assert failure_quality["fatal"] == ["cleaning-failed"]
+    assert failure_quality["failed_chunk"] == 2
+    assert failure_quality["cleaned_chunks"] == 1
+
     chunks = await container.repository.list_for_document(ingested.document.id)
     cached = await container.repository.get_cached_cleaned_chunks(
         chunks,
-        prompt_version=cleaner.prompt_version,
+        prompt_version=cleaner.cache_version(source.read_text().strip()),
         model_provider=provider.name,
         model_name=cleaner.model,
     )

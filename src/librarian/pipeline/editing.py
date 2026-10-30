@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import cast
 
@@ -64,7 +65,7 @@ def editing_units(source: str, *, target_chars: int = 4000) -> list[EditUnit]:
 
 
 def decode_edits(
-    raw: str, units: list[EditUnit]
+    raw: str, units: Sequence[EditUnit]
 ) -> tuple[str, tuple[str, ...], dict[str, list[str]]]:
     """Require every ID exactly once in source order, then validate every edited span."""
     body = raw.strip()
@@ -91,6 +92,13 @@ def decode_edits(
             return "", ("invalid-edit-structure",), {}
         result = validate_cleaned_text(text, input_size=len(unit.text), source_text=unit.text)
         warnings = list(result.warnings)
+        if (
+            unit.kind == "prose"
+            and result.text == unit.text
+            and len(re.findall(r"\b\w+\b", unit.text)) > 100
+            and len(re.findall(r"[.!?](?:\s|$)", unit.text)) < 2
+        ):
+            warnings.append("unchanged-unclean-prose")
         if unit.kind == "code" and result.text != unit.text:
             warnings.append("changed-code-block")
         if warnings:
@@ -101,7 +109,7 @@ def decode_edits(
     return "".join(parts), warnings, failures
 
 
-def verification_pairs(raw: str, units: list[EditUnit]) -> list[dict[str, str]]:
+def verification_pairs(raw: str, units: Sequence[EditUnit]) -> list[dict[str, str]]:
     """Read already-validated JSON edits for the independent meaning-preservation audit."""
     body = raw.strip()
     fenced = re.fullmatch(r"```(?:json)?\s*([\s\S]+?)\s*```", body, re.I)

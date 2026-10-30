@@ -92,6 +92,17 @@ set the quality status to `needs-review`.
 Long cleaning calls emit waiting heartbeats. Quality reports retain each attempt's checks and
 candidate output locally, including rejected candidates, so a failed run can be investigated.
 
+Cleaning cache keys include the full document context, prompt contents, provider endpoint,
+and verification policy. Resumed runs retain the original chunk order and neighboring context;
+only newly cleaned chunks advance progress. Verified native PDF extraction is still copyedited:
+extraction confidence is not an editorial-quality score.
+
+OCR correction retries failed fidelity checks against the original page up to three attempts.
+Unknown confidence is eligible for correction in `low-confidence` mode. Unsafe corrections fail
+the page instead of replacing its OCR with damaged text. Changing the OCR fidelity policy also
+invalidates old page manifests. DOCX extraction preserves headings, empty table cells, and
+literal cell pipes in Markdown tables.
+
 For a completed Mac app run, open **Quality** on its row. The view shows page extraction repairs,
 whole-document warnings, and final refinement actions. Use **Review page** for a flagged PDF page;
 compare the exported Markdown with the stored source. An `applied` action passed the edit checks;

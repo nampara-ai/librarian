@@ -967,7 +967,7 @@ async def test_pdf_page_manifest_preserves_raw_and_corrected_ocr_text(
 
 
 @pytest.mark.asyncio
-async def test_pdf_page_manifest_records_ocr_correction_quality_warnings(
+async def test_pdf_page_manifest_rejects_unsafe_ocr_correction(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1017,16 +1017,14 @@ async def test_pdf_page_manifest_records_ocr_correction_quality_warnings(
     extractor = PdfExtractor(ocr_correction_provider=FakeProvider())
     extractor.set_page_manifest_path(manifest)
 
-    await extractor.extract(path)
+    with pytest.raises(RuntimeError, match="failed fidelity checks"):
+        await extractor.extract(path)
 
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     page = payload["pages"][0]
-    assert "repeated-tail" in page["warnings"]
-    assert page["corrected"] is True
-    assert extractor.last_metadata is not None
-    metadata_pages = extractor.last_metadata["pages"]
-    assert isinstance(metadata_pages, list)
-    assert "repeated-tail" in metadata_pages[0]["warnings"]
+    assert "ocr-page-failed" in page["warnings"]
+    assert "repeated-tail" in page["error"]
+    assert page["corrected"] is False
 
 
 @pytest.mark.asyncio
@@ -1522,6 +1520,7 @@ async def test_pdf_extractor_passes_ocr_preprocessing_options(
     assert seen["threshold"] == 155
     assert extractor.last_metadata is not None
     assert extractor.last_metadata["extraction_config"] == {
+        "ocr_fidelity_policy": 1,
         "ocr_language": "eng",
         "ocr_timeout_seconds": 120,
         "ocr_pdf_dpi": 200,

@@ -12,6 +12,34 @@ from librarian.pipeline.markdown import (
     transform_prose,
 )
 
+FIDELITY_WARNINGS = frozenset(
+    {
+        "added-verbatim-number",
+        "collapsed-paragraphs",
+        "context-marker-leak",
+        "changed-markdown-images",
+        "changed-page-breaks",
+        "empty-after-artifact-filter",
+        "empty-output",
+        "malformed-markdown-table",
+        "missing-citation-marker",
+        "missing-markdown-heading",
+        "missing-markdown-list",
+        "missing-markdown-table",
+        "missing-verbatim-number",
+        "repeated-tail",
+        "substantial-content-loss",
+        "suspiciously-short-output",
+        "invalid-edit-structure",
+        "unchanged-unclean-prose",
+        "changed-code-block",
+        "changed-table-shape",
+        "changed-table-values",
+        "semantic-fidelity-failed",
+        "invalid-fidelity-verification",
+    }
+)
+
 ARTIFACT_PATTERNS = [
     r"I am ready to (?:begin|process)",
     r"I'm ready to (?:begin|process|edit)",
