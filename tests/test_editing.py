@@ -5,7 +5,7 @@ import pytest
 from librarian.application.clean_chunks import CleanChunks, FidelityValidationError
 from librarian.domain.ids import ChunkId, DocumentId
 from librarian.domain.models import Chunk
-from librarian.pipeline.editing import decode_edits, editing_units
+from librarian.pipeline.editing import EditUnit, decode_edits, editing_units
 from librarian.prompts import PromptCatalog
 
 
@@ -74,6 +74,60 @@ def test_edit_decoder_rejects_untouched_unpunctuated_transcript() -> None:
     _, warnings, failures = decode_edits(raw, units)
     assert "unchanged-unclean-prose" in warnings
     assert failures
+
+
+@pytest.mark.asyncio
+async def test_rejected_large_units_retry_in_smaller_source_spans() -> None:
+    class Provider:
+        name = "size-sensitive"
+
+        def __init__(self) -> None:
+            self.sizes: list[int] = []
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            unit = json.loads(user_prompt)["units"][0]
+            self.sizes.append(len(unit["text"]))
+            text = "Incomplete output." if len(unit["text"]) > 2700 else unit["text"]
+            return json.dumps({"edits": [{"id": unit["id"], "text": text}]})
+
+    source = " ".join(
+        f"Observation {index} retains its individual measurement and attribution."
+        for index in range(100)
+    )
+    chunk = Chunk(
+        id=ChunkId("adaptive"),
+        document_id=DocumentId("doc"),
+        ordinal=0,
+        text=source,
+        start_char=0,
+        end_char=len(source),
+        sha256="adaptive-source",
+    )
+    provider = Provider()
+    cleaner = CleanChunks(provider, PromptCatalog(), "cmos_v6", "test", verify_semantics=False)
+    results = await cleaner.execute([chunk])
+    assert results[0].text.split() == source.split()
+    assert max(provider.sizes) > 2700
+    assert min(provider.sizes) < 2000
+    assert not results[0].fidelity_failed
+
+
+def test_reconstructed_sentence_seams_keep_readable_case_and_spacing() -> None:
+    units = [
+        EditUnit("u0000", "First complete thought.", "prose", "\n\n"),
+        EditUnit("u0001", "and the follow-up matters.", "prose", " "),
+    ]
+    raw = json.dumps(
+        {
+            "edits": [
+                {"id": "u0000", "text": "First complete thought."},
+                {"id": "u0001", "text": "and the follow‑up\u202fmatters."},
+            ]
+        }
+    )
+    text, warnings, _ = decode_edits(raw, units)
+    assert text == "First complete thought.\n\nAnd the follow-up matters."
+    assert not warnings
 
 
 @pytest.mark.asyncio

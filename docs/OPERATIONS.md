@@ -89,6 +89,11 @@ calls. These checks reduce errors; inspect quotations and genuinely ambiguous tr
 the exported Markdown. `[transcription unclear: ...]` annotations make uncertainty visible and
 set the quality status to `needs-review`.
 
+Rejected large spans are subdivided on later attempts, retaining neighboring context and
+checking the reconstructed parent span again. Passing spans are retained. Untouched long,
+unpunctuated prose is rejected rather than counted as an edited result. Sentence seams receive
+light capitalization and paragraph repair; prose uses ordinary editable spaces and hyphens.
+
 Long cleaning calls emit waiting heartbeats. Quality reports retain each attempt's checks and
 candidate output locally, including rejected candidates, so a failed run can be investigated.
 

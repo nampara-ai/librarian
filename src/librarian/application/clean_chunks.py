@@ -184,7 +184,7 @@ class CleanChunks:
             prompts[name] = self.prompt_catalog.get("repair", name)
         policy = json.dumps(
             {
-                "policy": 1,
+                "policy": 2,
                 "source": hashlib.sha256(source.encode()).hexdigest(),
                 "prompts": prompts,
                 "semantic_verification": self.verify_semantics,
@@ -390,6 +390,7 @@ class CleanChunks:
                         unit_edits,
                         unit_failures,
                         generation_failures,
+                        repair_unit_chars=max(800, 4000 // (2**attempt)) if attempt else None,
                     )
                 else:
                     operation = self.provider.complete(
@@ -542,6 +543,9 @@ class CleanChunks:
         edits: dict[str, str],
         failures: dict[str, list[str]],
         generation_failures: dict[str, list[str]],
+        *,
+        repair_unit_chars: int | None = None,
+        following_context: str = "",
     ) -> str:
         """Edit modest source spans independently and retry only rejected spans."""
         pending = [unit for unit in units if unit.id not in edits or unit.id in failures]
@@ -555,7 +559,36 @@ class CleanChunks:
                 unit = queue.get_nowait()
                 index = positions[unit.id]
                 before = units[index - 1].text[-1200:] if index else previous_context[-1200:]
-                after = units[index + 1].text[:1200] if index + 1 < len(units) else ""
+                after = (
+                    units[index + 1].text[:1200] if index + 1 < len(units) else following_context
+                )
+                if repair_unit_chars is not None and len(unit.text) > repair_unit_chars:
+                    smaller = editing_units(unit.text, target_chars=repair_unit_chars)
+                    if len(smaller) > 1:
+                        child_failures: dict[str, list[str]] = {}
+                        child_response = await self._edit_units(
+                            smaller,
+                            before,
+                            system_prompt,
+                            {},
+                            {},
+                            child_failures,
+                            following_context=after,
+                        )
+                        child_text, child_warnings, _ = decode_edits(child_response, smaller)
+                        edits[unit.id] = child_text
+                        if child_failures:
+                            generation_failures[unit.id] = list(
+                                dict.fromkeys(
+                                    w for values in child_failures.values() for w in values
+                                )
+                            )
+                        elif "invalid-edit-structure" in child_warnings:
+                            generation_failures[unit.id] = ["invalid-edit-structure"]
+                        else:
+                            generation_failures.pop(unit.id, None)
+                        queue.task_done()
+                        continue
                 response = await self.provider.complete(
                     system_prompt=system_prompt,
                     user_prompt=json.dumps(

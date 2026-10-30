@@ -104,7 +104,25 @@ def decode_edits(
         if warnings:
             failures[unit.id] = warnings
         separator = unit.separator
-        parts.append((separator if parts else "") + result.text)
+        edited = result.text
+        if unit.kind == "prose":
+            edited = edited.translate(str.maketrans({"\u00a0": " ", "\u202f": " ", "‑": "-"}))
+        if (
+            separator == " "
+            and parts
+            and unit.kind == "prose"
+            and re.search(r"[.!?][\"'”’)]?$", parts[-1].rstrip())
+        ):
+            opener = re.match(
+                r"(?:and|but|so|now|then|we|the|you|he|she|they|it|this|that|these|those|"
+                r"for|however|there|what|when|where|why|how|as|i)\b",
+                edited,
+            )
+            if opener:
+                edited = edited[0].upper() + edited[1:]
+            if edited[:1].isupper():
+                separator = "\n\n"
+        parts.append((separator if parts else "") + edited)
     warnings = tuple(dict.fromkeys(warning for values in failures.values() for warning in values))
     return "".join(parts), warnings, failures
 
