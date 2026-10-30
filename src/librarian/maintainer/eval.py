@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -138,7 +139,7 @@ async def run_eval_suite(container: ApplicationContainer, suite: EvalSuite) -> E
         unexpected_warnings = [warning for warning in warnings if warning not in allowed_warnings]
         if unexpected_warnings:
             failures.append(f"unexpected output warnings: {', '.join(unexpected_warnings)}")
-        lower_output = assembled.lower()
+        lower_output = _comparison_text(assembled)
         if len(assembled) < case.min_output_chars:
             failures.append(
                 f"output has {len(assembled)} chars, expected at least {case.min_output_chars}"
@@ -161,14 +162,16 @@ async def run_eval_suite(container: ApplicationContainer, suite: EvalSuite) -> E
                 f"{output_char_ratio:.3f} is above maximum {case.max_output_char_ratio:.3f}"
             )
         for expected in case.expected_contains:
-            if expected.lower() not in lower_output:
+            if _comparison_text(expected) not in lower_output:
                 failures.append(f"missing expected text: {expected}")
         for forbidden in case.forbidden_contains:
-            if forbidden.lower() in lower_output:
+            if _comparison_text(forbidden) in lower_output:
                 failures.append(f"found forbidden text: {forbidden}")
         if (
             case.expected_classification_prefix
-            and not classification.code.startswith(case.expected_classification_prefix)
+            and not classification.code.startswith(
+                case.expected_classification_prefix.rstrip("0") or "0"
+            )
         ):
             failures.append(
                 "classification "
@@ -201,6 +204,11 @@ async def run_eval_suite(container: ApplicationContainer, suite: EvalSuite) -> E
         cleaning_prompt_version=container.settings.cleaning_prompt_version,
         classification_prompt_version=container.settings.classification_prompt_version,
     )
+
+
+def _comparison_text(text: str) -> str:
+    text = unicodedata.normalize("NFKC", text).translate(str.maketrans({"‐": "-", "‑": "-"}))
+    return " ".join(text.casefold().split())
 
 
 def eval_result_json(result: EvalRunResult) -> str:

@@ -140,6 +140,26 @@ async def test_eval_suite_fails_on_forbidden_text(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_eval_comparisons_allow_equivalent_typographic_spacing(tmp_path: Path) -> None:
+    container = await build_container(
+        Settings(data_dir=tmp_path, database_path=tmp_path / "librarian.sqlite")
+    )
+    result = await run_eval_suite(
+        container,
+        EvalSuite(
+            cases=[
+                EvalCase(
+                    name="typographic equivalents",
+                    input_text="Follow‑up care is discussed in Section\u202f4.2.",
+                    expected_contains=["follow-up care", "Section 4.2"],
+                )
+            ]
+        ),
+    )
+    assert result.passed
+
+
+@pytest.mark.asyncio
 async def test_eval_suite_fails_on_output_char_ratio_bounds(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / ".librarian",
