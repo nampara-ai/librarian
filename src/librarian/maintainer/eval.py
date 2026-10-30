@@ -11,6 +11,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from librarian.application.assemble_document import assemble_cleaned_document
+from librarian.application.clean_chunks import FidelityValidationError
 from librarian.application.factory import ApplicationContainer
 from librarian.domain.ids import DocumentId, digest_text
 from librarian.pipeline.chunking import chunk_text
@@ -104,7 +105,27 @@ async def run_eval_suite(container: ApplicationContainer, suite: EvalSuite) -> E
             case.input_text,
             container.process_document.chunking_policy,
         )
-        cleaned_chunks = await container.process_document.cleaner.execute(chunks)
+        try:
+            cleaned_chunks = await container.process_document.cleaner.execute(chunks)
+        except FidelityValidationError as exc:
+            duration_seconds = max(time.perf_counter() - case_start, 1e-9)
+            results.append(
+                EvalCaseResult(
+                    name=case.name,
+                    passed=False,
+                    tags=tuple(case.tags),
+                    input_chars=len(case.input_text),
+                    output_chars=0,
+                    output_char_ratio=0.0,
+                    duration_seconds=duration_seconds,
+                    chars_per_second=len(case.input_text) / duration_seconds,
+                    classification_code="",
+                    classification_label="",
+                    warnings=exc.warnings,
+                    failures=(str(exc),),
+                )
+            )
+            continue
         assembled = assemble_cleaned_document(cleaned_chunks)
         classification = await container.process_document.classifier.execute(document_id, assembled)
         duration_seconds = max(time.perf_counter() - case_start, 1e-9)

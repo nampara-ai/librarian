@@ -188,7 +188,7 @@ async def test_cleaner_fails_after_retries_when_model_loses_a_figure() -> None:
 
     with pytest.raises(FidelityValidationError, match="changed-markdown-images") as failure:
         await cleaner.execute([chunk])
-    assert failure.value.attempts == 3
+    assert failure.value.attempts == 4
     assert failure.value.chunk.text == source
 
 

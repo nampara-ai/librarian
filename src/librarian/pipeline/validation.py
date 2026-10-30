@@ -6,7 +6,11 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
-from librarian.pipeline.markdown import normalize_markdown_whitespace, transform_prose
+from librarian.pipeline.markdown import (
+    normalize_markdown_whitespace,
+    protected_spans,
+    transform_prose,
+)
 
 ARTIFACT_PATTERNS = [
     r"I am ready to (?:begin|process)",
@@ -41,6 +45,8 @@ LOCAL_IMAGE_REFERENCE_REGEX = re.compile(
     r"!\[[^\]]*\]\((?![a-z][a-z0-9+.-]*:|/|#)([^)\s]+)\)", re.IGNORECASE
 )
 PAGE_BREAK_REGEX = re.compile(r"<!--\s*page-break\s*-->", re.IGNORECASE)
+ALL_IMAGE_REFERENCE_REGEX = re.compile(r"!\[[^\]]*\]\(([^)\n]+)\)")
+UNCLEAR_TRANSCRIPTION_REGEX = re.compile(r"\[transcription unclear:\s*([^\]]+)\]", re.IGNORECASE)
 VERBATIM_NUMBER_REGEX = re.compile(r"(?<![\w])\d+(?:[.,]\d+)*(?![\w])")
 REPEATED_TAIL_MIN_PATTERN_CHARS = 12
 REPEATED_TAIL_MAX_PATTERN_CHARS = 240
@@ -119,6 +125,8 @@ def _markdown_quality_warnings(text: str, *, source_text: str | None) -> list[st
         warnings.append("malformed-markdown-table")
     if _has_repeated_tail(text):
         warnings.append("repeated-tail")
+    if UNCLEAR_TRANSCRIPTION_REGEX.search(text):
+        warnings.append("uncertain-transcription")
     if source_text is None:
         return warnings
     if _paragraph_count(source_text) >= 3 and _paragraph_count(text) <= 1 and len(text) > 500:
@@ -131,10 +139,31 @@ def _markdown_quality_warnings(text: str, *, source_text: str | None) -> list[st
         warnings.append("missing-markdown-table")
     if CITATION_MARKER_REGEX.search(source_text) and CITATION_MARKER_REGEX.search(text) is None:
         warnings.append("missing-citation-marker")
-    source_images = Counter(LOCAL_IMAGE_REFERENCE_REGEX.findall(source_text))
-    output_images = Counter(LOCAL_IMAGE_REFERENCE_REGEX.findall(text))
+    source_images = Counter(ALL_IMAGE_REFERENCE_REGEX.findall(source_text))
+    output_images = Counter(ALL_IMAGE_REFERENCE_REGEX.findall(text))
     if source_images != output_images:
         warnings.append("changed-markdown-images")
+    source_code = [
+        source_text[a:b].strip()
+        for a, b in protected_spans(source_text)
+        if source_text[a:b].lstrip().startswith(("```", "~~~"))
+    ]
+    output_code = [
+        text[a:b].strip()
+        for a, b in protected_spans(text)
+        if text[a:b].lstrip().startswith(("```", "~~~"))
+    ]
+    if source_code and source_code != output_code:
+        warnings.append("changed-code-block")
+    source_tables = _table_cells(source_text)
+    output_tables = _table_cells(text)
+    if source_tables:
+        if [len(row) for row in source_tables] != [len(row) for row in output_tables]:
+            warnings.append("changed-table-shape")
+        elif [[VERBATIM_NUMBER_REGEX.findall(cell) for cell in row] for row in source_tables] != [
+            [VERBATIM_NUMBER_REGEX.findall(cell) for cell in row] for row in output_tables
+        ]:
+            warnings.append("changed-table-values")
     if len(PAGE_BREAK_REGEX.findall(source_text)) != len(PAGE_BREAK_REGEX.findall(text)):
         warnings.append("changed-page-breaks")
     source_numbers = Counter(VERBATIM_NUMBER_REGEX.findall(source_text))
@@ -152,6 +181,24 @@ def _markdown_quality_warnings(text: str, *, source_text: str | None) -> list[st
 
 def _paragraph_count(text: str) -> int:
     return sum(1 for paragraph in re.split(r"\n\s*\n", text.strip()) if paragraph.strip())
+
+
+def _table_cells(text: str) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for left, right in protected_spans(text):
+        block = text[left:right]
+        if block.lstrip().startswith(("```", "~~~")):
+            continue
+        for line in block.splitlines():
+            if MARKDOWN_TABLE_SEPARATOR_REGEX.fullmatch(line):
+                continue
+            body = line.strip()
+            if body.startswith("|"):
+                body = body[1:]
+            if body.endswith("|") and not body.endswith("\\|"):
+                body = body[:-1]
+            rows.append([cell.strip() for cell in re.split(r"(?<!\\)\|", body)])
+    return rows
 
 
 def _has_markdown_table(text: str) -> bool:

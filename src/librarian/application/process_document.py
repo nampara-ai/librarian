@@ -14,6 +14,7 @@ from types import TracebackType
 from typing import Any, cast
 
 from librarian.application.assemble_document import assemble_cleaned_document
+from librarian.application.async_progress import await_with_progress
 from librarian.application.classify_document import ClassifyDocument
 from librarian.application.clean_chunks import (
     CleanChunks,
@@ -21,6 +22,8 @@ from librarian.application.clean_chunks import (
     CleaningAttempt,
     FidelityValidationError,
 )
+from librarian.application.editorial_context import editorial_context
+from librarian.application.errors import ProcessingCanceled
 from librarian.application.final_refinement import FinalRefiner
 from librarian.application.ingest_document import IngestDocument, raw_text_key
 from librarian.application.ports import (
@@ -48,7 +51,7 @@ from librarian.domain.models import (
 )
 from librarian.observability import NoOpMetricsRecorder, sanitize_error_message, start_span
 from librarian.pipeline.chunking import ChunkingPolicy, chunk_text
-from librarian.pipeline.validation import PAGE_BREAK_REGEX
+from librarian.pipeline.validation import PAGE_BREAK_REGEX, UNCLEAR_TRANSCRIPTION_REGEX
 
 logger = logging.getLogger("librarian.application.process_document")
 
@@ -101,10 +104,6 @@ def _verified_pdf_page(page: object) -> bool:
         and page.get("kind") not in {"contents", "figure-list", "index"}
         and page.get("warnings") == []
     )
-
-
-class ProcessingCanceled(RuntimeError):
-    """Raised when a run is canceled while work is in progress."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,6 +213,36 @@ class ProcessDocument:
             await self._raise_if_canceled(run_id)
 
             async with self._timed_stage(RunStage.CLEAN, run_id, document_id):
+                await self.runs.update_status(
+                    run_id, status=RunStatus.RUNNING, stage=RunStage.CLEAN
+                )
+                spelling_sheet = ""
+                if self.cleaner.prompt_version == "cmos_v6":
+                    await self.events.emit(
+                        run_id, RunStage.CLEAN, "building document spelling sheet"
+                    )
+                    await self._raise_if_canceled(run_id)
+
+                    async def context_wait(elapsed: float) -> None:
+                        await self._raise_if_canceled(run_id)
+                        await self.events.emit(
+                            run_id,
+                            RunStage.CLEAN,
+                            f"building document spelling sheet: waiting {elapsed:.0f}s",
+                        )
+
+                    spelling_sheet = await await_with_progress(
+                        editorial_context(
+                            self.cleaner.provider,
+                            self.cleaner.prompt_catalog,
+                            self.cleaner.model,
+                            normalized_text,
+                        ),
+                        context_wait,
+                    )
+                    await self._raise_if_canceled(run_id)
+                    await self.content.put_text(f"quality:context:{run_id}", spelling_sheet)
+                    await self.events.emit(run_id, RunStage.CLEAN, "document spelling sheet ready")
                 run = ProcessingRun(
                     id=run_id,
                     document_id=document_id,
@@ -298,7 +327,10 @@ class ProcessDocument:
                         "elapsed_seconds": attempt.elapsed_seconds,
                     }
                     if attempt.text is not None:
-                        key = f"quality:attempt:{run_id}:{attempt.chunk.id}:{attempt.number}"
+                        key = (
+                            f"quality:attempt:{run_id}:{attempt.chunk.id}:"
+                            f"{attempt.number}:{attempt.status}"
+                        )
                         await self.content.put_text(key, attempt.text)
                         record["candidate_key"] = key
                         record["output_chars"] = len(attempt.text)
@@ -309,9 +341,15 @@ class ProcessDocument:
                     )
                     if attempt.warnings:
                         message += " (" + ", ".join(attempt.warnings) + ")"
+                    if attempt.elapsed_seconds:
+                        message += f" [{attempt.elapsed_seconds:.1f}s]"
                     await self.events.emit(run_id, RunStage.CLEAN, message)
 
-                cleaner = replace(self.cleaner, on_attempt=_note_attempt)
+                cleaner = replace(
+                    self.cleaner,
+                    on_attempt=_note_attempt,
+                    editorial_context=spelling_sheet,
+                )
                 cleaned_missing = await cleaner.execute(
                     missing_chunks, on_chunk_cleaned=_note_chunk_cleaned
                 )
@@ -431,6 +469,9 @@ class ProcessDocument:
                 final_quality = audit_final_document(
                     normalized_text, assembled, title=classification.title
                 )
+                queries = UNCLEAR_TRANSCRIPTION_REGEX.findall(assembled)
+                if queries:
+                    cast("list[str]", final_quality["warnings"]).append("uncertain-transcription")
                 await self.content.put_text(
                     run_quality_key(run_id),
                     json.dumps(
@@ -443,6 +484,8 @@ class ProcessDocument:
                             "source_preserved_chunks": fidelity_fallbacks,
                             "refinement": refinement_report,
                             "cleaning_attempts": cleaning_attempts,
+                            "cleaning_status": "needs-review" if queries else "cleaned",
+                            "editorial_queries": queries,
                         },
                         ensure_ascii=False,
                     ),

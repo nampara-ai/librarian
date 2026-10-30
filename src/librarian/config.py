@@ -28,7 +28,9 @@ LiteParseImageMode = Literal["off", "placeholder", "embed"]
 LogFormatSetting = Literal["json", "text"]
 LogLevelSetting = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 LlmProviderSetting = Literal["mock", "openai-compatible"]
-CleaningPromptVersionSetting = Literal["cmos_v1", "cmos_v2", "cmos_v3", "cmos_v4", "cmos_v5"]
+CleaningPromptVersionSetting = Literal[
+    "cmos_v1", "cmos_v2", "cmos_v3", "cmos_v4", "cmos_v5", "cmos_v6"
+]
 ClassificationPromptVersionSetting = Literal[
     "dewey_v1", "dewey_v2", "dewey_v3", "dewey_v4", "dewey_v5"
 ]
@@ -64,7 +66,8 @@ class Settings(BaseSettings):
     # return a fully-cleaned chunk (~chunk_target_chars); token-dense text
     # (CJK, tables, dense OCR) needs headroom or the provider truncates.
     llm_max_output_tokens: int = Field(default=16_384, gt=0)
-    cleaning_fidelity_max_retries: int = Field(default=2, ge=0, le=5)
+    cleaning_fidelity_max_retries: int = Field(default=3, ge=0, le=5)
+    cleaning_semantic_verification: bool = Field(default=True)
     final_refinement_enabled: bool = Field(default=True)
     # A bounded number of one-call, source-grounded fixes prevents a noisy
     # report from turning one document into hundreds of provider requests.

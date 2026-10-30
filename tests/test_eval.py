@@ -104,7 +104,8 @@ async def test_eval_suite_fails_on_unexpected_quality_warnings(tmp_path: Path) -
 
     assert not result.passed
     assert "missing-markdown-list" in result.cases[0].warnings
-    assert any("unexpected output warnings" in failure for failure in result.cases[0].failures)
+    assert any("failed fidelity checks" in failure for failure in result.cases[0].failures)
+    assert result.cases[0].output_chars == 0
     rendered = json.loads(eval_result_json(result))
     assert rendered["summary"]["warning_count"] == len(result.cases[0].warnings)
     assert rendered["summary"]["failure_count"] == len(result.cases[0].failures)

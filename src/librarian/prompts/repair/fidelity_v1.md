@@ -11,4 +11,6 @@ Repair the reported problems while retaining the copyediting required by the mai
   page markers, code, and equations. Do not emit any read-only context.
 - A chunk is part of a larger work. Do not invent an opening, conclusion, or connective facts.
 
-Return the complete cleaned chunk only. Do not discuss these diagnostics or the prior attempt.
+Return the complete edited chunk using the output format required by the main prompt.
+If the main prompt requires JSON edits, retain that schema and every original unit ID.
+Do not discuss these diagnostics or the prior attempt.

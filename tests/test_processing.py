@@ -212,7 +212,7 @@ async def test_failed_fidelity_repair_preserves_previous_published_output(tmp_pa
     assert latest is not None and latest.status == RunStatus.FAILED
     assert output is not None and output.run_id == original_run.id
     assert "120 seconds" in output.text
-    assert provider.calls == 3
+    assert provider.calls == 4
     assert source.read_text() == "The timeout must remain 120 seconds."
     assert latest.failed_chunks == 1
     quality = json.loads(await container.repository.get_text(run_quality_key(queued.id)))
@@ -220,13 +220,13 @@ async def test_failed_fidelity_repair_preserves_previous_published_output(tmp_pa
     assert quality["output_available"] is False
     assert quality["failed_chunk"] == 1
     rejected = [item for item in quality["cleaning_attempts"] if item["status"] == "rejected"]
-    assert len(rejected) == 3
+    assert len(rejected) == 4
     assert all("missing-verbatim-number" in item["warnings"] for item in rejected)
     candidate = await container.repository.get_text(rejected[0]["candidate_key"])
     assert candidate == "The timeout must remain unchanged."
     events = await container.repository.list_events(queued.id)
-    assert any("attempt 2/3: started" in event for event in events)
-    assert any("attempt 3/3: rejected" in event for event in events)
+    assert any("attempt 2/4: started" in event for event in events)
+    assert any("attempt 4/4: rejected" in event for event in events)
 
 
 @pytest.mark.asyncio
@@ -543,12 +543,14 @@ async def test_balanced_coherence_carries_context_within_parallel_groups() -> No
 
     await cleaner.execute(chunks)
 
-    assert provider.prompts[0] == "chunk 0"
-    assert provider.prompts[1].startswith("[CONTEXT:")
-    assert "chunk 0" in provider.prompts[1]
-    assert provider.prompts[2] == "chunk 2"
-    assert provider.prompts[3].startswith("[CONTEXT:")
-    assert "chunk 2" in provider.prompts[3]
+    assert {prompt for prompt in provider.prompts if not prompt.startswith("[CONTEXT:")} == {
+        "chunk 0",
+        "chunk 2",
+    }
+    carried = [prompt for prompt in provider.prompts if prompt.startswith("[CONTEXT:")]
+    assert len(carried) == 2
+    assert any("chunk 0" in prompt and prompt.endswith("chunk 1") for prompt in carried)
+    assert any("chunk 2" in prompt and prompt.endswith("chunk 3") for prompt in carried)
 
 
 @pytest.mark.asyncio

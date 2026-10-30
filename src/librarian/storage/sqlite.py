@@ -958,6 +958,9 @@ class SQLiteRepository:
                    OR key IN (
                      SELECT 'quality:run:' || id FROM runs WHERE document_id = ?
                    )
+                   OR key IN (
+                     SELECT 'quality:context:' || id FROM runs WHERE document_id = ?
+                   )
                    OR EXISTS (
                      SELECT 1 FROM runs
                      WHERE document_id = ?
@@ -968,6 +971,7 @@ class SQLiteRepository:
                     f"raw:{document_id}",
                     f"extraction-signature:{document_id}",
                     f"quality:extraction:{document_id}",
+                    str(document_id),
                     str(document_id),
                     str(document_id),
                 ),

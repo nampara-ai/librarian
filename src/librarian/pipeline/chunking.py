@@ -11,6 +11,10 @@ from librarian.domain.models import Chunk
 from librarian.pipeline.markdown import protected_spans
 
 _BOUNDARY_PATTERN = re.compile(r"\n(?=#{1,6}\s)|\n{2,}|(?<=[.!?])\s+")
+_DISCOURSE_PATTERN = re.compile(
+    r"\b(?:all right|so|but|now|for instance|for example|let's|and (?:I|we|that's))\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +104,19 @@ def _choose_boundary(
     ]
     if candidates:
         return candidates[-1]
+
+    # Raw speech often has no punctuation at all. Prefer a nearby clause opener
+    # over a mechanical word boundary (which can split phrases such as "you know").
+    radius = max(20, policy.target_chars // 8)
+    discourse = [
+        match.start()
+        for match in _DISCOURSE_PATTERN.finditer(
+            text, max(start + 1, desired_end - radius), min(len(text), desired_end + radius)
+        )
+        if not any(left < match.start() < right for left, right in protected)
+    ]
+    if discourse:
+        return min(discourse, key=lambda position: abs(position - desired_end))
 
     # A target is a size preference, never permission to cut a word or identifier.
     spaces = list(re.finditer(r"\s+", text[start : desired_end + 1]))

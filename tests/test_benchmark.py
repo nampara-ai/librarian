@@ -120,7 +120,12 @@ async def test_clean_chunks_bounds_parallel_task_fanout() -> None:
             max_active = max(max_active, active)
             await asyncio.sleep(0)
             active -= 1
-            return user_prompt
+            # Context is read-only; emulate a provider that edits only the source.
+            return (
+                user_prompt.split("]\n\n", 1)[-1]
+                if user_prompt.startswith("[CONTEXT:")
+                else user_prompt
+            )
 
     chunks = [
         Chunk(
