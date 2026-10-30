@@ -214,6 +214,19 @@ async def test_failed_fidelity_repair_preserves_previous_published_output(tmp_pa
     assert "120 seconds" in output.text
     assert provider.calls == 3
     assert source.read_text() == "The timeout must remain 120 seconds."
+    assert latest.failed_chunks == 1
+    quality = json.loads(await container.repository.get_text(run_quality_key(queued.id)))
+    assert quality["cleaning_status"] == "failed"
+    assert quality["output_available"] is False
+    assert quality["failed_chunk"] == 1
+    rejected = [item for item in quality["cleaning_attempts"] if item["status"] == "rejected"]
+    assert len(rejected) == 3
+    assert all("missing-verbatim-number" in item["warnings"] for item in rejected)
+    candidate = await container.repository.get_text(rejected[0]["candidate_key"])
+    assert candidate == "The timeout must remain unchanged."
+    events = await container.repository.list_events(queued.id)
+    assert any("attempt 2/3: started" in event for event in events)
+    assert any("attempt 3/3: rejected" in event for event in events)
 
 
 @pytest.mark.asyncio

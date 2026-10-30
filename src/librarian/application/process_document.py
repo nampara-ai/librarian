@@ -9,13 +9,18 @@ import logging
 import time
 import uuid
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import TracebackType
 from typing import Any, cast
 
 from librarian.application.assemble_document import assemble_cleaned_document
 from librarian.application.classify_document import ClassifyDocument
-from librarian.application.clean_chunks import CleanChunks, CleanedChunk
+from librarian.application.clean_chunks import (
+    CleanChunks,
+    CleanedChunk,
+    CleaningAttempt,
+    FidelityValidationError,
+)
 from librarian.application.final_refinement import FinalRefiner
 from librarian.application.ingest_document import IngestDocument, raw_text_key
 from librarian.application.ports import (
@@ -160,6 +165,8 @@ class ProcessDocument:
         previous_document_status = document.status
 
         published = False
+        cleaning_attempts: list[dict[str, object]] = []
+        progress = {"completed": 0}
 
         try:
             await self.events.emit(run_id, RunStage.INGEST, "started processing run")
@@ -279,7 +286,33 @@ class ProcessDocument:
                         stage=RunStage.CLEAN,
                     )
 
-                cleaned_missing = await self.cleaner.execute(
+                async def _note_attempt(attempt: CleaningAttempt) -> None:
+                    await self._raise_if_canceled(run_id)
+                    record: dict[str, object] = {
+                        "chunk_id": str(attempt.chunk.id),
+                        "chunk": attempt.chunk.ordinal + 1,
+                        "attempt": attempt.number,
+                        "limit": attempt.limit,
+                        "status": attempt.status,
+                        "warnings": list(attempt.warnings),
+                        "elapsed_seconds": attempt.elapsed_seconds,
+                    }
+                    if attempt.text is not None:
+                        key = f"quality:attempt:{run_id}:{attempt.chunk.id}:{attempt.number}"
+                        await self.content.put_text(key, attempt.text)
+                        record["candidate_key"] = key
+                        record["output_chars"] = len(attempt.text)
+                    cleaning_attempts.append(record)
+                    message = (
+                        f"chunk {attempt.chunk.ordinal + 1}/{len(chunked)} "
+                        f"attempt {attempt.number}/{attempt.limit}: {attempt.status}"
+                    )
+                    if attempt.warnings:
+                        message += " (" + ", ".join(attempt.warnings) + ")"
+                    await self.events.emit(run_id, RunStage.CLEAN, message)
+
+                cleaner = replace(self.cleaner, on_attempt=_note_attempt)
+                cleaned_missing = await cleaner.execute(
                     missing_chunks, on_chunk_cleaned=_note_chunk_cleaned
                 )
                 await self._raise_if_canceled(run_id)
@@ -409,6 +442,7 @@ class ProcessDocument:
                             "verified_source_chunks": len(verified_chunks),
                             "source_preserved_chunks": fidelity_fallbacks,
                             "refinement": refinement_report,
+                            "cleaning_attempts": cleaning_attempts,
                         },
                         ensure_ascii=False,
                     ),
@@ -488,6 +522,35 @@ class ProcessDocument:
             if published:
                 raise
             error_message = sanitize_error_message(exc)
+            if isinstance(exc, FidelityValidationError):
+                await self.runs.update_run_progress(
+                    run_id,
+                    completed_chunks=progress["completed"],
+                    failed_chunks=1,
+                    stage=RunStage.VALIDATE,
+                )
+                latest = await self.runs.get_run(run_id)
+                report = {
+                    "pages": None,
+                    "image_references": 0,
+                    "chunks": latest.total_chunks if latest else 0,
+                    "cleaned_chunks": progress["completed"],
+                    "cached_cleaned_chunks": 0,
+                    "source_preserved_chunks": 0,
+                    "failed_chunks": 1,
+                    "cleaning_status": "failed",
+                    "output_available": False,
+                    "fatal": ["cleaning-fidelity-failed"],
+                    "warnings": list(exc.warnings),
+                    "cleaning_attempts": cleaning_attempts,
+                    "failed_chunk": exc.chunk.ordinal + 1,
+                }
+                try:
+                    await self.content.put_text(run_quality_key(run_id), json.dumps(report))
+                except Exception as report_error:  # noqa: BLE001 - preserve original failure
+                    logger.error(
+                        "Could not persist failed cleaning report: %s", type(report_error).__name__
+                    )
             await self.runs.update_status(
                 run_id,
                 status=RunStatus.FAILED,

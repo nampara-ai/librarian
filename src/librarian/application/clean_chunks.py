@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
@@ -87,6 +88,20 @@ class FidelityValidationError(ValueError):
 
 ChunkCleanedCallback = Callable[[CleanedChunk], Awaitable[None]]
 
+
+@dataclass(frozen=True, slots=True)
+class CleaningAttempt:
+    chunk: Chunk
+    number: int
+    limit: int
+    status: Literal["started", "accepted", "rejected", "error"]
+    warnings: tuple[str, ...] = ()
+    text: str | None = None
+    elapsed_seconds: float = 0.0
+
+
+AttemptCallback = Callable[[CleaningAttempt], Awaitable[None]]
+
 _FIDELITY_WARNINGS = frozenset(
     {
         "added-verbatim-number",
@@ -147,6 +162,7 @@ class CleanChunks:
     balanced_group_size: int = 4
     max_response_chars: int = 2 * 1024 * 1024
     max_fidelity_retries: int = 2
+    on_attempt: AttemptCallback | None = None
     # Trailing characters of the preceding chunk handed to the cleaner as
     # read-only continuity context. Chunks no longer overlap in the source, so
     # this replaces the (previously duplicated) overlap for boundary coherence.
@@ -266,6 +282,10 @@ class CleanChunks:
 
         warnings: tuple[str, ...] = ()
         for attempt in range(max(0, self.max_fidelity_retries) + 1):
+            limit = max(0, self.max_fidelity_retries) + 1
+            if self.on_attempt is not None:
+                await self.on_attempt(CleaningAttempt(chunk, attempt + 1, limit, "started"))
+            started = time.monotonic()
             prompt = system_prompt
             if attempt:
                 diagnostics = {
@@ -286,6 +306,17 @@ class CleanChunks:
                     temperature=self.temperature,
                 )
             except Exception as exc:  # noqa: BLE001 - identify the chunk without its source text
+                if self.on_attempt is not None:
+                    await self.on_attempt(
+                        CleaningAttempt(
+                            chunk,
+                            attempt + 1,
+                            limit,
+                            "error",
+                            (type(exc).__name__,),
+                            elapsed_seconds=time.monotonic() - started,
+                        )
+                    )
                 raise RuntimeError(
                     f"Cleaning chunk {chunk.ordinal + 1} failed: {sanitize_error_message(exc)}"
                 ) from None
@@ -299,7 +330,20 @@ class CleanChunks:
                 raw, input_size=len(chunk.text), source_text=chunk.text
             )
             warnings = validated.warnings
-            if not _FIDELITY_WARNINGS.intersection(warnings):
+            accepted = not _FIDELITY_WARNINGS.intersection(warnings)
+            if self.on_attempt is not None:
+                await self.on_attempt(
+                    CleaningAttempt(
+                        chunk,
+                        attempt + 1,
+                        limit,
+                        "accepted" if accepted else "rejected",
+                        warnings,
+                        raw,
+                        time.monotonic() - started,
+                    )
+                )
+            if accepted:
                 return CleanedChunk(
                     chunk=chunk,
                     text=validated.text,

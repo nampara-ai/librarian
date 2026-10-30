@@ -7,6 +7,8 @@
   reprocess legacy raw-fallback cache entries.
 - Keep words, fenced code, and Markdown tables intact at chunk boundaries. Preserve source
   quotations, code indentation, hard line breaks, and intentional repetition during cleanup.
+- Report individual cleaning attempts and fidelity failures in live progress. Persist rejected
+  candidates and failure diagnostics for review without logging document text.
 
 ## 1.9.0 - 2026-09-20
 
