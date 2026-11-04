@@ -28,6 +28,7 @@ LiteParseImageMode = Literal["off", "placeholder", "embed"]
 LogFormatSetting = Literal["json", "text"]
 LogLevelSetting = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 LlmProviderSetting = Literal["mock", "openai-compatible"]
+ReasoningEffortSetting = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
 CleaningPromptVersionSetting = Literal[
     "cmos_v1", "cmos_v2", "cmos_v3", "cmos_v4", "cmos_v5", "cmos_v6"
 ]
@@ -51,6 +52,7 @@ class Settings(BaseSettings):
 
     llm_provider: LlmProviderSetting = Field(default="mock")
     llm_model: str = Field(default="mock-cleaner")
+    llm_reasoning_effort: ReasoningEffortSetting | None = Field(default=None)
     llm_base_url: str | None = Field(default=None)
     llm_api_key_env: str = Field(default="OPENAI_API_KEY")
     llm_timeout_seconds: float = Field(default=120.0, gt=0)
@@ -68,6 +70,9 @@ class Settings(BaseSettings):
     llm_max_output_tokens: int = Field(default=16_384, gt=0)
     cleaning_fidelity_max_retries: int = Field(default=3, ge=0, le=5)
     cleaning_semantic_verification: bool = Field(default=True)
+    cleaning_reasoning_effort: ReasoningEffortSetting | None = Field(default=None)
+    cleaning_verification_model: str | None = Field(default=None, min_length=1)
+    cleaning_verification_reasoning_effort: ReasoningEffortSetting | None = Field(default=None)
     final_refinement_enabled: bool = Field(default=True)
     # A bounded number of one-call, source-grounded fixes prevents a noisy
     # report from turning one document into hundreds of provider requests.

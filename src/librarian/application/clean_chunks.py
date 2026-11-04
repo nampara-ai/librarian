@@ -166,6 +166,10 @@ class CleanChunks:
     editorial_context: str = ""
     provider_endpoint: str = ""
     progress_interval_seconds: float = 10.0
+    verification_provider: LLMProvider | None = None
+    verification_model: str | None = None
+    preparation_provider: LLMProvider | None = None
+    generation_signature: str = ""
     # Trailing characters of the preceding chunk handed to the cleaner as
     # read-only continuity context. Chunks no longer overlap in the source, so
     # this replaces the (previously duplicated) overlap for boundary coherence.
@@ -194,6 +198,9 @@ class CleanChunks:
                 "coherence_mode": self.coherence_mode,
                 "balanced_group_size": self.balanced_group_size,
                 "context_chars": self.context_chars,
+                "generation_signature": self.generation_signature,
+                "verification_model": self.verification_model or self.model,
+                "verification_provider": (self.verification_provider or self.provider).name,
             },
             sort_keys=True,
         )
@@ -636,6 +643,8 @@ class CleanChunks:
         pairs: list[dict[str, str]],
         verified: dict[str, str],
     ) -> tuple[str | None, dict[str, list[str]], str]:
+        provider = self.verification_provider or self.provider
+        model = self.verification_model or self.model
         queue: asyncio.Queue[dict[str, str]] = asyncio.Queue()
         for pair in pairs:
             if verified.get(pair["id"]) != pair["edited"]:
@@ -649,21 +658,21 @@ class CleanChunks:
             nonlocal invalid
             while not queue.empty():
                 pair = queue.get_nowait()
-                response = await self.provider.complete(
+                response = await provider.complete(
                     system_prompt=(
                         self.prompt_catalog.get("repair", "meaning_v1")
                         + "\n\nApproved spelling corrections; these do not change identity:\n"
                         + self.editorial_context
                     ),
                     user_prompt=json.dumps({"pairs": [pair]}, ensure_ascii=False),
-                    model=self.model,
+                    model=model,
                     max_tokens=self.max_tokens,
                     temperature=0.0,
                 )
                 warning, issues = _meaning_issues(response, {pair["id"]})
                 record = {"id": pair["id"], "response": response}
                 if issues and warning != "invalid-fidelity-verification":
-                    confirmation = await self.provider.complete(
+                    confirmation = await provider.complete(
                         system_prompt=(
                             self.prompt_catalog.get("repair", "confirm_meaning_v1")
                             + "\n\nApproved spelling sheet:\n"
@@ -676,7 +685,7 @@ class CleanChunks:
                             },
                             ensure_ascii=False,
                         ),
-                        model=self.model,
+                        model=model,
                         max_tokens=self.max_tokens,
                         temperature=0.0,
                     )

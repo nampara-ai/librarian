@@ -235,7 +235,7 @@ class ProcessDocument:
 
                     spelling_sheet = await await_with_progress(
                         editorial_context(
-                            self.cleaner.provider,
+                            self.cleaner.preparation_provider or self.cleaner.provider,
                             self.cleaner.prompt_catalog,
                             self.cleaner.model,
                             normalized_text,

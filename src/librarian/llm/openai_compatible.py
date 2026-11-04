@@ -162,6 +162,7 @@ class OpenAICompatibleProvider:
         metrics: LLMUsageMetrics | None = None,
         prompt_cost_per_1k_tokens_usd: float = 0.0,
         completion_cost_per_1k_tokens_usd: float = 0.0,
+        reasoning_effort: str | None = None,
     ) -> None:
         api_key = os.environ.get(api_key_env)
         if not api_key:
@@ -179,6 +180,7 @@ class OpenAICompatibleProvider:
         self._metrics = metrics
         self._prompt_cost_per_1k_tokens_usd = prompt_cost_per_1k_tokens_usd
         self._completion_cost_per_1k_tokens_usd = completion_cost_per_1k_tokens_usd
+        self._reasoning_effort = reasoning_effort
         # Parameter dialect learned per model (see ModelParamPrefs).
         self._param_prefs: dict[str, ModelParamPrefs] = {}
 
@@ -255,6 +257,8 @@ class OpenAICompatibleProvider:
             kwargs["max_tokens"] = max_tokens
         if not prefs.omit_temperature:
             kwargs["temperature"] = temperature
+        if self._reasoning_effort is not None:
+            kwargs["reasoning_effort"] = self._reasoning_effort
         return kwargs
 
     async def _chat_with_retries(

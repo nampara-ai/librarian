@@ -89,6 +89,20 @@ calls. These checks reduce errors; inspect quotations and genuinely ambiguous tr
 the exported Markdown. `[transcription unclear: ...]` annotations make uncertainty visible and
 set the quality status to `needs-review`.
 
+`LIBRARIAN_LLM_REASONING_EFFORT` optionally requests a provider-supported reasoning level.
+Leaving it unset preserves the provider default. Unsupported values are reported as request
+errors rather than silently downgraded. Larger reasoning budgets can also exhaust the output
+limit; reasoning and answer tokens may share that limit.
+`LIBRARIAN_CLEANING_REASONING_EFFORT` overrides the editing stage separately, so a deeper
+copyedit can retain ordinary reasoning budgets for classification and other model tasks.
+
+`LIBRARIAN_CLEANING_VERIFICATION_MODEL` selects an independent model on the same endpoint for
+semantic review. `LIBRARIAN_CLEANING_VERIFICATION_REASONING_EFFORT`
+controls that profile separately. Unset review options reuse the editing profile. Cache keys
+include both profiles. Independent review reduces reliance on one model approving its own edits;
+it does not establish that a model or profile is accurate without external evaluation.
+Spelling preparation uses the base LLM profile independently of the editing-only override.
+
 Rejected large spans are subdivided on later attempts, retaining neighboring context and
 checking the reconstructed parent span again. Passing spans are retained. Untouched long,
 unpunctuated prose is rejected rather than counted as an edited result. Sentence seams receive

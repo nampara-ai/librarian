@@ -12,6 +12,10 @@ from librarian.config import Settings
     [
         {"job_backend": "bogus"},
         {"llm_provider": "bogus"},
+        {"llm_reasoning_effort": "unlimited"},
+        {"cleaning_reasoning_effort": "unlimited"},
+        {"cleaning_verification_reasoning_effort": "unlimited"},
+        {"cleaning_verification_model": ""},
         {"cleaning_prompt_version": "cmos_v9"},
         {"classification_prompt_version": "dewey_v9"},
         {"cleaning_mode": "experimental"},

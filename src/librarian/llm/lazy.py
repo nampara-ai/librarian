@@ -157,6 +157,7 @@ def build_provider(settings: Settings, *, metrics: ApplicationMetrics | None = N
             metrics=metrics,
             prompt_cost_per_1k_tokens_usd=settings.llm_prompt_cost_per_1k_tokens_usd,
             completion_cost_per_1k_tokens_usd=settings.llm_completion_cost_per_1k_tokens_usd,
+            reasoning_effort=settings.llm_reasoning_effort,
         )
     else:
         raise ValueError(f"Unsupported LLM provider: {settings.llm_provider}")

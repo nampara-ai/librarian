@@ -15,6 +15,10 @@ def test_cache_fingerprint_tracks_context_and_editorial_policy() -> None:
     assert key == cleaner.cache_version("Original document")
     assert key != cleaner.cache_version("Different neighboring passages")
     assert key != replace(cleaner, verify_semantics=False).cache_version("Original document")
+    assert key != replace(cleaner, verification_model="different-reviewer").cache_version(
+        "Original document"
+    )
+    assert key != replace(cleaner, generation_signature="high").cache_version("Original document")
     assert key != replace(cleaner, provider_endpoint="https://example.test/v1").cache_version(
         "Original document"
     )
