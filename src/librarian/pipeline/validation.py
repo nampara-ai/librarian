@@ -40,6 +40,8 @@ FIDELITY_WARNINGS = frozenset(
         "changed-table-shape",
         "changed-table-values",
         "semantic-fidelity-failed",
+        "editorial-quality-failed",
+        "changed-literal-link",
         "invalid-fidelity-verification",
     }
 )
@@ -80,6 +82,17 @@ PAGE_BREAK_REGEX = re.compile(r"<!--\s*page-break\s*-->", re.IGNORECASE)
 ALL_IMAGE_REFERENCE_REGEX = re.compile(r"!\[[^\]]*\]\(([^)\n]+)\)")
 UNCLEAR_TRANSCRIPTION_REGEX = re.compile(r"\[transcription unclear:\s*([^\]]+)\]", re.IGNORECASE)
 VERBATIM_NUMBER_REGEX = re.compile(r"(?<![\w])\d+(?:[.,]\d+)*(?![\w])")
+LITERAL_LINK_REGEX = re.compile(
+    r"(?<![\w@.-])(?:https?://|www\.)[^\s<>()\[\]]+"
+    r"|(?<![\w@.-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+    r"[A-Za-z]{2,63}(?:/[^\s<>()\[\]]*)?"
+)
+
+
+def literal_links(text: str) -> list[str]:
+    return [m.group().rstrip(".,!?;:\"'’”") for m in LITERAL_LINK_REGEX.finditer(text)]
+
+
 REPEATED_TAIL_MIN_PATTERN_CHARS = 12
 REPEATED_TAIL_MAX_PATTERN_CHARS = 240
 REPEATED_TAIL_MIN_REPEATS = 8
@@ -161,6 +174,8 @@ def _markdown_quality_warnings(text: str, *, source_text: str | None) -> list[st
         warnings.append("uncertain-transcription")
     if source_text is None:
         return warnings
+    if Counter(literal_links(source_text)) != Counter(literal_links(text)):
+        warnings.append("changed-literal-link")
     if _paragraph_count(source_text) >= 3 and _paragraph_count(text) <= 1 and len(text) > 500:
         warnings.append("collapsed-paragraphs")
     if MARKDOWN_HEADING_REGEX.search(source_text) and MARKDOWN_HEADING_REGEX.search(text) is None:

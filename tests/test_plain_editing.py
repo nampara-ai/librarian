@@ -103,3 +103,47 @@ async def test_semantic_repair_patches_draft_without_rewriting_accepted_prose() 
     assert result.text == source
     assert editor.drafts == 1
     assert editor.patches == 1
+
+
+@pytest.mark.asyncio
+async def test_unchanged_short_damaged_prose_is_reviewed_and_locally_repaired() -> None:
+    class Editor:
+        name = "editor"
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            payload = json.loads(user_prompt)
+            if "candidate_spans" in payload:
+                return json.dumps(
+                    {
+                        "patches": [
+                            {"id": "p0", "find": "We was ready.", "replace": "We were ready."}
+                        ]
+                    }
+                )
+            return payload["source"]
+
+    class Reviewer:
+        name = "reviewer"
+        calls = 0
+
+        async def complete(self, *, system_prompt: str, user_prompt: str, **_: object) -> str:
+            self.calls += 1
+            assert "grammatical" in system_prompt
+            payload = json.loads(user_prompt)
+            pair = payload.get("pair") or payload["pairs"][0]
+            return json.dumps(
+                {
+                    "issues": []
+                    if "were" in pair["edited"]
+                    else [{"id": pair["id"], "problem": "Repair the subject-verb agreement."}]
+                }
+            )
+
+    source = "We was ready."
+    chunk = Chunk(ChunkId("short"), DocumentId("doc"), 0, source, 0, len(source), "source")
+    reviewer = Reviewer()
+    cleaner = CleanChunks(
+        Editor(), PromptCatalog(), "cmos_v8", "test", verification_provider=reviewer
+    )
+    assert (await cleaner.execute([chunk]))[0].text == "We were ready."
+    assert reviewer.calls == 3

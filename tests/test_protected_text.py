@@ -1,6 +1,30 @@
 import pytest
 
-from librarian.pipeline.protected_text import protect_numerals
+from librarian.pipeline.protected_text import protect_numerals, protect_prose_data
+from librarian.pipeline.validation import validate_cleaned_text
+
+
+def test_link_identifiers_are_protected_with_numbers_and_punctuation_round_trips() -> None:
+    source = (
+        "Visit author-example.com, https://example.org/v2?id=15, or www.example.net. Read 15 pages."
+    )
+    protected = protect_prose_data(source)
+    assert [value for _, value in protected.values] == [
+        "author-example.com",
+        "https://example.org/v2?id=15",
+        "www.example.net",
+        "15",
+    ]
+    assert protected.restore(protected.text) == (source, ())
+    assert "example" not in protected.text
+
+
+def test_readable_but_changed_link_is_a_fidelity_failure() -> None:
+    source = "Visit author-example.com for more."
+    result = validate_cleaned_text(
+        "Visit author-examples.com for more.", input_size=len(source), source_text=source
+    )
+    assert "changed-literal-link" in result.warnings
 
 
 @pytest.mark.parametrize(

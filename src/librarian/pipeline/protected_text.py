@@ -6,7 +6,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 
-from librarian.pipeline.validation import VERBATIM_NUMBER_REGEX
+from librarian.pipeline.validation import LITERAL_LINK_REGEX, VERBATIM_NUMBER_REGEX
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +36,15 @@ class ProtectedText:
 
 def protect_numerals(source: str) -> ProtectedText:
     """Each occurrence gets its own identity, including repeated equal values."""
+    return _protect(source, include_links=False)
+
+
+def protect_prose_data(source: str) -> ProtectedText:
+    """URLs are identifiers, so do not spell-correct them as names or prose."""
+    return _protect(source, include_links=True)
+
+
+def _protect(source: str, *, include_links: bool) -> ProtectedText:
     salt = 0
     while True:
         digest = hashlib.sha256((str(salt) + "\0" + source).encode()).hexdigest()[:8]
@@ -45,7 +54,7 @@ def protect_numerals(source: str) -> ProtectedText:
         salt += 1
     values: list[tuple[str, str]] = []
 
-    def replace(match: re.Match[str]) -> str:
+    def replace(value: str) -> str:
         index = len(values)
         label = ""
         while True:
@@ -55,7 +64,26 @@ def protect_numerals(source: str) -> ProtectedText:
                 break
             index -= 1
         token = prefix + label + "]]"
-        values.append((token, match.group()))
+        values.append((token, value))
         return token
 
-    return ProtectedText(VERBATIM_NUMBER_REGEX.sub(replace, source), prefix, tuple(values))
+    links = (
+        [
+            (m.start(), m.start() + len(m.group().rstrip(".,!?;:\"'’”")))
+            for m in LITERAL_LINK_REGEX.finditer(source)
+        ]
+        if include_links
+        else []
+    )
+    numbers = [
+        (m.start(), m.end())
+        for m in VERBATIM_NUMBER_REGEX.finditer(source)
+        if not any(left <= m.start() < right for left, right in links)
+    ]
+    pieces: list[str] = []
+    cursor = 0
+    for left, right in sorted([*links, *numbers]):
+        pieces.extend((source[cursor:left], replace(source[left:right])))
+        cursor = right
+    pieces.append(source[cursor:])
+    return ProtectedText("".join(pieces), prefix, tuple(values))

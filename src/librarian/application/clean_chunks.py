@@ -22,7 +22,7 @@ from librarian.domain.models import Chunk
 from librarian.observability import sanitize_error_message
 from librarian.pipeline.editing import EditUnit, decode_edits, editing_units, verification_pairs
 from librarian.pipeline.prose_patches import apply_prose_patches, candidate_spans
-from librarian.pipeline.protected_text import protect_numerals
+from librarian.pipeline.protected_text import protect_prose_data
 from librarian.pipeline.validation import (
     FIDELITY_WARNINGS,
     VERBATIM_NUMBER_REGEX,
@@ -203,6 +203,8 @@ class CleanChunks:
         if self.plain_edits:
             prompts["prose_fidelity_v1"] = self.prompt_catalog.get("repair", "prose_fidelity_v1")
             prompts["prose_patch_v1"] = self.prompt_catalog.get("repair", "prose_patch_v1")
+            for name in ("prose_review_v1", "confirm_prose_v1"):
+                prompts[name] = self.prompt_catalog.get("repair", name)
             if self.source_reading:
                 prompts["source_reading_v1"] = self.prompt_catalog.get(
                     "repair", "source_reading_v1"
@@ -425,7 +427,12 @@ class CleanChunks:
                         unit_failures,
                         generation_failures,
                         repair_unit_chars=max(800, 4000 // (2**attempt)) if attempt else None,
-                        patch_semantics=self.plain_edits and "semantic-fidelity-failed" in warnings,
+                        patch_semantics=self.plain_edits
+                        and bool(
+                            {"semantic-fidelity-failed", "editorial-quality-failed"}.intersection(
+                                warnings
+                            )
+                        ),
                     )
                 else:
                     operation = self.provider.complete(
@@ -509,7 +516,13 @@ class CleanChunks:
                 and self.verify_semantics
                 and not (structural_failures - {"substantial-content-loss"})
             ):
-                pairs = verification_pairs(provider_text, units)
+                pairs = verification_pairs(
+                    provider_text, units, include_unchanged_prose=self.plain_edits
+                )
+                if self.plain_edits:
+                    for pair in pairs:
+                        if pair["id"] == units[0].id:
+                            pair["context_before"] = previous_context[-1200:]
                 if self.on_attempt is not None:
                     await self.on_attempt(
                         CleaningAttempt(
@@ -646,7 +659,7 @@ class CleanChunks:
                         continue
                 try:
                     protection_warnings: tuple[str, ...] = ()
-                    protected = protect_numerals(unit.text)
+                    protected = protect_prose_data(unit.text)
                     payload: dict[str, object] = {
                         "context_before": before,
                         "context_after": after,
@@ -720,7 +733,7 @@ class CleanChunks:
     async def _repair_prose(
         self, unit: EditUnit, candidate: str, checks: list[str], before: str, after: str
     ) -> tuple[str, tuple[str, ...]]:
-        protected = protect_numerals(candidate)
+        protected = protect_prose_data(candidate)
         payload: dict[str, object] = {
             "source": unit.text,
             "candidate_spans": [
@@ -777,7 +790,9 @@ class CleanChunks:
                     provider,
                     enabled=self.plain_edits,
                     system_prompt=(
-                        self.prompt_catalog.get("repair", "meaning_v1")
+                        self.prompt_catalog.get(
+                            "repair", "prose_review_v1" if self.plain_edits else "meaning_v1"
+                        )
                         + "\n\nApproved spelling corrections; these do not change identity:\n"
                         + self.editorial_context
                     ),
@@ -793,7 +808,10 @@ class CleanChunks:
                         provider,
                         enabled=self.plain_edits,
                         system_prompt=(
-                            self.prompt_catalog.get("repair", "confirm_meaning_v1")
+                            self.prompt_catalog.get(
+                                "repair",
+                                "confirm_prose_v1" if self.plain_edits else "confirm_meaning_v1",
+                            )
                             + "\n\nApproved spelling sheet:\n"
                             + self.editorial_context
                         ),
@@ -832,7 +850,11 @@ class CleanChunks:
         warning = (
             "invalid-fidelity-verification"
             if invalid
-            else ("semantic-fidelity-failed" if failures else None)
+            else (
+                ("editorial-quality-failed" if self.plain_edits else "semantic-fidelity-failed")
+                if failures
+                else None
+            )
         )
         return warning, failures, json.dumps({"reviews": responses}, ensure_ascii=False)
 

@@ -127,7 +127,9 @@ def decode_edits(
     return "".join(parts), warnings, failures
 
 
-def verification_pairs(raw: str, units: Sequence[EditUnit]) -> list[dict[str, str]]:
+def verification_pairs(
+    raw: str, units: Sequence[EditUnit], *, include_unchanged_prose: bool = False
+) -> list[dict[str, str]]:
     """Read already-validated JSON edits for the independent meaning-preservation audit."""
     body = raw.strip()
     fenced = re.fullmatch(r"```(?:json)?\s*([\s\S]+?)\s*```", body, re.I)
@@ -143,5 +145,5 @@ def verification_pairs(raw: str, units: Sequence[EditUnit]) -> list[dict[str, st
             "context_after": units[index + 1].text[:1200] if index + 1 < len(units) else "",
         }
         for index, (unit, edit) in enumerate(zip(units, payload["edits"], strict=True))
-        if unit.text != edit["text"]
+        if unit.text != edit["text"] or (include_unchanged_prose and unit.kind == "prose")
     ]
