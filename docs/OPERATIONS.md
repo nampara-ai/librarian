@@ -89,6 +89,11 @@ calls. These checks reduce errors; inspect quotations and genuinely ambiguous tr
 the exported Markdown. `[transcription unclear: ...]` annotations make uncertainty visible and
 set the quality status to `needs-review`.
 
+Truncated structured-edit responses retain their partial candidate for diagnosis and trigger
+the same bounded smaller-span retries as rejected edits. Partial text is never accepted as a
+complete response. Chunk totals are recorded before document preparation begins, including
+when preparation fails.
+
 `LIBRARIAN_LLM_REASONING_EFFORT` optionally requests a provider-supported reasoning level.
 Leaving it unset preserves the provider default. Unsupported values are reported as request
 errors rather than silently downgraded. Larger reasoning budgets can also exhaust the output

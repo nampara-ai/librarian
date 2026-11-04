@@ -31,6 +31,7 @@ FIDELITY_WARNINGS = frozenset(
         "substantial-content-loss",
         "suspiciously-short-output",
         "invalid-edit-structure",
+        "truncated-model-output",
         "unchanged-unclean-prose",
         "changed-code-block",
         "changed-table-shape",

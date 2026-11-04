@@ -218,6 +218,14 @@ class ProcessDocument:
                 await self.runs.update_status(
                     run_id, status=RunStatus.RUNNING, stage=RunStage.CLEAN
                 )
+                run = ProcessingRun(
+                    id=run_id,
+                    document_id=document_id,
+                    status=RunStatus.RUNNING,
+                    stage=RunStage.CLEAN,
+                    total_chunks=len(chunked),
+                )
+                await self.runs.save_run(run)
                 spelling_sheet = ""
                 if self.cleaner.prompt_version == "cmos_v6":
                     await self.events.emit(
@@ -245,14 +253,6 @@ class ProcessDocument:
                     await self._raise_if_canceled(run_id)
                     await self.content.put_text(f"quality:context:{run_id}", spelling_sheet)
                     await self.events.emit(run_id, RunStage.CLEAN, "document spelling sheet ready")
-                run = ProcessingRun(
-                    id=run_id,
-                    document_id=document_id,
-                    status=RunStatus.RUNNING,
-                    stage=RunStage.CLEAN,
-                    total_chunks=len(chunked),
-                )
-                await self.runs.save_run(run)
                 await self._raise_if_canceled(run_id)
                 extraction_report: object = None
                 if document.source.filename.lower().endswith(".pdf"):

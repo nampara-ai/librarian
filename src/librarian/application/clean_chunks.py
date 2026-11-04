@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from librarian.application.async_progress import await_with_progress
-from librarian.application.errors import ProcessingCanceled
+from librarian.application.errors import LLMResponseTruncatedError, ProcessingCanceled
 from librarian.application.ports import LLMProvider
 from librarian.domain.ids import ChunkId
 from librarian.domain.models import Chunk
@@ -596,27 +596,33 @@ class CleanChunks:
                             generation_failures.pop(unit.id, None)
                         queue.task_done()
                         continue
-                response = await self.provider.complete(
-                    system_prompt=system_prompt,
-                    user_prompt=json.dumps(
-                        {
-                            "context_before": before,
-                            "context_after": after,
-                            "continuation_before": unit.separator == " "
-                            or (index == 0 and bool(before)),
-                            "continuation_after": (
-                                index + 1 < len(units) and units[index + 1].separator == " "
-                            ),
-                            "units": [unit.as_dict()],
-                            "previous_candidate": edits.get(unit.id),
-                            "repair_checks": failures.get(unit.id, []),
-                        },
-                        ensure_ascii=False,
-                    ),
-                    model=self.model,
-                    max_tokens=self.max_tokens,
-                    temperature=self.temperature,
-                )
+                try:
+                    response = await self.provider.complete(
+                        system_prompt=system_prompt,
+                        user_prompt=json.dumps(
+                            {
+                                "context_before": before,
+                                "context_after": after,
+                                "continuation_before": unit.separator == " "
+                                or (index == 0 and bool(before)),
+                                "continuation_after": (
+                                    index + 1 < len(units) and units[index + 1].separator == " "
+                                ),
+                                "units": [unit.as_dict()],
+                                "previous_candidate": edits.get(unit.id),
+                                "repair_checks": failures.get(unit.id, []),
+                            },
+                            ensure_ascii=False,
+                        ),
+                        model=self.model,
+                        max_tokens=self.max_tokens,
+                        temperature=self.temperature,
+                    )
+                except LLMResponseTruncatedError as exc:
+                    edits[unit.id] = exc.partial_text[: self.max_response_chars]
+                    generation_failures[unit.id] = ["truncated-model-output"]
+                    queue.task_done()
+                    continue
                 if len(response) > self.max_response_chars:
                     raise ValueError(
                         "cleaning provider response exceeded configured character limit"
