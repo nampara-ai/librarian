@@ -227,7 +227,7 @@ class ProcessDocument:
                 )
                 await self.runs.save_run(run)
                 spelling_sheet = ""
-                if self.cleaner.prompt_version == "cmos_v6":
+                if self.cleaner.source_aligned:
                     await self.events.emit(
                         run_id, RunStage.CLEAN, "building document spelling sheet"
                     )

@@ -30,7 +30,7 @@ LogLevelSetting = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 LlmProviderSetting = Literal["mock", "openai-compatible"]
 ReasoningEffortSetting = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
 CleaningPromptVersionSetting = Literal[
-    "cmos_v1", "cmos_v2", "cmos_v3", "cmos_v4", "cmos_v5", "cmos_v6"
+    "cmos_v1", "cmos_v2", "cmos_v3", "cmos_v4", "cmos_v5", "cmos_v6", "cmos_v8"
 ]
 ClassificationPromptVersionSetting = Literal[
     "dewey_v1", "dewey_v2", "dewey_v3", "dewey_v4", "dewey_v5"
@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     cleaning_fidelity_max_retries: int = Field(default=3, ge=0, le=5)
     cleaning_semantic_verification: bool = Field(default=True)
     cleaning_reasoning_effort: ReasoningEffortSetting | None = Field(default=None)
+    cleaning_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    cleaning_source_reading: bool = False
+    cleaning_verification_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     cleaning_verification_model: str | None = Field(default=None, min_length=1)
     cleaning_verification_reasoning_effort: ReasoningEffortSetting | None = Field(default=None)
     final_refinement_enabled: bool = Field(default=True)

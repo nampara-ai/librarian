@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import cast
 
+from librarian.application.model_output import complete_json
 from librarian.application.ports import ApplicationMetrics, LLMProvider
 from librarian.config import Settings
 from librarian.llm.mock import MockLLMProvider
@@ -61,6 +62,24 @@ class LazyLLMProvider:
         return await describe(
             image_base64=image_base64,
             media_type=media_type,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
+    async def complete_json(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        model: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        return await complete_json(
+            self._get_provider(),
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             model=model,
@@ -132,6 +151,26 @@ class PromptSizeGuardProvider:
         return await describe(
             image_base64=image_base64,
             media_type=media_type,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
+    async def complete_json(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        model: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        if len(system_prompt) + len(user_prompt) > self.max_prompt_chars:
+            raise ValueError("LLM prompt exceeded configured character limit")
+        return await complete_json(
+            self.provider,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             model=model,

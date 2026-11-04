@@ -20,8 +20,9 @@ from librarian.prompts import PromptCatalog
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("effort", [None, "high"])
+@pytest.mark.parametrize("structured", [False, True])
 async def test_reasoning_effort_reaches_provider_only_when_configured(
-    monkeypatch: pytest.MonkeyPatch, effort: str | None
+    monkeypatch: pytest.MonkeyPatch, effort: str | None, structured: bool
 ) -> None:
     requests: list[dict[str, object]] = []
 
@@ -53,8 +54,9 @@ async def test_reasoning_effort_reaches_provider_only_when_configured(
         max_concurrency=1,
         reasoning_effort=effort,
     )
+    operation = provider.complete_json if structured else provider.complete
     assert (
-        await provider.complete(
+        await operation(
             system_prompt="Edit.",
             user_prompt="Source.",
             model="test",
@@ -67,6 +69,9 @@ async def test_reasoning_effort_reaches_provider_only_when_configured(
         assert "reasoning_effort" not in requests[0]
     else:
         assert requests[0]["reasoning_effort"] == effort
+    assert ("response_format" in requests[0]) is structured
+    if structured:
+        assert requests[0]["response_format"] == {"type": "json_object"}
 
 
 @pytest.mark.asyncio
@@ -107,6 +112,7 @@ async def test_editing_reasoning_override_keeps_classification_profile(tmp_path:
             data_dir=tmp_path,
             database_path=tmp_path / "roles.sqlite",
             cleaning_reasoning_effort="high",
+            cleaning_temperature=1.0,
         )
     )
     assert container.process_document.cleaner.provider is not (
@@ -119,6 +125,7 @@ async def test_editing_reasoning_override_keeps_classification_profile(tmp_path:
         json.loads(container.process_document.cleaner.generation_signature)["editing_reasoning"]
         == "high"
     )
+    assert container.process_document.cleaner.temperature == 1.0
 
 
 @pytest.mark.asyncio

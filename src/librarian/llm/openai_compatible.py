@@ -186,6 +186,43 @@ class OpenAICompatibleProvider:
         max_tokens: int,
         temperature: float,
     ) -> str:
+        return await self._complete(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            json_output=False,
+        )
+
+    async def complete_json(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        model: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        return await self._complete(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            json_output=True,
+        )
+
+    async def _complete(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        model: str,
+        max_tokens: int,
+        temperature: float,
+        json_output: bool,
+    ) -> str:
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -196,6 +233,7 @@ class OpenAICompatibleProvider:
                 model=model,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                json_output=json_output,
             )
         self._record_usage(response, model=model)
         return _content_or_raise(response)
@@ -242,6 +280,7 @@ class OpenAICompatibleProvider:
         model: str,
         max_tokens: int,
         temperature: float,
+        json_output: bool = False,
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"model": model, "messages": cast("Any", messages)}
         if prefs.use_max_completion_tokens:
@@ -252,6 +291,8 @@ class OpenAICompatibleProvider:
             kwargs["temperature"] = temperature
         if self._reasoning_effort is not None:
             kwargs["reasoning_effort"] = self._reasoning_effort
+        if json_output:
+            kwargs["response_format"] = {"type": "json_object"}
         return kwargs
 
     async def _chat_with_retries(
@@ -261,6 +302,7 @@ class OpenAICompatibleProvider:
         model: str,
         max_tokens: int,
         temperature: float,
+        json_output: bool = False,
     ) -> ChatCompletion:
         prefs = self._param_prefs.setdefault(model, ModelParamPrefs())
         # One adaptation per parameter at most; a dialect mismatch is resolved
@@ -277,6 +319,7 @@ class OpenAICompatibleProvider:
                 model=model,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                json_output=json_output,
             )
             try:
                 # Kwargs are assembled dynamically (dialect varies per model),

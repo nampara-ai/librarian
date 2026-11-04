@@ -5,7 +5,13 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from librarian.maintainer.editorial_eval import CRITERIA, EditorialCase, validate_assessment
+from librarian.maintainer.editorial_eval import (
+    CRITERIA,
+    EditorialCase,
+    assess_editorial_output,
+    validate_assessment,
+)
+from librarian.prompts import PromptCatalog
 
 
 def judgment() -> dict[str, object]:
@@ -81,6 +87,50 @@ def test_incomplete_judgment_is_invalid() -> None:
     case = EditorialCase(id="invalid", source="Original text.")
     with pytest.raises(ValidationError):
         validate_assessment(case, "Edited text.", "{}", model="j", prompt="p")
+
+
+@pytest.mark.asyncio
+async def test_assessor_repairs_schema_without_receiving_an_expected_verdict() -> None:
+    class Provider:
+        name = "format-test"
+        requests: list[dict[str, object]] = []
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            self.requests.append(json.loads(user_prompt))
+            return "{}" if len(self.requests) == 1 else json.dumps(judgment())
+
+    provider = Provider()
+    case = EditorialCase(id="format", source="An intact sentence.")
+    result = await assess_editorial_output(
+        provider, PromptCatalog(), "judge", case, "An intact sentence."
+    )
+    assert result.passed
+    assert result.attempts == 2
+    assert result.validation_history[0] == ["invalid-assessment-json"]
+    assert "expected_pass" not in provider.requests[1]
+    assert provider.requests[0]["candidate"] == provider.requests[1]["candidate"]
+
+
+@pytest.mark.asyncio
+async def test_protected_failure_cannot_retry_until_a_judge_approves() -> None:
+    class Provider:
+        name = "overconfident"
+        calls = 0
+
+        async def complete(self, **_: object) -> str:
+            self.calls += 1
+            return json.dumps(judgment())
+
+    provider = Provider()
+    result = await assess_editorial_output(
+        provider,
+        PromptCatalog(),
+        "judge",
+        EditorialCase(id="data", source="There were 15 failures."),
+        "There were 20 failures.",
+    )
+    assert not result.passed
+    assert provider.calls == 1
 
 
 def test_frozen_holdout_hashes_and_families_are_intact() -> None:

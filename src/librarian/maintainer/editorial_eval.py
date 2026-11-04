@@ -8,6 +8,7 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from librarian.application.model_output import complete_json
 from librarian.application.ports import LLMProvider
 from librarian.pipeline.validation import (
     FIDELITY_WARNINGS,
@@ -73,6 +74,8 @@ class EditorialAssessment(BaseModel):
     assessment_errors: list[str]
     protected_failures: list[str]
     unresolved_readings: int
+    attempts: int = 1
+    validation_history: list[list[str]] = Field(default_factory=lambda: list[list[str]]())
 
     @property
     def passed(self) -> bool:
@@ -93,29 +96,49 @@ async def assess_editorial_output(
     candidate: str,
     *,
     max_tokens: int = 8192,
-    prompt_version: str = "editorial_v2",
+    prompt_version: str = "editorial_v3",
+    max_attempts: int = 2,
 ) -> EditorialAssessment:
     """The judge sees no editor identity, prompt, scores, or prior approvals."""
     prompt = catalog.get("evaluation", prompt_version)
-    raw = await provider.complete(
-        system_prompt=prompt,
-        user_prompt=json.dumps(
-            {
-                "source": case.source,
-                "reference": case.reference,
-                "candidate": candidate,
-                "requirements": [
-                    {"id": f"r{index}", "text": text}
-                    for index, text in enumerate(case.requirements)
-                ],
-            },
-            ensure_ascii=False,
-        ),
-        model=model,
-        max_tokens=max_tokens,
-        temperature=0.0,
-    )
-    return validate_assessment(case, candidate, raw, model=model, prompt=prompt)
+    if not 1 <= max_attempts <= 3:
+        raise ValueError("Assessment attempts must be between one and three")
+    payload: dict[str, object] = {
+        "source": case.source,
+        "reference": case.reference,
+        "candidate": candidate,
+        "requirements": [
+            {"id": f"r{index}", "text": text} for index, text in enumerate(case.requirements)
+        ],
+    }
+    history: list[list[str]] = []
+    for attempt in range(max_attempts):
+        raw = await complete_json(
+            provider,
+            system_prompt=prompt,
+            user_prompt=json.dumps(payload, ensure_ascii=False),
+            model=model,
+            max_tokens=max_tokens,
+            temperature=0.0,
+        )
+        try:
+            assessment = validate_assessment(case, candidate, raw, model=model, prompt=prompt)
+        except ValueError:
+            history.append(["invalid-assessment-json"])
+            if attempt + 1 == max_attempts:
+                raise
+        else:
+            if not assessment.assessment_errors or attempt + 1 == max_attempts:
+                return assessment.model_copy(
+                    update={
+                        "attempts": attempt + 1,
+                        "validation_history": [*history, assessment.assessment_errors],
+                    }
+                )
+            history.append(assessment.assessment_errors)
+        payload["assessment_validation_errors"] = history[-1]
+        payload["previous_judgment"] = raw[:128_000]
+    raise AssertionError("Assessment retry budget must terminate")
 
 
 def validate_assessment(

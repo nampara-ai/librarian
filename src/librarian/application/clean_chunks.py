@@ -14,11 +14,15 @@ from typing import Any, Literal, cast
 
 from librarian.application.async_progress import await_with_progress
 from librarian.application.errors import LLMResponseTruncatedError, ProcessingCanceled
+from librarian.application.model_output import complete_json
 from librarian.application.ports import LLMProvider
+from librarian.application.source_reading import read_source
 from librarian.domain.ids import ChunkId
 from librarian.domain.models import Chunk
 from librarian.observability import sanitize_error_message
 from librarian.pipeline.editing import EditUnit, decode_edits, editing_units, verification_pairs
+from librarian.pipeline.prose_patches import apply_prose_patches, candidate_spans
+from librarian.pipeline.protected_text import protect_numerals
 from librarian.pipeline.validation import (
     FIDELITY_WARNINGS,
     VERBATIM_NUMBER_REGEX,
@@ -168,12 +172,22 @@ class CleanChunks:
     progress_interval_seconds: float = 10.0
     verification_provider: LLMProvider | None = None
     verification_model: str | None = None
+    verification_temperature: float = 0.0
     preparation_provider: LLMProvider | None = None
     generation_signature: str = ""
+    source_reading: bool = False
     # Trailing characters of the preceding chunk handed to the cleaner as
     # read-only continuity context. Chunks no longer overlap in the source, so
     # this replaces the (previously duplicated) overlap for boundary coherence.
     context_chars: int = 800
+
+    @property
+    def source_aligned(self) -> bool:
+        return self.prompt_version in {"cmos_v6", "cmos_v8"}
+
+    @property
+    def plain_edits(self) -> bool:
+        return self.prompt_version == "cmos_v8"
 
     def cache_version(self, source: str) -> str:
         """Invalidate paid-work caches when source context or editorial policy changes."""
@@ -186,9 +200,17 @@ class CleanChunks:
             "context_v1",
         ):
             prompts[name] = self.prompt_catalog.get("repair", name)
+        if self.plain_edits:
+            prompts["prose_fidelity_v1"] = self.prompt_catalog.get("repair", "prose_fidelity_v1")
+            prompts["prose_patch_v1"] = self.prompt_catalog.get("repair", "prose_patch_v1")
+            if self.source_reading:
+                prompts["source_reading_v1"] = self.prompt_catalog.get(
+                    "repair", "source_reading_v1"
+                )
         policy = json.dumps(
             {
                 "policy": 2,
+                "source_reading": self.source_reading,
                 "source": hashlib.sha256(source.encode()).hexdigest(),
                 "prompts": prompts,
                 "semantic_verification": self.verify_semantics,
@@ -200,6 +222,7 @@ class CleanChunks:
                 "context_chars": self.context_chars,
                 "generation_signature": self.generation_signature,
                 "verification_model": self.verification_model or self.model,
+                "verification_temperature": self.verification_temperature,
                 "verification_provider": (self.verification_provider or self.provider).name,
             },
             sort_keys=True,
@@ -332,6 +355,8 @@ class CleanChunks:
     ) -> str:
         prompt = system_prompt
         if attempt:
+            if self.plain_edits:
+                return prompt + "\n\n" + self.prompt_catalog.get("repair", "prose_fidelity_v1")
             diagnostics: dict[str, object] = {
                 "failed_checks": list(warnings),
                 "unit_failures": unit_failures,
@@ -364,7 +389,9 @@ class CleanChunks:
                 "\n\nSource-grounded document spelling sheet:\n" + self.editorial_context
             )
         units: tuple[EditUnit, ...] = (
-            tuple(editing_units(chunk.text)) if self.prompt_version == "cmos_v6" else ()
+            tuple(editing_units(chunk.text, target_chars=2000 if self.plain_edits else 4000))
+            if self.source_aligned
+            else ()
         )
         user_prompt = chunk.text
         if units:
@@ -398,6 +425,7 @@ class CleanChunks:
                         unit_failures,
                         generation_failures,
                         repair_unit_chars=max(800, 4000 // (2**attempt)) if attempt else None,
+                        patch_semantics=self.plain_edits and "semantic-fidelity-failed" in warnings,
                     )
                 else:
                     operation = self.provider.complete(
@@ -553,8 +581,16 @@ class CleanChunks:
         *,
         repair_unit_chars: int | None = None,
         following_context: str = "",
+        inherited_checks: tuple[str, ...] = (),
+        patch_semantics: bool = False,
     ) -> str:
         """Edit modest source spans independently and retry only rejected spans."""
+        if self.plain_edits:
+            for unit in units:
+                if unit.kind in {"code", "table"}:
+                    edits[unit.id] = unit.text
+                    failures.pop(unit.id, None)
+                    generation_failures.pop(unit.id, None)
         pending = [unit for unit in units if unit.id not in edits or unit.id in failures]
         queue: asyncio.Queue[EditUnit] = asyncio.Queue()
         for unit in pending:
@@ -569,6 +605,17 @@ class CleanChunks:
                 after = (
                     units[index + 1].text[:1200] if index + 1 < len(units) else following_context
                 )
+                if patch_semantics and unit.id in edits and unit.id in failures:
+                    repaired, problems = await self._repair_prose(
+                        unit, edits[unit.id], failures[unit.id], before, after
+                    )
+                    edits[unit.id] = repaired
+                    if problems:
+                        generation_failures[unit.id] = list(problems)
+                    else:
+                        generation_failures.pop(unit.id, None)
+                    queue.task_done()
+                    continue
                 if repair_unit_chars is not None and len(unit.text) > repair_unit_chars:
                     smaller = editing_units(unit.text, target_chars=repair_unit_chars)
                     if len(smaller) > 1:
@@ -581,6 +628,7 @@ class CleanChunks:
                             {},
                             child_failures,
                             following_context=after,
+                            inherited_checks=(*inherited_checks, *failures.get(unit.id, [])),
                         )
                         child_text, child_warnings, _ = decode_edits(child_response, smaller)
                         edits[unit.id] = child_text
@@ -597,23 +645,39 @@ class CleanChunks:
                         queue.task_done()
                         continue
                 try:
+                    protection_warnings: tuple[str, ...] = ()
+                    protected = protect_numerals(unit.text)
+                    payload: dict[str, object] = {
+                        "context_before": before,
+                        "context_after": after,
+                        "continuation_before": unit.separator == " "
+                        or (index == 0 and bool(before)),
+                        "continuation_after": (
+                            index + 1 < len(units) and units[index + 1].separator == " "
+                        ),
+                        "previous_candidate": edits.get(unit.id),
+                        "repair_checks": [*inherited_checks, *failures.get(unit.id, [])],
+                    }
+                    if self.plain_edits:
+                        payload["source"] = protected.text
+                        payload["protected_values"] = dict(protected.values)
+                        if self.source_reading:
+                            reading = await read_source(
+                                self.verification_provider or self.provider,
+                                self.prompt_catalog,
+                                self.verification_model or self.model,
+                                unit.text,
+                                before,
+                                after,
+                                max_tokens=min(self.max_tokens, 8192),
+                                temperature=self.verification_temperature,
+                            )
+                            payload["source_reading"] = reading.model_dump()
+                    else:
+                        payload["units"] = [unit.as_dict()]
                     response = await self.provider.complete(
                         system_prompt=system_prompt,
-                        user_prompt=json.dumps(
-                            {
-                                "context_before": before,
-                                "context_after": after,
-                                "continuation_before": unit.separator == " "
-                                or (index == 0 and bool(before)),
-                                "continuation_after": (
-                                    index + 1 < len(units) and units[index + 1].separator == " "
-                                ),
-                                "units": [unit.as_dict()],
-                                "previous_candidate": edits.get(unit.id),
-                                "repair_checks": failures.get(unit.id, []),
-                            },
-                            ensure_ascii=False,
-                        ),
+                        user_prompt=json.dumps(payload, ensure_ascii=False),
                         model=self.model,
                         max_tokens=self.max_tokens,
                         temperature=self.temperature,
@@ -627,14 +691,23 @@ class CleanChunks:
                     raise ValueError(
                         "cleaning provider response exceeded configured character limit"
                     )
-                _, problems, _ = decode_edits(response, [unit])
+                if self.plain_edits:
+                    response, protection_warnings = protected.restore(response)
+                    response = json.dumps({"edits": [{"id": unit.id, "text": response}]})
+                decoded, problems, _ = decode_edits(response, [unit])
                 if "invalid-edit-structure" in problems:
                     edits[unit.id] = response
                     generation_failures[unit.id] = ["invalid-edit-structure"]
                 else:
-                    pairs = verification_pairs(response, [unit])
-                    edits[unit.id] = pairs[0]["edited"] if pairs else unit.text
-                    generation_failures.pop(unit.id, None)
+                    if self.plain_edits:
+                        edits[unit.id] = decoded
+                    else:
+                        pairs = verification_pairs(response, [unit])
+                        edits[unit.id] = pairs[0]["edited"] if pairs else unit.text
+                    if protection_warnings:
+                        generation_failures[unit.id] = list(protection_warnings)
+                    else:
+                        generation_failures.pop(unit.id, None)
                 queue.task_done()
 
         if pending:
@@ -643,6 +716,42 @@ class CleanChunks:
             {"edits": [{"id": unit.id, "text": edits[unit.id]} for unit in units]},
             ensure_ascii=False,
         )
+
+    async def _repair_prose(
+        self, unit: EditUnit, candidate: str, checks: list[str], before: str, after: str
+    ) -> tuple[str, tuple[str, ...]]:
+        protected = protect_numerals(candidate)
+        payload: dict[str, object] = {
+            "source": unit.text,
+            "candidate_spans": [
+                {"id": span.id, "text": span.text} for span in candidate_spans(protected.text)
+            ],
+            "context_before": before,
+            "context_after": after,
+            "checks": checks,
+            "protected_values": dict(protected.values),
+        }
+        for _ in range(2):
+            try:
+                raw = await complete_json(
+                    self.provider,
+                    system_prompt=self.prompt_catalog.get("repair", "prose_patch_v1"),
+                    user_prompt=json.dumps(payload, ensure_ascii=False),
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    temperature=self.temperature,
+                )
+            except LLMResponseTruncatedError:
+                return candidate, ("truncated-model-output",)
+            if len(raw) > self.max_response_chars:
+                raise ValueError("prose patch response exceeded configured character limit")
+            edited, problems = apply_prose_patches(protected.text, raw)
+            restored, protection_warnings = protected.restore(edited)
+            if not problems and not protection_warnings:
+                return restored, ()
+            payload["patch_validation_errors"] = [*problems, *protection_warnings]
+            payload["previous_patch"] = raw
+        return candidate, ("invalid-prose-patch",)
 
     async def _verify_units(
         self,
@@ -664,7 +773,9 @@ class CleanChunks:
             nonlocal invalid
             while not queue.empty():
                 pair = queue.get_nowait()
-                response = await provider.complete(
+                response = await complete_json(
+                    provider,
+                    enabled=self.plain_edits,
                     system_prompt=(
                         self.prompt_catalog.get("repair", "meaning_v1")
                         + "\n\nApproved spelling corrections; these do not change identity:\n"
@@ -673,12 +784,14 @@ class CleanChunks:
                     user_prompt=json.dumps({"pairs": [pair]}, ensure_ascii=False),
                     model=model,
                     max_tokens=self.max_tokens,
-                    temperature=0.0,
+                    temperature=self.verification_temperature,
                 )
                 warning, issues = _meaning_issues(response, {pair["id"]})
                 record = {"id": pair["id"], "response": response}
                 if issues and warning != "invalid-fidelity-verification":
-                    confirmation = await provider.complete(
+                    confirmation = await complete_json(
+                        provider,
+                        enabled=self.plain_edits,
                         system_prompt=(
                             self.prompt_catalog.get("repair", "confirm_meaning_v1")
                             + "\n\nApproved spelling sheet:\n"
@@ -693,7 +806,7 @@ class CleanChunks:
                         ),
                         model=model,
                         max_tokens=self.max_tokens,
-                        temperature=0.0,
+                        temperature=self.verification_temperature,
                     )
                     confirmed_warning, confirmed = _meaning_issues(confirmation, {pair["id"]})
                     record["confirmation"] = confirmation
@@ -736,7 +849,7 @@ class CleanChunks:
             source_text=cleaned.chunk.text,
         )
         validation_warnings = validated.warnings
-        if self.prompt_version == "cmos_v6" and self.verify_semantics:
+        if self.source_aligned and self.verify_semantics:
             # Only current policy-namespaced, audited edits reach this cache path.
             validation_warnings = tuple(
                 w for w in validation_warnings if w != "substantial-content-loss"

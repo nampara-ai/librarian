@@ -1738,6 +1738,58 @@ def eval_suite(
     asyncio.run(run())
 
 
+@maintainer_app.command("editorial-eval")
+def editorial_eval(
+    path: Annotated[Path, typer.Argument(exists=True, readable=True, dir_okay=False)],
+    output_dir: Annotated[Path, typer.Option(help="Private directory for all trial artifacts.")],
+    judge_model: Annotated[
+        str, typer.Option(help="Independent assessment model on the configured endpoint.")
+    ],
+    judge_reasoning: Annotated[
+        str, typer.Option(help="Assessment model reasoning effort.")
+    ] = "medium",
+    repeats: Annotated[int, typer.Option(min=1, max=20)] = 3,
+) -> None:
+    """Assess fresh full-pipeline generations without exposing references to the editor."""
+    import hashlib
+
+    try:
+        from librarian.llm import build_provider
+        from librarian.maintainer.editorial_benchmark import (
+            EditorialBenchmarkSuite,
+            run_editorial_benchmark,
+        )
+    except ModuleNotFoundError as exc:
+        raise typer.BadParameter(_MAINTAINER_HARNESS_MISSING) from exc
+
+    async def run() -> None:
+        settings = Settings()
+        judge_settings = Settings.model_validate(
+            {**settings.model_dump(), "llm_model": judge_model,
+             "llm_reasoning_effort": judge_reasoning}
+        )
+        with path.open("rb") as handle:
+            raw = handle.read(10 * 1024 * 1024 + 1)
+        if len(raw) > 10 * 1024 * 1024:
+            raise typer.BadParameter("Editorial suite exceeds ten MiB")
+        result = await run_editorial_benchmark(
+            settings,
+            EditorialBenchmarkSuite.model_validate_json(raw),
+            build_provider(judge_settings),
+            judge_model,
+            output_dir,
+            repeats=repeats,
+            provenance={"suite_file_sha256": hashlib.sha256(raw).hexdigest(),
+                        "judge_reasoning": judge_reasoning},
+        )
+        console.print(f"Editorial results: {result.artifact_dir}")
+        console.print(result.report()["summary"])
+        if not result.passed:
+            raise typer.Exit(code=1)
+
+    asyncio.run(run())
+
+
 @maintainer_app.command("corpus-eval")
 def corpus_eval(
     path: Annotated[Path, typer.Argument(exists=True, readable=True, dir_okay=False)],

@@ -33,6 +33,13 @@ and untouched disfluencies should fail. A judge that misses these controls canno
 reliable editing score. Invalid JSON, fabricated evidence, missing requirements, contradictory
 verdicts, and uncertain decisions are assessment failures, not passes.
 
+The third rubric made semantic requirements explicit and exempted intact nonprose material.
+Qwen3.8-27B at medium reasoning returned 20/20 valid, correct controls once and 19/20 on a
+fresh repeat (one invalid evidence report, rejected rather than passed). This assessor is
+useful research instrumentation, not an infallible oracle. Retain its validation errors and
+inspect disagreements. Bounded schema repairs receive no desired verdict; failed editorial
+judgments are not retried until a pass appears.
+
 Initial live calibration on 2026-11-01 exposed assessor errors: the first rubric yielded 19/20
 correct controls with GPT-OSS-120B at high reasoning and 18/20 with Qwen3.8-27B at medium reasoning.
 The second rubric clarified removal of abandoned speech and exact evidence quoting; it still
@@ -59,3 +66,26 @@ cleanup success. Returning raw source or failing every run also cannot earn a pe
 
 Report both per-case results and the all-cases pass rate for each trial. A passing run is
 evidence on that corpus, not proof that every future corrupted document can be reconstructed.
+
+## Reproduce a trial
+
+From a source checkout with provider credentials configured locally:
+
+```sh
+librarian maintainer editorial-eval examples/editorial_holdout_v1.json \
+  --output-dir /private/path/editorial-trials --judge-model qwen-3.8-27b \
+  --judge-reasoning medium --repeats 3
+```
+
+This command uses the configured editor. References enter only after generation. Each case
+gets a separate database, and cached cleaned chunks invalidate a trial. Candidate Markdown,
+quality reports, metrics, errors, assessments, and incremental trial records stay in the output
+directory. The result records both normalized suite identity and the original file hash.
+Do not put private transcripts, output artifacts, provider traces, or credentials in Git.
+
+`cmos_v8` is an opt-in experimental profile, not the release default. It keeps code and tables
+outside model generation, masks each numeric occurrence reversibly, renders bounded source
+units as plain Markdown, and repairs semantic errors with literal patches scoped to candidate
+spans. `LIBRARIAN_CLEANING_SOURCE_READING=true` adds an advisory source inventory, checked
+separately from subsequent review. Neither the inventory nor internal approval is a quality
+score. All relevant settings and prompts participate in cache invalidation.

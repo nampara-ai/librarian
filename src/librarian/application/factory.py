@@ -167,6 +167,8 @@ async def build_container(
         prompt_version=resolved_settings.cleaning_prompt_version,
         model=resolved_settings.llm_model,
         max_tokens=resolved_settings.llm_max_output_tokens,
+        temperature=resolved_settings.cleaning_temperature,
+        source_reading=resolved_settings.cleaning_source_reading,
         coherence_mode=resolved_settings.coherence_mode,
         max_parallel_chunks=resolved_settings.llm_max_concurrency,
         max_response_chars=resolved_settings.llm_max_response_chars,
@@ -176,6 +178,7 @@ async def build_container(
         context_chars=resolved_settings.chunk_overlap_chars,
         verification_provider=verification_provider,
         verification_model=resolved_settings.cleaning_verification_model,
+        verification_temperature=resolved_settings.cleaning_verification_temperature,
         preparation_provider=provider,
         generation_signature=json.dumps(
             {
