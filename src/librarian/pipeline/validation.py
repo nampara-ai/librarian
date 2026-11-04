@@ -28,6 +28,7 @@ FIDELITY_WARNINGS = frozenset(
         "missing-markdown-table",
         "missing-verbatim-number",
         "repeated-tail",
+        "new-adjacent-repetition",
         "substantial-content-loss",
         "suspiciously-short-output",
         "invalid-edit-structure",
@@ -176,6 +177,8 @@ def _markdown_quality_warnings(text: str, *, source_text: str | None) -> list[st
         return warnings
     if Counter(literal_links(source_text)) != Counter(literal_links(text)):
         warnings.append("changed-literal-link")
+    if _new_adjacent_repetition(source_text, text):
+        warnings.append("new-adjacent-repetition")
     if _paragraph_count(source_text) >= 3 and _paragraph_count(text) <= 1 and len(text) > 500:
         warnings.append("collapsed-paragraphs")
     if MARKDOWN_HEADING_REGEX.search(source_text) and MARKDOWN_HEADING_REGEX.search(text) is None:
@@ -224,6 +227,27 @@ def _markdown_quality_warnings(text: str, *, source_text: str | None) -> list[st
     if len(source_words) >= 200 and len(output_words) < len(source_words) * 0.8:
         warnings.append("substantial-content-loss")
     return warnings
+
+
+def _new_adjacent_repetition(source: str, candidate: str) -> bool:
+    """Reject a newly copied adjacent phrase, without deleting intentional source rhetoric."""
+
+    def prose_only(value: str) -> str:
+        pieces: list[str] = []
+        cursor = 0
+        for left, right in protected_spans(value):
+            pieces.append(value[cursor:left])
+            cursor = right
+        pieces.append(value[cursor:])
+        return re.sub(r"\s+", " ", " ".join(pieces)).casefold()
+
+    original, edited = prose_only(source), prose_only(candidate)
+    repeated = re.compile(r"\b((?:[\w'-]+\s+){3}[\w'-]+)[.!?…;,:]*\s+\1\b")
+    for match in repeated.finditer(edited):
+        phrase = re.compile(r"(?<!\w)" + re.escape(match.group(1)) + r"(?!\w)")
+        if len(phrase.findall(edited)) > len(phrase.findall(original)):
+            return True
+    return False
 
 
 def _paragraph_count(text: str) -> int:

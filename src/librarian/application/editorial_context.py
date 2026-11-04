@@ -7,8 +7,9 @@ import re
 from difflib import SequenceMatcher
 from typing import cast
 
+from librarian.application.model_output import complete_json
 from librarian.application.ports import LLMProvider
-from librarian.pipeline.validation import VERBATIM_NUMBER_REGEX
+from librarian.pipeline.validation import VERBATIM_NUMBER_REGEX, literal_links
 from librarian.prompts import PromptCatalog
 
 
@@ -17,6 +18,8 @@ async def editorial_context(
     catalog: PromptCatalog,
     model: str,
     source: str,
+    *,
+    advisory: bool = False,
 ) -> str:
     snippets = [source[:1200]]
     seen: set[str] = set()
@@ -29,17 +32,19 @@ async def editorial_context(
         if sum(len(item) for item in snippets) >= 10_000:
             break
     sample = "\n[... ]\n".join(snippets)
-    raw = await provider.complete(
+    raw = await complete_json(
+        provider,
+        enabled=advisory,
         system_prompt=catalog.get("repair", "context_v1"),
         user_prompt=sample,
         model=model,
         max_tokens=16_384,
         temperature=0.0,
     )
-    return parse_editorial_context(raw, source)
+    return parse_editorial_context(raw, source, advisory=advisory)
 
 
-def parse_editorial_context(raw: str, source: str) -> str:
+def parse_editorial_context(raw: str, source: str, *, advisory: bool = False) -> str:
     if len(raw) > 64_000:
         raise ValueError("Editorial context exceeded its response limit")
     try:
@@ -62,9 +67,12 @@ def parse_editorial_context(raw: str, source: str) -> str:
         a, b = observed.casefold().strip(), preferred.casefold().strip()
         if not a or not b or len(a) > 100 or len(b) > 100 or a not in source.casefold():
             continue
+        if literal_links(observed) or literal_links(preferred):
+            continue
         if VERBATIM_NUMBER_REGEX.findall(observed) != VERBATIM_NUMBER_REGEX.findall(preferred):
             continue
         if a[0] != b[0] or SequenceMatcher(None, a, b).ratio() < 0.6:
             continue
         accepted.append({"observed": observed, "preferred": preferred})
-    return json.dumps({"approved_spelling_corrections": accepted}, ensure_ascii=False)
+    key = "proposed_spelling_corrections" if advisory else "approved_spelling_corrections"
+    return json.dumps({key: accepted}, ensure_ascii=False)

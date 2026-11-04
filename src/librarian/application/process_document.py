@@ -247,6 +247,7 @@ class ProcessDocument:
                             self.cleaner.prompt_catalog,
                             self.cleaner.model,
                             normalized_text,
+                            advisory=self.cleaner.plain_edits,
                         ),
                         context_wait,
                     )

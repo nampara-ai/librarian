@@ -31,20 +31,46 @@ class EditUnit:
         }
 
 
-def editing_units(source: str, *, target_chars: int = 4000) -> list[EditUnit]:
+def editing_units(
+    source: str, *, target_chars: int = 4000, pack_prose_blocks: bool = False
+) -> list[EditUnit]:
     """Use modest source spans so a complete response cannot silently skip a passage."""
     units: list[EditUnit] = []
 
     def add(text: str, kind: str, separator: str) -> None:
         if text.strip():
+            if kind == "prose" and units:
+                separator += text[: len(text) - len(text.lstrip(" \t"))]
             units.append(EditUnit(f"u{len(units):04d}", text.strip(), kind, separator))
 
     def prose(text: str) -> None:
-        for paragraph in re.split(r"\n\s*\n", text.strip()):
+        for paragraph in re.split(r"\n\s*\n", text.strip("\r\n")):
             if not paragraph.strip():
                 continue
             if "\n" in paragraph:
-                add(paragraph, "prose", "\n\n")
+                pending: list[str] = []
+                separator = "\n\n"
+                for line in paragraph.splitlines():
+                    if pending and len("\n".join([*pending, line])) > target_chars:
+                        add("\n".join(pending), "prose", separator)
+                        separator = "  \n" if pending[-1].endswith("  ") else "\n"
+                        pending = []
+                    if len(line) > target_chars:
+                        pieces = chunk_text(
+                            DocumentId("edit-line"),
+                            line,
+                            ChunkingPolicy(
+                                target_chars=target_chars, overlap_chars=0, min_chunk_chars=100
+                            ),
+                        )
+                        for index, piece in enumerate(pieces):
+                            indent = line[: len(line) - len(line.lstrip(" \t"))]
+                            add(piece.text, "prose", separator + indent if index == 0 else " ")
+                        separator = "  \n" if line.endswith("  ") else "\n"
+                    else:
+                        pending.append(line)
+                if pending:
+                    add("\n".join(pending), "prose", separator)
                 continue
             pieces = chunk_text(
                 DocumentId("edit-unit"),
@@ -61,7 +87,22 @@ def editing_units(source: str, *, target_chars: int = 4000) -> list[EditUnit]:
         add(block, "code" if block.startswith(("```", "~~~")) else "table", "\n\n")
         start = right
     prose(source[start:])
-    return units
+    if not pack_prose_blocks:
+        return units
+    packed: list[EditUnit] = []
+    for unit in units:
+        if (
+            packed
+            and unit.kind == packed[-1].kind == "prose"
+            and len(packed[-1].text) + len(unit.separator) + len(unit.text) <= target_chars
+        ):
+            previous = packed[-1]
+            packed[-1] = EditUnit(
+                previous.id, previous.text + unit.separator + unit.text, "prose", previous.separator
+            )
+        else:
+            packed.append(EditUnit(f"u{len(packed):04d}", unit.text, unit.kind, unit.separator))
+    return packed
 
 
 def decode_edits(

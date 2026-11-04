@@ -18,9 +18,7 @@ def test_spelling_sheet_rejects_invented_names_and_numeric_changes() -> None:
     )
     result = json.loads(parse_editorial_context(raw, "Thomas Soul discusses Chapter 12."))
     assert result == {
-        "approved_spelling_corrections": [
-            {"observed": "Thomas Soul", "preferred": "Thomas Sowell"}
-        ]
+        "approved_spelling_corrections": [{"observed": "Thomas Soul", "preferred": "Thomas Sowell"}]
     }
 
 
@@ -28,3 +26,20 @@ def test_spelling_sheet_rejects_invented_names_and_numeric_changes() -> None:
 def test_invalid_spelling_sheet_is_explicit_failure(raw: str) -> None:
     with pytest.raises(ValueError):
         parse_editorial_context(raw, "A source.")
+
+
+def test_advisory_spelling_sheet_is_not_an_authority_for_changing_identifiers() -> None:
+    raw = json.dumps(
+        {
+            "corrections": [
+                {"observed": "Albrt", "preferred": "Albert"},
+                {"observed": "author-example.com", "preferred": "author-examples.com"},
+            ]
+        }
+    )
+    result = json.loads(
+        parse_editorial_context(raw, "Albrt writes at author-example.com.", advisory=True)
+    )
+    assert result == {
+        "proposed_spelling_corrections": [{"observed": "Albrt", "preferred": "Albert"}]
+    }

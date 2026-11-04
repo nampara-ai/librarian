@@ -33,6 +33,20 @@ from librarian.prompts.loader import PromptCatalog
 CoherenceMode = Literal["fast", "balanced", "max-coherence"]
 
 
+def _route_document_failures(
+    units: Sequence[EditUnit], failures: dict[str, list[str]], checks: frozenset[str]
+) -> None:
+    if not checks:
+        return
+    for unit in units:
+        if unit.kind == "prose":
+            failures.setdefault(unit.id, []).append(
+                "Document-level checks failed: "
+                + ", ".join(sorted(checks))
+                + ". Inspect the draft and joins; do not copy context into source."
+            )
+
+
 async def _run_workers(
     worker: Callable[[], Coroutine[Any, Any, None]],
     worker_count: int,
@@ -189,6 +203,17 @@ class CleanChunks:
     def plain_edits(self) -> bool:
         return self.prompt_version == "cmos_v8"
 
+    def _source_units(self, text: str) -> tuple[EditUnit, ...]:
+        if not self.source_aligned:
+            return ()
+        return tuple(
+            editing_units(
+                text,
+                target_chars=2000 if self.plain_edits else 4000,
+                pack_prose_blocks=self.plain_edits,
+            )
+        )
+
     def cache_version(self, source: str) -> str:
         """Invalidate paid-work caches when source context or editorial policy changes."""
         prompts = {"cleaning": self.prompt_catalog.get("cleaning", self.prompt_version)}
@@ -211,7 +236,7 @@ class CleanChunks:
                 )
         policy = json.dumps(
             {
-                "policy": 2,
+                "policy": 3,
                 "source_reading": self.source_reading,
                 "source": hashlib.sha256(source.encode()).hexdigest(),
                 "prompts": prompts,
@@ -388,13 +413,11 @@ class CleanChunks:
         system_prompt = self.prompt_catalog.get("cleaning", self.prompt_version)
         if self.editorial_context:
             system_prompt += (
-                "\n\nSource-grounded document spelling sheet:\n" + self.editorial_context
-            )
-        units: tuple[EditUnit, ...] = (
-            tuple(editing_units(chunk.text, target_chars=2000 if self.plain_edits else 4000))
-            if self.source_aligned
-            else ()
-        )
+                "\n\nUnverified spelling suggestions: check each against the source.\n"
+                if self.plain_edits
+                else "\n\nSource-grounded document spelling sheet:\n"
+            ) + self.editorial_context
+        units = self._source_units(chunk.text)
         user_prompt = chunk.text
         if units:
             user_prompt = json.dumps(
@@ -511,6 +534,10 @@ class CleanChunks:
             )
             warnings = tuple(dict.fromkeys((*unit_warnings, *validated.warnings)))
             structural_failures = FIDELITY_WARNINGS.intersection(warnings)
+            unassigned = structural_failures.difference(unit_warnings, {"substantial-content-loss"})
+            # Global failures can occur at a join even when isolated units passed.
+            # Retrying must perform real work rather than reconstruct the same draft.
+            _route_document_failures(units, unit_failures, unassigned)
             if (
                 units
                 and self.verify_semantics
@@ -630,7 +657,11 @@ class CleanChunks:
                     queue.task_done()
                     continue
                 if repair_unit_chars is not None and len(unit.text) > repair_unit_chars:
-                    smaller = editing_units(unit.text, target_chars=repair_unit_chars)
+                    smaller = editing_units(
+                        unit.text,
+                        target_chars=repair_unit_chars,
+                        pack_prose_blocks=self.plain_edits,
+                    )
                     if len(smaller) > 1:
                         child_failures: dict[str, list[str]] = {}
                         child_response = await self._edit_units(
@@ -793,8 +824,14 @@ class CleanChunks:
                         self.prompt_catalog.get(
                             "repair", "prose_review_v1" if self.plain_edits else "meaning_v1"
                         )
-                        + "\n\nApproved spelling corrections; these do not change identity:\n"
-                        + self.editorial_context
+                        + (
+                            ""
+                            if self.plain_edits
+                            else (
+                                "\n\nApproved spelling corrections; these do not change identity:\n"
+                            )
+                            + self.editorial_context
+                        )
                     ),
                     user_prompt=json.dumps({"pairs": [pair]}, ensure_ascii=False),
                     model=model,
@@ -812,8 +849,11 @@ class CleanChunks:
                                 "repair",
                                 "confirm_prose_v1" if self.plain_edits else "confirm_meaning_v1",
                             )
-                            + "\n\nApproved spelling sheet:\n"
-                            + self.editorial_context
+                            + (
+                                ""
+                                if self.plain_edits
+                                else "\n\nApproved spelling sheet:\n" + self.editorial_context
+                            )
                         ),
                         user_prompt=json.dumps(
                             {

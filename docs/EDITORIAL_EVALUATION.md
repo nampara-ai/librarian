@@ -14,6 +14,19 @@ Five inputs are actual Tesseract readings of rendered reference passages. Five a
 removal transformations, explicitly labeled as metamorphic tests rather than natural ASR.
 Both are complementary to the owner's private real transcript, which must remain outside Git.
 
+This corpus has now been evaluated and is exposed development material. The prospectively
+frozen experiment at revision `ba09e0a8ccff3db5821f17f7731e75ccc4f921d1` produced 4/10, 5/10,
+and 3/10 full model-assessed passes in three fresh trials, including two processing failures
+in the third. `examples/editorial_trials_v1_summary.json` preserves the original case verdicts,
+configuration, and identities without private documents or provider traces. No trial passed
+the entire corpus. These are automated approval counts, not human quality ratings.
+
+Inspection found real failures (duplicated source continuations, name substitutions, changed
+clause attachment, broken quotation boundaries) and assessor false positives (demanding original
+paragraph breaks or period orthography where a valid contemporary copyedit could differ).
+Do not rewrite those original scores. Calibrate additional style controls and report any
+secondary adjudication separately. Future generalization claims need new prospective material.
+
 The editor receives only the observed input. Its independently preserved reference and any
 semantic requirements are available only to assessment. Do not insert reference readings,
 case-specific patches, rubric answers, or benchmark identifiers into editing prompts.
@@ -89,3 +102,11 @@ units as plain Markdown, and repairs semantic errors with literal patches scoped
 spans. `LIBRARIAN_CLEANING_SOURCE_READING=true` adds an advisory source inventory, checked
 separately from subsequent review. Neither the inventory nor internal approval is a quality
 score. All relevant settings and prompts participate in cache invalidation.
+
+Short OCR blocks are packed together, preserving the observed source, so that a continuation
+can be edited with the words it belongs to. Long multiline prose and lists remain bounded.
+New adjacent copied phrases are flagged against source occurrence counts rather than silently
+deleted; intentional source repetition remains permitted. Document-level failures that cannot
+be attributed to a single source unit are routed back to prose generation, so retries perform
+real work instead of repeatedly assembling the same rejected draft. In the experimental profile,
+spelling proposals remain advisory and are withheld from the independent reviewer.
