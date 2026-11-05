@@ -68,7 +68,7 @@ async def test_source_and_edited_context_are_not_conflated_between_chunks() -> N
             if pair["source"] == "This follows.":
                 self.saw_following = True
                 assert pair["context_before"] == "Teh lead ended."
-                assert pair["edited_context_before"] == "The lead ended."
+                assert pair["edited_context_before"] == "The lead ended.\n\n"
             return '{"issues": []}'
 
     chunks = [

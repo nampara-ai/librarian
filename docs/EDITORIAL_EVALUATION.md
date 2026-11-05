@@ -188,3 +188,21 @@ including normalized spacing and sentence capitalization. Repair anchors use tha
 Semantic patches commit in source order and receive both raw and current edited neighbors,
 so a later repair sees earlier committed changes. Changed contexts invalidate approvals.
 The original independent `editorial_v3` assessment rubric remains unchanged.
+
+Adjacent rejected spans can describe one grammatical dependency, not two independent mistakes.
+The experimental repair path now coalesces contiguous rejected prose into bounded windows of
+at most 6,000 source characters. Source and candidate are concatenated losslessly with their
+original separators. A single atomic patch response can then repair both sides of a boundary.
+Code and tables never join these windows. Within a repair pass, a changed predecessor triggers
+a fresh review before the next dependent patch; obsolete checks are not applied blindly.
+Those local review traces are retained in the run's attempt records. Context includes actual
+paragraph separators, and fast mode does not mislabel unavailable edited context as a real draft.
+
+`examples/editorial_source_reading_screen_summary.json` retains all sixteen exposed development
+attempts in a four-configuration screen. Terra medium with source reading passed 4/4 once;
+medium without it and both high-reasoning configurations each passed 3/4. These small samples
+are insufficient to establish statistical superiority. The next candidate therefore uses the
+simpler medium configuration that passed the screen, followed by fresh prospective evaluation.
+High reasoning is not presumed to guarantee better editing. The high-reasoning private transcript
+also failed on coupled punctuation repairs before the dependency fixes; no failed output replaced
+the previously completed review draft.

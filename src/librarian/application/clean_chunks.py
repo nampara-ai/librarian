@@ -25,7 +25,13 @@ from librarian.application.source_reading import read_source
 from librarian.domain.ids import ChunkId
 from librarian.domain.models import Chunk
 from librarian.observability import sanitize_error_message
-from librarian.pipeline.editing import EditUnit, decode_edits, editing_units, verification_pairs
+from librarian.pipeline.editing import (
+    EditUnit,
+    coalesce_adjacent_repairs,
+    decode_edits,
+    editing_units,
+    verification_pairs,
+)
 from librarian.pipeline.prose_patches import apply_prose_patches, candidate_spans
 from librarian.pipeline.protected_text import protect_prose_data
 from librarian.pipeline.validation import (
@@ -132,6 +138,7 @@ class CleaningAttempt:
         "verifying",
         "verified",
         "verification-rejected",
+        "repair-reviewed",
         "accepted",
         "rejected",
         "error",
@@ -241,7 +248,7 @@ class CleanChunks:
                 )
         policy = json.dumps(
             {
-                "policy": 5,
+                "policy": 6,
                 "source_reading": self.source_reading,
                 "source": hashlib.sha256(source.encode()).hexdigest(),
                 "prompts": prompts,
@@ -310,7 +317,8 @@ class CleanChunks:
                     )
                     result = await self._clean_one(
                         chunk,
-                        previous_context=previous_context,
+                        previous_context="" if self.plain_edits else previous_context,
+                        previous_source_context=previous_context,
                     )
                     results[index] = result
                     if on_chunk_cleaned is not None:
@@ -445,7 +453,7 @@ class CleanChunks:
                 if self.plain_edits
                 else "\n\nSource-grounded document spelling sheet:\n"
             ) + self.editorial_context
-        units = self._source_units(chunk.text)
+        units = list(self._source_units(chunk.text))
         has_units = bool(units)
         user_prompt = chunk.text
         if has_units:
@@ -468,9 +476,25 @@ class CleanChunks:
             if self.on_attempt is not None:
                 await self.on_attempt(CleaningAttempt(chunk, attempt + 1, limit, "started"))
             started = time.monotonic()
+            if attempt and self.plain_edits and "editorial-quality-failed" in warnings:
+                expanded, updated_edits, updated_failures = coalesce_adjacent_repairs(
+                    units, unit_edits, unit_failures
+                )
+                if len(expanded) != len(units):
+                    units[:] = expanded
+                    unit_edits.clear()
+                    unit_edits.update(updated_edits)
+                    unit_failures.clear()
+                    unit_failures.update(updated_failures)
+                    verified_units.clear()
+                    retained = {unit.id for unit in units}
+                    for key in list(generation_failures):
+                        if key not in retained:
+                            generation_failures.pop(key)
             prompt = self._attempt_prompt(
                 system_prompt, chunk, attempt, warnings, unit_failures, structured=has_units
             )
+            repair_review_traces: list[str] = []
             try:
                 if has_units:
                     operation = self._edit_units(
@@ -492,6 +516,7 @@ class CleanChunks:
                             }.intersection(warnings)
                         ),
                         previous_edited_context=previous_context,
+                        repair_review_traces=repair_review_traces,
                     )
                 else:
                     operation = self.provider.complete(
@@ -530,6 +555,17 @@ class CleanChunks:
                 raise ValueError(
                     "cleaning provider response exceeded configured character limit "
                     f"({len(raw)} > {self.max_response_chars})"
+                )
+            if repair_review_traces and self.on_attempt is not None:
+                await self.on_attempt(
+                    CleaningAttempt(
+                        chunk,
+                        attempt + 1,
+                        limit,
+                        "repair-reviewed",
+                        text=json.dumps(repair_review_traces, ensure_ascii=False),
+                        elapsed_seconds=time.monotonic() - started,
+                    )
                 )
             provider_text = raw
             unit_warnings: tuple[str, ...] = ()
@@ -578,7 +614,9 @@ class CleanChunks:
                                 if previous_source_context is not None
                                 else previous_context
                             )[-1200:]
-                            pair["edited_context_before"] = previous_context[-1200:]
+                            pair["edited_context_before"] = (
+                                (previous_context + "\n\n")[-1200:] if previous_context else ""
+                            )
                 if self.on_attempt is not None:
                     await self.on_attempt(
                         CleaningAttempt(
@@ -657,6 +695,7 @@ class CleanChunks:
         inherited_checks: tuple[str, ...] = (),
         patch_semantics: bool = False,
         previous_edited_context: str = "",
+        repair_review_traces: list[str] | None = None,
     ) -> str:
         """Edit modest source spans independently and retry only rejected spans."""
         if self.plain_edits:
@@ -670,6 +709,7 @@ class CleanChunks:
         for unit in pending:
             queue.put_nowait(unit)
         positions = {unit.id: index for index, unit in enumerate(units)}
+        initial_edits = dict(edits)
 
         async def worker() -> None:
             while not queue.empty():
@@ -680,22 +720,57 @@ class CleanChunks:
                     units[index + 1].text[:1200] if index + 1 < len(units) else following_context
                 )
                 if patch_semantics and unit.id in edits and unit.id in failures:
+                    edited_before = (
+                        (edits.get(units[index - 1].id, "") + unit.separator)[-1200:]
+                        if index
+                        else (previous_edited_context + "\n\n")[-1200:]
+                        if previous_edited_context
+                        else ""
+                    )
+                    edited_after = (
+                        (units[index + 1].separator + edits.get(units[index + 1].id, ""))[:1200]
+                        if index + 1 < len(units)
+                        else ""
+                    )
+                    if index and edits.get(units[index - 1].id) != initial_edits.get(
+                        units[index - 1].id
+                    ):
+                        # Rejected checks describe an older neighbor snapshot. Refresh
+                        # them before a dependent repair can undo the preceding fix.
+                        warning, refreshed, trace = await self._verify_units(
+                            [
+                                {
+                                    "id": unit.id,
+                                    "source": unit.text,
+                                    "edited": edits[unit.id],
+                                    "context_before": before,
+                                    "context_after": after,
+                                    "edited_context_before": edited_before,
+                                    "edited_context_after": edited_after,
+                                }
+                            ],
+                            {},
+                        )
+                        if repair_review_traces is not None:
+                            repair_review_traces.append(trace)
+                        if warning == "invalid-fidelity-verification":
+                            generation_failures[unit.id] = [warning]
+                            queue.task_done()
+                            continue
+                        if not warning:
+                            failures.pop(unit.id, None)
+                            generation_failures.pop(unit.id, None)
+                            queue.task_done()
+                            continue
+                        failures[unit.id] = refreshed[unit.id]
                     repaired, problems = await self._repair_prose(
                         unit,
                         edits[unit.id],
                         failures[unit.id],
                         before,
                         after,
-                        edited_before=(
-                            edits.get(units[index - 1].id, "")[-1200:]
-                            if index
-                            else previous_edited_context[-1200:]
-                        ),
-                        edited_after=(
-                            edits.get(units[index + 1].id, "")[:1200]
-                            if index + 1 < len(units)
-                            else ""
-                        ),
+                        edited_before=edited_before,
+                        edited_after=edited_after,
                     )
                     edits[unit.id] = repaired
                     if problems:

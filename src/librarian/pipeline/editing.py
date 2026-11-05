@@ -203,3 +203,40 @@ def verification_pairs(
         for index, unit in enumerate(units)
         if unit.text != rendered[index] or (include_unchanged_prose and unit.kind == "prose")
     ]
+
+
+def coalesce_adjacent_repairs(
+    units: Sequence[EditUnit],
+    edits: dict[str, str],
+    failures: dict[str, list[str]],
+    *,
+    max_chars: int = 6000,
+) -> tuple[list[EditUnit], dict[str, str], dict[str, list[str]]]:
+    """Give adjacent rejected prose one bounded, atomic repair window.
+
+    Unit boundaries belong to transport, not to the author's grammar. Repairing
+    both sides separately can give two models ownership of the same punctuation.
+    Source and candidate remain contiguous and lossless when a window grows.
+    """
+    combined: list[EditUnit] = []
+    updated = dict(edits)
+    checks = {key: list(value) for key, value in failures.items()}
+    for unit in units:
+        if combined:
+            left = combined[-1]
+            if (
+                left.kind == unit.kind == "prose"
+                and left.id in checks
+                and unit.id in checks
+                and left.id in updated
+                and unit.id in updated
+                and len(left.text) + len(unit.separator) + len(unit.text) <= max_chars
+            ):
+                combined[-1] = EditUnit(
+                    left.id, left.text + unit.separator + unit.text, "prose", left.separator
+                )
+                updated[left.id] += unit.separator + updated.pop(unit.id)
+                checks[left.id] = list(dict.fromkeys(checks[left.id] + checks.pop(unit.id)))
+                continue
+        combined.append(unit)
+    return combined, updated, checks

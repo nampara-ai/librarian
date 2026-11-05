@@ -212,6 +212,10 @@ async def test_dependent_repairs_receive_preceding_committed_draft() -> None:
 
         async def complete(self, *, user_prompt: str, **_: object) -> str:
             payload = json.loads(user_prompt)
+            if "pairs" in payload or "pair" in payload:
+                return json.dumps(
+                    {"issues": [{"id": "u0001", "problem": "Second source still needs repair."}]}
+                )
             self.payloads.append(payload)
             phrase = "First" if len(self.payloads) == 1 else "Second"
             return json.dumps(
@@ -235,7 +239,145 @@ async def test_dependent_repairs_receive_preceding_committed_draft() -> None:
         patch_semantics=True,
         previous_edited_context="Edited previous.",
     )
-    assert provider.payloads[0]["edited_context_before"] == "Edited previous."
-    assert provider.payloads[1]["edited_context_before"] == "First repaired source."
+    assert provider.payloads[0]["edited_context_before"] == "Edited previous.\n\n"
+    assert provider.payloads[1]["edited_context_before"] == "First repaired source. "
     assert provider.payloads[1]["context_before"] == "First source."
     assert edits["u0001"] == "Second repaired source."
+
+
+@pytest.mark.asyncio
+async def test_parallel_review_does_not_label_raw_predecessor_as_an_edited_draft() -> None:
+    class Provider:
+        name = "parallel-context"
+
+        def __init__(self) -> None:
+            self.pairs: list[dict[str, str]] = []
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            payload = json.loads(user_prompt)
+            if "pairs" in payload:
+                self.pairs.extend(payload["pairs"])
+                return '{"issues": []}'
+            return payload["source"]
+
+    sources = ["A first observation.", "A second observation."]
+    chunks = [
+        Chunk(ChunkId(str(i)), DocumentId("doc"), i, source, 0, len(source), str(i))
+        for i, source in enumerate(sources)
+    ]
+    provider = Provider()
+    cleaner = CleanChunks(provider, PromptCatalog(), "cmos_v8", "test", coherence_mode="fast")
+    await cleaner.execute(chunks)
+    pair = next(pair for pair in provider.pairs if pair["source"] == sources[1])
+    assert pair["context_before"] == sources[0]
+    assert pair["edited_context_before"] == ""
+
+
+@pytest.mark.asyncio
+async def test_obsolete_neighbor_check_is_reviewed_before_applying_a_conflicting_patch() -> None:
+    class Provider:
+        name = "stale-checks"
+        patch_calls = 0
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            payload = json.loads(user_prompt)
+            if "pairs" in payload:
+                pair = payload["pairs"][0]
+                assert pair["edited_context_before"] == "“A greeting "
+                assert pair["edited"] == "and goodbye.”"
+                return '{"issues": []}'
+            self.patch_calls += 1
+            return json.dumps({"patches": [{"id": "p0", "find": ".”", "replace": ""}]})
+
+    units = [
+        EditUnit("u0000", "a greeting", "prose", ""),
+        EditUnit("u0001", "and goodbye", "prose", " "),
+    ]
+    provider = Provider()
+    cleaner = CleanChunks(provider, PromptCatalog(), "cmos_v8", "test")
+    edits = {"u0000": "“A greeting.”", "u0001": "and goodbye.”"}
+    failures = {
+        "u0000": ["The quotation continues into the next unit; remove its premature ending."],
+        "u0001": ["The closing quotation mark lacks an opening mark in this unit."],
+    }
+    traces: list[str] = []
+    raw = await cleaner._edit_units(  # pyright: ignore[reportPrivateUsage]
+        units, "", "", edits, failures, {}, patch_semantics=True, repair_review_traces=traces
+    )
+    assert provider.patch_calls == 1
+    assert "u0001" not in failures
+    assert len(traces) == 1
+    assert decode_edits(raw, units)[0] == "“A greeting and goodbye.”"
+
+
+def test_adjacent_repair_windows_preserve_source_candidates_and_limits() -> None:
+    from librarian.pipeline.editing import coalesce_adjacent_repairs
+
+    units = [
+        EditUnit("u0000", "First source", "prose", ""),
+        EditUnit("u0001", "second source", "prose", " "),
+        EditUnit("u0002", "third source", "prose", "\n\n"),
+    ]
+    edits = {unit.id: unit.text.title() for unit in units}
+    failures = {unit.id: ["check " + unit.id] for unit in units}
+    merged, candidates, checks = coalesce_adjacent_repairs(units, edits, failures, max_chars=30)
+    assert len(merged) == 2
+    assert merged[0].text == "First source second source"
+    assert candidates["u0000"] == "First Source Second Source"
+    assert checks["u0000"] == ["check u0000", "check u0001"]
+    assert "u0001" not in candidates and "u0001" not in checks
+    assert merged[1] == units[2]
+    assert len(edits) == len(failures) == 3
+
+
+@pytest.mark.asyncio
+async def test_pipeline_repairs_coupled_unit_boundaries_in_one_atomic_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    units = [
+        EditUnit("u0000", "she said a greeting", "prose", ""),
+        EditUnit("u0001", "and goodbye", "prose", " "),
+    ]
+
+    def split(_: str, **_kwargs: object) -> list[EditUnit]:
+        return units
+
+    monkeypatch.setattr("librarian.application.clean_chunks.editing_units", split)
+
+    class Provider:
+        name = "atomic-window"
+        patch_calls = 0
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            payload = json.loads(user_prompt)
+            if "pairs" in payload or "pair" in payload:
+                pair = payload.get("pair") or payload["pairs"][0]
+                if pair["edited"] == "She said, “A greeting and goodbye.”":
+                    return '{"issues": []}'
+                return json.dumps(
+                    {
+                        "issues": [
+                            {
+                                "id": pair["id"],
+                                "problem": "Repair the quotation boundary with its neighbor.",
+                            }
+                        ]
+                    }
+                )
+            if "candidate_spans" in payload:
+                self.patch_calls += 1
+                assert payload["source"] == "she said a greeting and goodbye"
+                return json.dumps(
+                    {"patches": [{"id": "p0", "find": "greeting.” And", "replace": "greeting and"}]}
+                )
+            return (
+                "She said, “A greeting.”" if payload["source"] == units[0].text else "and goodbye.”"
+            )
+
+    source = "she said a greeting and goodbye"
+    chunk = Chunk(ChunkId("atomic"), DocumentId("doc"), 0, source, 0, len(source), "source")
+    provider = Provider()
+    cleaner = CleanChunks(provider, PromptCatalog(), "cmos_v8", "test", max_fidelity_retries=1)
+    result = (await cleaner.execute([chunk]))[0]
+    assert result.text == "She said, “A greeting and goodbye.”"
+    assert provider.patch_calls == 1
