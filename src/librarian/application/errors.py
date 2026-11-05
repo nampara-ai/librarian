@@ -19,3 +19,7 @@ class LLMResponseTruncatedError(RuntimeError):
     def __init__(self, message: str, *, partial_text: str = "") -> None:
         super().__init__(message)
         self.partial_text = partial_text
+
+
+class AdvisoryModelOutputError(ValueError):
+    """An optional model aid returned unusable content, not an access or transport failure."""

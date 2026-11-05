@@ -38,6 +38,14 @@
 - Update output availability in the publication transaction, so late publication failures
   cannot advertise an unavailable file.
 
+- Keep quoted continuations provisional until their preceding boundary settles;
+  explicitly defer premature legacy approvals rather than trapping a repair against
+  an immutable neighboring quote. Confirmation explanations cannot replace the proposal
+  they approved. Preserve every individual approval in the persisted audit trail.
+- Continue without malformed or truncated optional spelling/source-reading aids, with
+  diagnostic warnings; use existing metadata fallback for truncated classification.
+  Access and transport failures remain terminal and resumable.
+
 ## 1.9.0 - 2026-09-20
 
 PDF fidelity, reliable long-running processing, and an actionable final quality review.

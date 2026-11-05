@@ -267,3 +267,17 @@ Merged failed windows share their original units’ unspent retries; merging can
 or enlarge that allocation, and the whole-chunk safety ceiling still applies.
 The unit budget falls back to `CLEANING_FIDELITY_MAX_RETRIES` when
 `CLEANING_UNIT_MAX_RETRIES` is unset; its effective default is three retries.
+
+Quoted continuations whose opening boundary depends on an unresolved preceding unit
+remain provisional. Their draft is reused, but review may repeat when that context
+changes; independent accepted units stay frozen. Older checkpoints that prematurely
+froze such a quotation emit an explicit `context-approval-deferred` transition.
+Confirmation explanations stay in the audit log: only the original proposal that
+was actually approved becomes a repair instruction.
+
+Malformed or truncated spelling suggestions and optional source readings are
+reported as unavailable and skipped. They cannot abort prose cleaning. Truncated
+classification uses the existing deterministic metadata fallback. Access, credit,
+network, cancellation, and storage failures still stop the run and preserve
+completed approvals for recovery. Individual approval events have unique persisted
+keys so simultaneous approvals cannot overwrite each other’s audit records.

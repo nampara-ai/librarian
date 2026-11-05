@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, ValidationError
 
+from librarian.application.errors import LLMResponseTruncatedError
 from librarian.application.ports import LLMProvider, TaxonomyProvider
 from librarian.domain.ids import DocumentId
 from librarian.domain.models import Classification
@@ -316,16 +317,19 @@ class ClassifyDocument:
     ) -> Classification:
         prompt = self.prompt_catalog.get("classification", self.prompt_version)
         sample = _classification_sample(text, budget=self.sample_chars)
-        raw = await self.provider.complete(
-            system_prompt=(
-                "You are a librarian expert in Dewey Decimal Classification. "
-                "Respond only with valid JSON."
-            ),
-            user_prompt=f"{prompt}\n\nText to analyze:\n{sample}",
-            model=self.model,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-        )
+        try:
+            raw = await self.provider.complete(
+                system_prompt=(
+                    "You are a librarian expert in Dewey Decimal Classification. "
+                    "Respond only with valid JSON."
+                ),
+                user_prompt=f"{prompt}\n\nText to analyze:\n{sample}",
+                model=self.model,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+            )
+        except LLMResponseTruncatedError:
+            return heuristic_classify(document_id, text, self.taxonomy)
         if len(raw) > self.max_response_chars:
             raise ValueError(
                 "classification provider response exceeded configured character limit "

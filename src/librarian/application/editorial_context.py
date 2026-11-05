@@ -7,6 +7,7 @@ import re
 from difflib import SequenceMatcher
 from typing import cast
 
+from librarian.application.errors import AdvisoryModelOutputError, LLMResponseTruncatedError
 from librarian.application.model_output import complete_json
 from librarian.application.ports import LLMProvider
 from librarian.pipeline.validation import VERBATIM_NUMBER_REGEX, literal_links
@@ -32,16 +33,22 @@ async def editorial_context(
         if sum(len(item) for item in snippets) >= 10_000:
             break
     sample = "\n[... ]\n".join(snippets)
-    raw = await complete_json(
-        provider,
-        enabled=advisory,
-        system_prompt=catalog.get("repair", "context_v1"),
-        user_prompt=sample,
-        model=model,
-        max_tokens=16_384,
-        temperature=0.0,
-    )
-    return parse_editorial_context(raw, source, advisory=advisory)
+    try:
+        raw = await complete_json(
+            provider,
+            enabled=advisory,
+            system_prompt=catalog.get("repair", "context_v1"),
+            user_prompt=sample,
+            model=model,
+            max_tokens=16_384,
+            temperature=0.0,
+        )
+    except LLMResponseTruncatedError:
+        raise AdvisoryModelOutputError("Spelling preparation was truncated") from None
+    try:
+        return parse_editorial_context(raw, source, advisory=advisory)
+    except ValueError as exc:
+        raise AdvisoryModelOutputError(str(exc)) from None
 
 
 def parse_editorial_context(raw: str, source: str, *, advisory: bool = False) -> str:

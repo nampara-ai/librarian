@@ -49,4 +49,15 @@ def test_adjudication_keeps_explicit_rejections_separate_from_confirmed_repairs(
         raw, "u0", ["Fix the conjunction.", "Delete the query."]
     )
     assert warning == "semantic-fidelity-failed"
-    assert issues == {"u0": ["Remove the duplicated conjunction."]}
+    assert issues == {"u0": ["Fix the conjunction."]}
+
+
+def test_confirmation_explanation_cannot_replace_the_proposal_it_approved() -> None:
+    raw = json.dumps(
+        {"checks": [{"id": "c0", "confirmed": True, "reason": "Do the opposite action instead."}]}
+    )
+    warning, issues = clean_chunks._confirmation_issues(  # pyright: ignore[reportPrivateUsage]
+        raw, "u0", ["Retain this exact proposal."]
+    )
+    assert warning == "semantic-fidelity-failed"
+    assert issues == {"u0": ["Retain this exact proposal."]}

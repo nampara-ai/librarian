@@ -23,7 +23,7 @@ from librarian.application.clean_chunks import (
     FidelityValidationError,
 )
 from librarian.application.editorial_context import editorial_context
-from librarian.application.errors import ProcessingCanceled
+from librarian.application.errors import AdvisoryModelOutputError, ProcessingCanceled
 from librarian.application.final_refinement import FinalRefiner
 from librarian.application.ingest_document import IngestDocument, raw_text_key
 from librarian.application.ports import (
@@ -174,6 +174,7 @@ class ProcessDocument:
 
         published = False
         cleaning_attempts: list[dict[str, object]] = []
+        preparation_warnings: list[str] = []
         progress = {"completed": 0}
 
         try:
@@ -293,19 +294,29 @@ class ProcessDocument:
                             f"building document spelling sheet: waiting {elapsed:.0f}s",
                         )
 
-                    spelling_sheet = await await_with_progress(
-                        editorial_context(
-                            self.cleaner.preparation_provider or self.cleaner.provider,
-                            self.cleaner.prompt_catalog,
-                            self.cleaner.model,
-                            normalized_text,
-                            advisory=self.cleaner.plain_edits,
-                        ),
-                        context_wait,
-                    )
+                    try:
+                        spelling_sheet = await await_with_progress(
+                            editorial_context(
+                                self.cleaner.preparation_provider or self.cleaner.provider,
+                                self.cleaner.prompt_catalog,
+                                self.cleaner.model,
+                                normalized_text,
+                                advisory=self.cleaner.plain_edits,
+                            ),
+                            context_wait,
+                        )
+                    except AdvisoryModelOutputError:
+                        spelling_sheet = ""
+                        preparation_warnings.append("spelling-preparation-unavailable")
                     await self._raise_if_canceled(run_id)
                     await self.content.put_text(f"quality:context:{run_id}", spelling_sheet)
-                    await self.events.emit(run_id, RunStage.CLEAN, "document spelling sheet ready")
+                    await self.events.emit(
+                        run_id,
+                        RunStage.CLEAN,
+                        "document spelling sheet ready"
+                        if spelling_sheet
+                        else "spelling suggestions unavailable; continuing without them",
+                    )
                 await self._raise_if_canceled(run_id)
 
                 resume_units = {}
@@ -396,7 +407,7 @@ class ProcessDocument:
                     if attempt.text is not None:
                         key = (
                             f"quality:attempt:{run_id}:{attempt.chunk.id}:"
-                            f"{attempt.number}:{attempt.status}"
+                            f"{attempt.number}:{uuid.uuid4().hex}:{attempt.status}"
                         )
                         await self.content.put_text(key, attempt.text)
                         record["candidate_key"] = key
@@ -406,6 +417,11 @@ class ProcessDocument:
                         f"chunk {attempt.chunk.ordinal + 1}/{len(chunked)} "
                         f"attempt {attempt.number}/{attempt.limit}: {attempt.status}"
                     )
+                    if attempt.status == "context-approval-deferred":
+                        message = (
+                            f"chunk {attempt.chunk.ordinal + 1}/{len(chunked)}: "
+                            "rechecking a quotation boundary after its preceding context changed"
+                        )
                     if (
                         attempt.status == "units-accepted"
                         and str(attempt.chunk.id) in accepted_coverage
@@ -553,6 +569,11 @@ class ProcessDocument:
                 final_quality = audit_final_document(
                     normalized_text, assembled, title=classification.title
                 )
+                cast("list[str]", final_quality["warnings"]).extend(preparation_warnings)
+                if any("source-reading-unavailable" in item.warnings for item in cleaned_chunks):
+                    cast("list[str]", final_quality["warnings"]).append(
+                        "source-reading-unavailable"
+                    )
                 if any("repaired-decade-shorthand" in item.warnings for item in cleaned_chunks):
                     cast("list[str]", final_quality["warnings"]).append("repaired-decade-shorthand")
                 pending_review = review_items(assembled)

@@ -1435,3 +1435,51 @@ async def test_accepted_local_query_is_published_as_needs_review_not_fully_clean
     assert quality["cleaning_status"] == "needs-review"
     assert quality["editorial_queries"] == ["unintelligible"]
     assert output is not None and "318" in output.text
+
+
+@pytest.mark.asyncio
+async def test_individual_approval_logs_do_not_overwrite_each_other(tmp_path: Path) -> None:
+    class Editor:
+        name = "editor"
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            return json.loads(user_prompt)["source"].replace("teh", "The")
+
+    class Reviewer:
+        name = "reviewer"
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            return json.dumps(
+                {"issues": []} if user_prompt.lstrip().startswith("{") else {"corrections": []}
+            )
+
+    source = tmp_path / "notes.txt"
+    source.write_text("teh patient rested.\n\nteh doctor arrived.")
+    container = await build_container(Settings(data_dir=tmp_path / "data"))
+    ingested = await container.ingest_document.execute(source)
+    reviewer = Reviewer()
+    process = replace(
+        container.process_document,
+        refiner=None,
+        cleaner=replace(
+            container.process_document.cleaner,
+            provider=Editor(),
+            preparation_provider=reviewer,
+            verification_provider=reviewer,
+            prompt_version="cmos_v8",
+            review_mode="strict",
+            unit_target_chars=30,
+        ),
+    )
+    run = await process.execute(ingested.document.id)
+    quality = json.loads(await container.repository.get_text(run_quality_key(run.id)))
+    accepted = [
+        entry for entry in quality["cleaning_attempts"] if entry["status"] == "units-accepted"
+    ]
+    assert len(accepted) == 2
+    assert len({entry["candidate_key"] for entry in accepted}) == 2
+    unit_ids: list[str] = []
+    for entry in accepted:
+        details = json.loads(await container.repository.get_text(entry["candidate_key"]))
+        unit_ids.extend(u["id"] for u in details["units"])
+    assert set(unit_ids) == {"u0000", "u0001"}

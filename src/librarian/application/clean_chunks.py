@@ -15,6 +15,7 @@ from typing import Any, Literal, cast
 
 from librarian.application.async_progress import await_with_progress
 from librarian.application.errors import (
+    AdvisoryModelOutputError,
     LLMAccessError,
     LLMResponseTruncatedError,
     ProcessingCanceled,
@@ -147,6 +148,7 @@ class CleaningAttempt:
         "repair-reviewed",
         "accepted",
         "units-accepted",
+        "context-approval-deferred",
         "rejected",
         "error",
     ]
@@ -557,6 +559,24 @@ class CleanChunks:
                 unit_edits.pop(invalid_id, None)
         frozen_edits = dict(unit_edits)
         frozen_ids = set(frozen_edits)
+        legacy_deferred: list[dict[str, str]] = []
+        for index, unit in enumerate(units):
+            if (
+                index
+                and unit.id in frozen_ids
+                and unit.separator == " "
+                and units[index - 1].id not in frozen_ids
+                and re.match(r'^\s*(?:>\s*)?[“"]', frozen_edits[unit.id])
+            ):
+                legacy_deferred.append(
+                    {
+                        "id": unit.id,
+                        "predecessor": units[index - 1].id,
+                        "reason": "quotation-boundary-requires-unresolved-predecessor",
+                    }
+                )
+                frozen_edits.pop(unit.id)
+                frozen_ids.remove(unit.id)
         advisory_issues: dict[str, list[str]] = {
             u.unit_id: list(u.advisory_reasons)
             for u in saved_units
@@ -567,6 +587,7 @@ class CleanChunks:
             for u in saved_units
             if "review-unavailable" in u.advisory_reasons and u.unit_id in frozen_ids
         }
+        auxiliary_warnings: set[str] = set()
         generation_failures: dict[str, list[str]] = {}
         verified_units: dict[str, str] = {}
         attempts_used = 0
@@ -605,6 +626,28 @@ class CleanChunks:
 
         acceptance_lock = asyncio.Lock()
 
+        def unsettled_quotation(uid: str, text: str) -> bool:
+            for index, unit in enumerate(units):
+                if unit.id == uid:
+                    return bool(
+                        index
+                        and unit.separator == " "
+                        and units[index - 1].id not in frozen_ids
+                        and re.match(r'^\s*(?:>\s*)?[“"]', text)
+                    )
+            return False
+
+        if legacy_deferred and self.on_attempt is not None:
+            await self.on_attempt(
+                CleaningAttempt(
+                    chunk,
+                    0,
+                    chunk_limit,
+                    "context-approval-deferred",
+                    text=json.dumps({"units": legacy_deferred}),
+                )
+            )
+
         async def accept_unit(uid: str, text: str, *, number: int, limit: int) -> None:
             async with acceptance_lock:
                 if uid in frozen_edits:
@@ -619,6 +662,8 @@ class CleanChunks:
                         "A unit with unresolved structural violations cannot be accepted"
                     )
                 unit_failures.pop(uid, None)
+                if unsettled_quotation(uid, text):
+                    return
                 frozen_edits[uid] = text
                 frozen_ids.add(uid)
                 unit_edits[uid] = text
@@ -688,6 +733,7 @@ class CleanChunks:
                     following_context=following_source_context,
                     preceding_separator=preceding_separator,
                     eligible_unit_ids=eligible_ids,
+                    advisory_warnings=auxiliary_warnings,
                 )
             else:
                 operation = self.provider.complete(
@@ -751,7 +797,9 @@ class CleanChunks:
             eligible_ids = {
                 u.id
                 for u in units
-                if u.id not in frozen_ids and unit_attempts.get(u.id, 0) < unit_budgets[u.id]
+                if u.id not in frozen_ids
+                and (u.id not in unit_edits or u.id in unit_failures)
+                and unit_attempts.get(u.id, 0) < unit_budgets[u.id]
             }
             if attempt and has_units and not eligible_ids:
                 break
@@ -845,7 +893,9 @@ class CleanChunks:
                 source_text=chunk.text,
                 context=source_context,
             )
-            warnings = tuple(dict.fromkeys((*unit_warnings, *validated.warnings)))
+            warnings = tuple(
+                dict.fromkeys((*unit_warnings, *validated.warnings, *sorted(auxiliary_warnings)))
+            )
             structural_failures = FIDELITY_WARNINGS.intersection(warnings)
             unassigned = structural_failures.difference(unit_warnings, {"substantial-content-loss"})
             # Global failures can occur at a join even when isolated units passed.
@@ -1032,6 +1082,8 @@ class CleanChunks:
             checkpoint: list[UnitCheckpoint] = []
             for unit in units:
                 reasons = failures.get(unit.id)
+                if not reasons and unsettled_quotation(unit.id, unit_edits.get(unit.id, "")):
+                    reasons = ["quotation-boundary-awaiting-predecessor"]
                 if reasons or unit.id not in unit_edits:
                     text = mark_source(
                         unit.text,
@@ -1067,6 +1119,7 @@ class CleanChunks:
         repair_review_traces: list[str] | None = None,
         preceding_separator: str = "\n\n",
         eligible_unit_ids: set[str] | None = None,
+        advisory_warnings: set[str] | None = None,
     ) -> str:
         """Edit modest source spans independently and retry only rejected spans."""
         if self.plain_edits:
@@ -1189,6 +1242,7 @@ class CleanChunks:
                             following_context=after,
                             inherited_checks=(*inherited_checks, *failures.get(unit.id, [])),
                             preceding_separator=unit.separator if index else preceding_separator,
+                            advisory_warnings=advisory_warnings,
                         )
                         child_text, child_warnings, _ = decode_edits(child_response, smaller)
                         edits[unit.id] = child_text
@@ -1238,19 +1292,27 @@ class CleanChunks:
                             payload["numeric_readings"] = [
                                 reading.as_dict() for reading in protected.numeric_readings
                             ]
-                        if self.source_reading:
-                            reading = await read_source(
-                                self.verification_provider or self.provider,
-                                self.prompt_catalog,
-                                self.verification_model or self.model,
-                                unit.text,
-                                before,
-                                after,
-                                max_tokens=min(self.max_tokens, 8192),
-                                temperature=self.verification_temperature,
-                                prompt_version="source_reading_v2",
-                            )
-                            payload["source_reading"] = reading.model_dump()
+                        if self.source_reading and (
+                            advisory_warnings is None
+                            or "source-reading-unavailable" not in advisory_warnings
+                        ):
+                            try:
+                                reading = await read_source(
+                                    self.verification_provider or self.provider,
+                                    self.prompt_catalog,
+                                    self.verification_model or self.model,
+                                    unit.text,
+                                    before,
+                                    after,
+                                    max_tokens=min(self.max_tokens, 8192),
+                                    temperature=self.verification_temperature,
+                                    prompt_version="source_reading_v2",
+                                )
+                            except AdvisoryModelOutputError:
+                                if advisory_warnings is not None:
+                                    advisory_warnings.add("source-reading-unavailable")
+                            else:
+                                payload["source_reading"] = reading.model_dump()
                     else:
                         payload["units"] = [unit.as_dict()]
                     response = await self.provider.complete(
@@ -1440,6 +1502,8 @@ class CleanChunks:
             signature = hashlib.sha256(json.dumps(pair, sort_keys=True).encode()).hexdigest()
             if verified.get(pair["id"]) != signature:
                 queue.put_nowait(pair)
+            elif on_verified is not None:
+                await on_verified(pair["id"], pair["edited"])
         count = queue.qsize()
         failures: dict[str, list[str]] = {}
         responses: list[dict[str, str]] = []
@@ -1642,5 +1706,7 @@ def _confirmation_issues(
         ):
             return "invalid-fidelity-verification", {}
         if entry["confirmed"]:
-            confirmed.append(reason[:1000])
+            # Confirmation is a vote on this exact proposal. Its explanation
+            # remains audit evidence and cannot silently become a different repair.
+            confirmed.append(proposed[index][:1000])
     return ("semantic-fidelity-failed", {unit_id: confirmed}) if confirmed else (None, {})

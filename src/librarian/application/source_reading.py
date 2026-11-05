@@ -6,6 +6,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from librarian.application.errors import AdvisoryModelOutputError, LLMResponseTruncatedError
 from librarian.application.model_output import complete_json
 from librarian.application.ports import LLMProvider
 from librarian.prompts import PromptCatalog
@@ -39,21 +40,26 @@ async def read_source(
         "context_after": after,
     }
     for attempt in range(2):
-        raw = await complete_json(
-            provider,
-            system_prompt=catalog.get("repair", prompt_version),
-            user_prompt=json.dumps(payload, ensure_ascii=False),
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+        try:
+            raw = await complete_json(
+                provider,
+                system_prompt=catalog.get("repair", prompt_version),
+                user_prompt=json.dumps(payload, ensure_ascii=False),
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+        except LLMResponseTruncatedError:
+            raise AdvisoryModelOutputError("Source reading was truncated") from None
         if len(raw) > 128_000:
-            raise ValueError("Source reading exceeded its response limit")
+            raise AdvisoryModelOutputError("Source reading exceeded its response limit")
         try:
             return SourceReading.model_validate_json(raw)
         except ValidationError:
             if attempt:
-                raise ValueError("Source reading did not satisfy the required schema") from None
+                raise AdvisoryModelOutputError(
+                    "Source reading did not satisfy the required schema"
+                ) from None
             payload["validation_error"] = "Return exactly the five required arrays of strings."
             payload["previous_reading"] = raw
     raise AssertionError("Source reading retry budget must terminate")
