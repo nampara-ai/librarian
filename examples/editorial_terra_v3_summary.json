@@ -1,0 +1,277 @@
+{
+  "purpose": "Original prospective V3 results, including all completed work after stopping qualification for futility. Original judgments are retained; later diagnosis does not overwrite verdicts.",
+  "git_revision": "9483818adb92943d69cd9c2c9a6d2adda7fc5a7b",
+  "suite_file_sha256": "8d9d4f90df1008dc2e2a3169073f10ce739aba523a88bcf1958a03d037e95859",
+  "profile": "examples/editorial_candidate_v3_profile.json",
+  "planned_trials": 30,
+  "completed_trials": 11,
+  "passed": false,
+  "complete": false,
+  "stopped_reason": "failed-first-trial; one second-trial case finished before interruption",
+  "summary": [
+    {
+      "trial": 1,
+      "completed_cases": 10,
+      "passed_cases": 4,
+      "planned_cases": 10
+    },
+    {
+      "trial": 2,
+      "completed_cases": 1,
+      "passed_cases": 1,
+      "planned_cases": 10
+    },
+    {
+      "trial": 3,
+      "completed_cases": 0,
+      "passed_cases": 0,
+      "planned_cases": 10
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "fiction-v3-1",
+      "trial": 1,
+      "passed": false,
+      "processing_succeeded": true,
+      "error_kind": null,
+      "error": null,
+      "criteria": {
+        "fidelity": "fail",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [
+        {
+          "criterion": "fidelity",
+          "source_quote": "After mentioning the likelihood of this marriage to her Ladyship last night, she",
+          "candidate_quote": "After I mentioned the likelihood of this marriage to her Ladyship last night, she",
+          "explanation": "Adding “I” makes the narrator, rather than the woman referred to as “she,” the one who mentioned the marriage to her Ladyship. This changes who performed the action."
+        }
+      ],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "fiction-v3-2",
+      "trial": 1,
+      "passed": true,
+      "processing_succeeded": true,
+      "error_kind": null,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "science-v3-1",
+      "trial": 1,
+      "passed": true,
+      "processing_succeeded": true,
+      "error_kind": null,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "science-v3-2",
+      "trial": 1,
+      "passed": false,
+      "processing_succeeded": true,
+      "error_kind": null,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "fail",
+        "structure": "pass"
+      },
+      "issues": [
+        {
+          "criterion": "style",
+          "source_quote": "two palæontologists, whose opinions are worthy of much deference, namely",
+          "candidate_quote": "two palæontologists whose opinions are worthy of much deference, namely",
+          "explanation": "The candidate omits the opening comma for the parenthetical clause “whose opinions are worthy of much deference,” leaving the punctuation unbalanced."
+        }
+      ],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "political-argument-v3-1",
+      "trial": 1,
+      "passed": false,
+      "processing_succeeded": true,
+      "error_kind": "assessment",
+      "error": "1 validation error for EditorialJudgment\nissues\n  Field required [type=missing, input_value={'criteria': {'fidelity':...s'}, 'requirements': []}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing",
+      "criteria": null,
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "political-argument-v3-2",
+      "trial": 1,
+      "passed": false,
+      "processing_succeeded": true,
+      "error_kind": null,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "fail",
+        "structure": "pass"
+      },
+      "issues": [
+        {
+          "criterion": "style",
+          "source_quote": "its Constitution.",
+          "candidate_quote": "its constitution.",
+          "explanation": "The candidate lowercases “Constitution” even though it refers to the specific U.S. Constitution; Chicago style capitalizes the name of the document."
+        }
+      ],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "philosophy-v3-1",
+      "trial": 1,
+      "passed": true,
+      "processing_succeeded": true,
+      "error_kind": null,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "philosophy-v3-2",
+      "trial": 1,
+      "passed": false,
+      "processing_succeeded": true,
+      "error_kind": null,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "fail",
+        "voice": "pass",
+        "style": "fail",
+        "structure": "pass"
+      },
+      "issues": [
+        {
+          "criterion": "fluency",
+          "source_quote": "Socrates, between whom and the legal authorities and public opinion of his time, there took place a memorable collision.",
+          "candidate_quote": "Socrates between whom and the legal authorities and public opinion of his time there took place a memorable collision.",
+          "explanation": "Without commas setting off the intervening phrase, the sentence is harder to parse and reads as an unpolished run of clauses."
+        },
+        {
+          "criterion": "style",
+          "source_quote": "Socrates, between whom and the legal authorities and public opinion of his time, there took place",
+          "candidate_quote": "Socrates between whom and the legal authorities and public opinion of his time there took place",
+          "explanation": "The candidate drops the commas that set off the intervening phrase, weakening the punctuation of this complex sentence."
+        }
+      ],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "autobiography-v3-1",
+      "trial": 1,
+      "passed": true,
+      "processing_succeeded": true,
+      "error_kind": null,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "autobiography-v3-2",
+      "trial": 1,
+      "passed": false,
+      "processing_succeeded": true,
+      "error_kind": null,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": [
+        "missing-citation-marker"
+      ]
+    },
+    {
+      "case_id": "fiction-v3-1",
+      "trial": 2,
+      "passed": true,
+      "processing_succeeded": true,
+      "error_kind": null,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    }
+  ],
+  "diagnosis": [
+    "Quoted authored grammar was rewritten; a reviewer claim that the implied actor changed is disputable, but changing intelligible quoted wording is a separate legitimate issue.",
+    "Two punctuation failures and one specific proper-name capitalization failure remain original editorial failures.",
+    "One assessment exhausted its format budget; this is an assessment failure, not a prose verdict.",
+    "One deterministic citation check did not recognize a preserved HTML superscript equivalent. Retain its failed original verdict; validation corrections must be reported separately."
+  ]
+}

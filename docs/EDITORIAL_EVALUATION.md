@@ -166,3 +166,25 @@ tag despite an equivalent question. `prose_review_v3` compares pragmatic force i
 requiring the tag verbatim; it handled all 26 controls once. Both results are retained in
 `examples/editorial_production_gate_calibration_summary.json`. The independent evaluation
 prompt remains `editorial_v3`; its gates have not been relaxed.
+
+## V3 failures and composition contract
+
+The frozen V3 configuration did not qualify: the first trial passed 4/10. Qualification
+was stopped; one second-trial case completed before interruption, so 11/30 planned attempts
+are recorded, with five passes overall. `examples/editorial_terra_v3_summary.json` retains
+every original verdict. A malformed assessor response counts as an assessment failure.
+One citation false positive is explicitly documented rather than rescored silently.
+
+The follow-up changes distinguish quoted authored wording from narration. Intelligible
+quotations retain dialect, historical idiom, and awkward authored grammar; only clear
+transcription/OCR corruption or accidental speech debris is repairable inside them.
+Six authored source-only controls in `examples/editorial_quotation_calibration.json`
+exercise that distinction, invented actors, and retained qualifications. Terra handled
+all six once under `prose_review_v4`; that small calibration does not establish editing quality.
+
+Composition preserves source separators instead of inventing paragraphs at arbitrary editing
+unit boundaries. The independent production review receives canonical rendered unit text,
+including normalized spacing and sentence capitalization. Repair anchors use that same text.
+Semantic patches commit in source order and receive both raw and current edited neighbors,
+so a later repair sees earlier committed changes. Changed contexts invalidate approvals.
+The original independent `editorial_v3` assessment rubric remains unchanged.
