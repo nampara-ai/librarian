@@ -1,0 +1,35 @@
+{
+  "purpose": "Assessor calibration, not editor performance evidence",
+  "prompt_version": "editorial_v3",
+  "reasoning_effort": "medium",
+  "controls": [
+    {
+      "model": "gpt-6.1-terra",
+      "suite": "editorial_judge_calibration.json",
+      "correct": 20,
+      "total": 20,
+      "repetitions": 1
+    },
+    {
+      "model": "gpt-6-luna",
+      "suite": "editorial_judge_calibration.json",
+      "correct": 20,
+      "total": 20,
+      "repetitions": 1
+    },
+    {
+      "model": "gpt-6.1-terra",
+      "suite": "editorial_style_calibration.json",
+      "correct": 12,
+      "total": 12,
+      "repetitions": 1
+    },
+    {
+      "model": "gpt-6-luna",
+      "suite": "editorial_style_calibration.json",
+      "correct": 12,
+      "total": 12,
+      "repetitions": 1
+    }
+  ]
+}
