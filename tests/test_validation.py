@@ -374,3 +374,26 @@ def test_citation_check_detects_partial_loss_and_changed_identities(candidate: s
     source = "A supported statement [17], and another [18]."
     result = validate_cleaned_text(candidate, input_size=len(source), source_text=source)
     assert "missing-citation-marker" in result.warnings
+
+
+def test_ordinary_link_labels_are_not_citation_identities() -> None:
+    source = "Read [the guide](https://example.com/docs) for details."
+    output = "Read [the documentation](https://example.com/docs) for details."
+    result = validate_cleaned_text(output, input_size=len(source), source_text=source)
+    assert "missing-citation-marker" not in result.warnings
+    assert "changed-literal-link" not in result.warnings
+
+
+def test_linked_superscript_citation_preserves_identity() -> None:
+    source = "A supported statement [17]."
+    output = 'A supported statement <sup id="ref17"><a href="#note17">17</a></sup>.'
+    result = validate_cleaned_text(output, input_size=len(source), source_text=source)
+    assert "missing-citation-marker" not in result.warnings
+
+
+
+def test_author_year_citation_spacing_is_typographical() -> None:
+    source = "An observation (Smith,2020)."
+    output = "An observation (Smith, 2020)."
+    result = validate_cleaned_text(output, input_size=len(source), source_text=source)
+    assert "missing-citation-marker" not in result.warnings

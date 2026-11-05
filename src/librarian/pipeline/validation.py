@@ -161,17 +161,27 @@ def filter_artifact_lines(text: str, *, source_text: str | None = None) -> str:
 
 
 def _citation_markers(text: str) -> Counter[str]:
-    """Compare identities across bracket, Markdown footnote, and HTML superscript forms."""
+    """Compare citation identities without treating ordinary link labels as citations."""
     markers: Counter[str] = Counter()
     pattern = re.compile(
         r"\[(?:\^)?([0-9A-Za-z][0-9A-Za-z .:-]{0,20})\]"
-        r"|<sup>\s*([0-9]+)\s*</sup>"
-        r"|(\([A-Z][A-Za-z-]+,\s*\d{4}\))",
-        re.IGNORECASE,
+        r"|(\([A-Z][A-Za-z-]+,\s*\d{4}\))"
     )
     for match in pattern.finditer(text):
         identity = next(value for value in match.groups() if value is not None)
-        markers[" ".join(identity.split())] += 1
+        if text[max(0, match.start() - 1) : match.start()] == "!":
+            continue
+        if (
+            text[match.end() : match.end() + 1] == "("
+            and not match.group().startswith("[^")
+            and not re.fullmatch(r"[A-Za-z]*[0-9]+", identity)
+        ):
+            continue
+        markers[" ".join(re.sub(r",\s*", ", ", identity).split())] += 1
+    for match in re.finditer(r"<sup\b[^>]*>(.*?)</sup>", text, re.I | re.S):
+        identity = re.sub(r"<[^>]+>", "", match.group(1)).strip()
+        if identity.isdecimal():
+            markers[identity] += 1
     return markers
 
 
