@@ -216,3 +216,120 @@ async def test_broken_aside_is_repaired_without_discarding_the_direct_address() 
     assert (
         result.text == "I notice in public—as I am sure you have noticed too—that people hesitate."
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_late_cues_are_reviewed_in_small_batches_before_whole_unit_approval(
+    legacy: bool,
+) -> None:
+    source = (
+        " ".join(
+            f"I mean what I say about {topic}, including their historical context, "
+            "their intended audience, and the records used to explain each finding in our archive."
+            for topic in ("maps", "rivers", "mountains", "forests")
+        )
+        + " The parcel is for Nora—or not for Nora; it is for the library."
+    )
+    fixed = source.replace("for Nora—or not for Nora; it is for the library", "for the library")
+
+    class Provider:
+        name = "test"
+        drafts = 0
+        sizes: list[int] = []
+        late_seen = False
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            payload = json.loads(user_prompt)
+            if "pairs" in payload:
+                return json.dumps({"issues": []})
+            if "checks" in payload and "pair" in payload:
+                self.sizes.append(len(payload["checks"]))
+                checks = []
+                for check in payload["checks"]:
+                    repair = "or not for Nora" in check["problem"]
+                    self.late_seen |= repair
+                    checks.append(
+                        {
+                            "id": check["id"],
+                            "confirmed": repair,
+                            "reason": "Repair the abandoned referent."
+                            if repair
+                            else "A deliberate statement about sincerity.",
+                        }
+                    )
+                return json.dumps({"checks": checks})
+            if "candidate_spans" in payload:
+                span = next(s for s in payload["candidate_spans"] if "for Nora" in s["text"])
+                return json.dumps(
+                    {
+                        "patches": [
+                            {
+                                "id": span["id"],
+                                "find": "for Nora—or not for Nora; it is for the library",
+                                "replace": "for the library",
+                            }
+                        ]
+                    }
+                )
+            self.drafts += 1
+            return source
+
+    chunk = Chunk(ChunkId("c"), DocumentId("d"), 0, source, 0, len(source), "sha")
+    provider = Provider()
+    cleaner = CleanChunks(provider, PromptCatalog(), "cmos_v8", "test", review_mode="strict")
+    if legacy:
+        cleaner = replace(
+            cleaner,
+            resume_units={
+                chunk.id: (
+                    UnitCheckpoint(
+                        "u0000", source, "prose", "", source, editorial_audit="editorial-risks-v1"
+                    ),
+                )
+            },
+        )
+    result = (await cleaner.execute([chunk]))[0]
+    assert result.text == fixed
+    assert provider.late_seen
+    assert provider.sizes[:2] == [4, 1]
+    assert max(provider.sizes) <= 4
+    assert provider.drafts == (0 if legacy else 1)
+    assert EDITORIAL_AUDIT_MARKER in result.warnings
+
+
+@pytest.mark.asyncio
+async def test_excessive_review_work_is_explicit_instead_of_silently_approved() -> None:
+    from librarian.application.review_items import review_items
+
+    source = " ".join(f"I mean what I say about sector {i}." for i in range(40))
+
+    class Provider:
+        name = "test"
+        confirmations = 0
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            payload = json.loads(user_prompt)
+            if "pairs" in payload:
+                return json.dumps({"issues": []})
+            if "checks" in payload and "pair" in payload:
+                self.confirmations += 1
+                raise AssertionError("Excessive confirmation work must be bounded")
+            return payload["source"]
+
+    chunk = Chunk(ChunkId("c"), DocumentId("d"), 0, source, 0, len(source), "sha")
+    provider = Provider()
+    cleaner = CleanChunks(
+        provider,
+        PromptCatalog(),
+        "cmos_v8",
+        "test",
+        review_mode="strict",
+        publish_partial=True,
+    )
+    result = (await cleaner.execute([chunk]))[0]
+    assert provider.confirmations == 0
+    items = review_items(result.text)
+    assert items[0]["source"] == source
+    assert items[0]["reasons"] == ["editorial-review-capacity-exceeded"]
+    assert EDITORIAL_AUDIT_MARKER not in result.warnings

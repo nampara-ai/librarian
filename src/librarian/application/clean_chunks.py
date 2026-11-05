@@ -39,6 +39,7 @@ from librarian.pipeline.editing import (
 from librarian.pipeline.editorial_risks import (
     EDITORIAL_AUDIT,
     EDITORIAL_AUDIT_MARKER,
+    EDITORIAL_CHECK_LIMIT,
     editorial_checks,
 )
 from librarian.pipeline.markdown import source_join_separator
@@ -1621,37 +1622,62 @@ class CleanChunks:
                     and warning != "invalid-fidelity-verification"
                     and self.review_mode == "strict"
                 ):
-                    confirmed_warning, confirmed, confirmation = await self._request_review(
-                        system_prompt=(
-                            self.prompt_catalog.get(
-                                "repair",
-                                "confirm_prose_v8" if self.plain_edits else "confirm_meaning_v1",
-                            )
-                            + (
-                                ""
-                                if self.plain_edits
-                                else "\n\nApproved spelling sheet:\n" + self.editorial_context
-                            )
-                        ),
-                        payload=(
-                            {
-                                "pair": pair,
-                                "checks": [
-                                    {"id": f"c{index}", "problem": problem}
-                                    for index, problem in enumerate(issues[pair["id"]])
-                                ],
-                            }
-                            if self.plain_edits
-                            else {"pair": pair, "proposed_issues": issues[pair["id"]]}
-                        ),
-                        unit_id=pair["id"],
-                        confirmation_checks=issues[pair["id"]] if self.plain_edits else None,
-                    )
-                    record["confirmation"] = confirmation
-                    if confirmed_warning == "invalid-fidelity-verification":
-                        warning = confirmed_warning
+                    proposals = issues[pair["id"]]
+                    # Never approve a whole unit after silently dropping later cues.
+                    # Bound both the schema task and the total work for pathological input.
+                    if self.plain_edits and len(proposals) > EDITORIAL_CHECK_LIMIT:
+                        warning = "invalid-fidelity-verification"
+                        issues = {pair["id"]: ["editorial-review-capacity-exceeded"]}
                     else:
-                        warning, issues = confirmed_warning, confirmed
+                        batches = (
+                            [proposals[i : i + 4] for i in range(0, len(proposals), 4)]
+                            if self.plain_edits
+                            else [proposals]
+                        )
+                        confirmations: list[str] = []
+                        confirmed_issues: list[str] = []
+                        confirmed_kind: str | None = None
+                        for batch in batches:
+                            confirmed_warning, confirmed, confirmation = await self._request_review(
+                                system_prompt=(
+                                    self.prompt_catalog.get(
+                                        "repair",
+                                        "confirm_prose_v8"
+                                        if self.plain_edits
+                                        else "confirm_meaning_v1",
+                                    )
+                                    + (
+                                        ""
+                                        if self.plain_edits
+                                        else "\n\nApproved spelling sheet:\n"
+                                        + self.editorial_context
+                                    )
+                                ),
+                                payload=(
+                                    {
+                                        "pair": pair,
+                                        "checks": [
+                                            {"id": f"c{index}", "problem": problem}
+                                            for index, problem in enumerate(batch)
+                                        ],
+                                    }
+                                    if self.plain_edits
+                                    else {"pair": pair, "proposed_issues": batch}
+                                ),
+                                unit_id=pair["id"],
+                                confirmation_checks=batch if self.plain_edits else None,
+                            )
+                            confirmations.append(confirmation)
+                            if confirmed_warning == "invalid-fidelity-verification":
+                                warning = confirmed_warning
+                                break
+                            confirmed_issues.extend(confirmed.get(pair["id"], []))
+                            if confirmed_warning:
+                                confirmed_kind = confirmed_warning
+                        else:
+                            warning = confirmed_kind
+                            issues = {pair["id"]: confirmed_issues} if confirmed_issues else {}
+                        record["confirmation"] = json.dumps(confirmations)
                 responses.append(record)
                 if warning == "invalid-fidelity-verification":
                     invalid = True

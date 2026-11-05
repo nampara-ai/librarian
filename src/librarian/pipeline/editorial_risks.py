@@ -8,8 +8,9 @@ import re
 from librarian.pipeline.markdown import protected_spans
 from librarian.pipeline.validation import UNCLEAR_TRANSCRIPTION_REGEX
 
-EDITORIAL_AUDIT = "editorial-risks-v1"
-EDITORIAL_AUDIT_MARKER = "editorial-risks-audited-v1"
+EDITORIAL_CHECK_LIMIT = 32
+EDITORIAL_AUDIT = "editorial-risks-v2"
+EDITORIAL_AUDIT_MARKER = "editorial-risks-audited-v2"
 _REPAIR = re.compile(
     r"\bor\s+(?:rather\b|not\b)"
     r"|\b(?:no|sorry|actually)[,;:— -]+(?:I\s+mean|rather|make\s+that)\b"
@@ -76,6 +77,7 @@ def editorial_checks(candidate: str, source: str = "") -> list[str]:
             check = instruction + "\nCandidate excerpt: " + json.dumps(excerpt, ensure_ascii=False)
             if check not in checks:
                 checks.append(check)
-            if len(checks) == 4:
+            if len(checks) > EDITORIAL_CHECK_LIMIT:
+                # One overflow item signals that coverage is incomplete.
                 return checks
     return checks

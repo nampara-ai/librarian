@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Check later editorial-risk cues in bounded confirmation batches; never mark partial
+  cue coverage as complete. Report excessive review work explicitly and upgrade old receipts.
+
 - Bound adjacent repair merges by the configured unit size. Split oversized unresolved
   legacy checkpoint windows back into source units without reopening accepted neighbors.
 
