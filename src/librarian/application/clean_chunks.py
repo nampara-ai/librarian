@@ -516,6 +516,7 @@ class CleanChunks:
                 else "\n\nSource-grounded document spelling sheet:\n"
             ) + self.editorial_context
         units = list(self._source_units(chunk.text))
+        canonical_units = tuple(units)
         saved_units = self.resume_units.get(chunk.id, ())
         # Only source-identical checkpoints can be reused, including the original
         # separators and any failed windows coalesced during the earlier run.
@@ -579,7 +580,18 @@ class CleanChunks:
             + 1
         )
         unit_attempts: dict[str, int] = {}
-        unit_budgets = {u.id: unit_limit for u in units}
+        canonical_positions = {u.id: i for i, u in enumerate(canonical_units)}
+        unit_budgets: dict[str, int] = {}
+        for index, unit in enumerate(units):
+            start = canonical_positions.get(unit.id, 0)
+            end = (
+                canonical_positions.get(units[index + 1].id, start + 1)
+                if index + 1 < len(units)
+                else len(canonical_units)
+            )
+            # A resumed repair window can contain several original source units.
+            # Its fresh run budget must preserve that same original allocation.
+            unit_budgets[unit.id] = unit_limit * max(1, end - start)
         chunk_limit = 2 * unit_limit if has_units else max(0, self.max_fidelity_retries) + 1
 
         prepare_attempt_prompt = partial(self._attempt_prompt, system_prompt, chunk)

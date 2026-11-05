@@ -291,6 +291,15 @@ async def test_merged_failures_preserve_but_cannot_inflate_unspent_unit_budgets(
     assert editor.calls == 4
     if stubborn:
         assert review_items(result.text)[0]["source"] == source
+        from dataclasses import replace
+
+        stubborn = False
+        editor.calls = 0
+        resumed = replace(cleaner, resume_units={chunk.id: result.checkpoint})
+        repaired = (await resumed.execute([chunk]))[0]
+        assert editor.calls == 3
+        assert repaired.text == "The first result stood.\n\nThe second result stood."
+        assert not review_items(repaired.text)
     else:
         assert result.text == "The first result stood.\n\nThe second result stood."
         assert not review_items(result.text)
