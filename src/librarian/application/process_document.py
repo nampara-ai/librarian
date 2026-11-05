@@ -40,7 +40,12 @@ from librarian.application.quality_report import (
     extraction_report_key,
     run_quality_key,
 )
-from librarian.application.review_items import load_checkpoint, partial_key, review_items
+from librarian.application.review_items import (
+    load_checkpoint,
+    partial_key,
+    review_body,
+    review_items,
+)
 from librarian.domain.ids import DocumentId, RunId
 from librarian.domain.models import (
     Chunk,
@@ -500,7 +505,7 @@ class ProcessDocument:
                 )
                 classification = await self.classifier.execute(
                     document_id,
-                    assembled,
+                    review_body(assembled),
                     source_filename=document.source.filename,
                 )
                 final_quality = audit_final_document(
@@ -525,16 +530,25 @@ class ProcessDocument:
                             "cached_cleaned_chunks": len(cached_chunks),
                             "verified_source_chunks": len(verified_chunks),
                             "source_preserved_chunks": sum(
-                                bool(review_items(c.text)) for c in cleaned_chunks
+                                any(i.get("kind") == "source" for i in review_items(c.text))
+                                for c in cleaned_chunks
                             )
                             + fidelity_fallbacks,
                             "refinement": refinement_report,
                             "cleaning_attempts": cleaning_attempts,
+                            "review_mode": self.cleaner.review_mode,
                             "cleaning_status": "needs-review"
                             if queries or pending_review
                             else "cleaned",
                             "needs_review": pending_review,
                             "review_units": len(pending_review),
+                            "advisory_units": sum(
+                                i.get("kind") == "advisory" for i in pending_review
+                            ),
+                            "unreviewed_units": sum(
+                                "review-unavailable" in cast("list[str]", i["reasons"])
+                                for i in pending_review
+                            ),
                             "editorial_queries": queries,
                         },
                         ensure_ascii=False,

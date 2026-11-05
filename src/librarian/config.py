@@ -70,7 +70,9 @@ class Settings(BaseSettings):
     llm_max_output_tokens: int = Field(default=16_384, gt=0)
     cleaning_fidelity_max_retries: int = Field(default=3, ge=0, le=5)
     cleaning_publish_partial: bool = Field(default=True)
-    cleaning_semantic_verification: bool = Field(default=True)
+    cleaning_review_mode: Literal["off", "advisory", "strict"] = "advisory"
+    # Deprecated: explicit true preserves the previous strict contract; false disables review.
+    cleaning_semantic_verification: bool | None = Field(default=None)
     cleaning_reasoning_effort: ReasoningEffortSetting | None = Field(default=None)
     cleaning_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     cleaning_source_reading: bool = False

@@ -502,12 +502,12 @@ struct QualityDetailsView: View {
             }
             if let items = processing.needsReview, !items.isEmpty {
                 Divider()
-                Text("\(items.count) passage(s) preserved as source for review")
+                Text("\(items.count) passage(s) need review")
                     .font(.subheadline.weight(.semibold))
                 ForEach(items.indices, id: \.self) { index in
                     let item = items[index]
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Chunk \(item.chunk + 1), \(item.unitId)")
+                        Text("Chunk \(item.chunk + 1), \(item.unitId): \(item.kind == "advisory" ? "review advisory" : "source preserved")")
                             .font(.caption.weight(.semibold))
                         Text(item.reasons.joined(separator: "; "))
                             .foregroundStyle(.secondary)

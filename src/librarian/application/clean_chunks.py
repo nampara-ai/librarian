@@ -21,7 +21,7 @@ from librarian.application.errors import (
 )
 from librarian.application.model_output import complete_json
 from librarian.application.ports import LLMProvider
-from librarian.application.review_items import UnitCheckpoint, mark_source
+from librarian.application.review_items import UnitCheckpoint, mark_source, review_body
 from librarian.application.source_reading import read_source
 from librarian.domain.ids import ChunkId
 from librarian.domain.models import Chunk
@@ -37,6 +37,7 @@ from librarian.pipeline.editing import (
 from librarian.pipeline.prose_patches import apply_prose_patches, candidate_spans
 from librarian.pipeline.protected_text import protect_prose_data
 from librarian.pipeline.validation import (
+    DETERMINISTIC_WARNINGS,
     FIDELITY_WARNINGS,
     VERBATIM_NUMBER_REGEX,
     SourceContext,
@@ -200,6 +201,7 @@ class CleanChunks:
         default_factory=lambda: dict[ChunkId, tuple[UnitCheckpoint, ...]](), repr=False
     )
     publish_partial: bool = False
+    review_mode: Literal["off", "advisory", "strict"] = "strict"
     verify_semantics: bool = True
     editorial_context: str = ""
     provider_endpoint: str = ""
@@ -258,7 +260,8 @@ class CleanChunks:
                 )
         policy = json.dumps(
             {
-                "policy": 12,
+                "policy": 13,
+                "review_mode": self.review_mode,
                 "publish_partial": self.publish_partial,
                 "source_reading": self.source_reading,
                 "unit_target_chars": self.unit_target_chars,
@@ -331,7 +334,7 @@ class CleanChunks:
                     result = await self._clean_one(
                         chunk,
                         previous_context=(
-                            known_previous.text[-self.context_chars :]
+                            review_body(known_previous.text)[-self.context_chars :]
                             if known_previous
                             else ""
                             if self.plain_edits
@@ -383,7 +386,9 @@ class CleanChunks:
                         on_chunk_cleaned,
                         reused,
                         initial_edited_context=(
-                            previous_group[-1].text[-self.context_chars :] if previous_group else ""
+                            review_body(previous_group[-1].text)[-self.context_chars :]
+                            if previous_group
+                            else ""
                         ),
                         following_source_context=(
                             chunk_separator_before(
@@ -437,7 +442,7 @@ class CleanChunks:
                 ),
             )
             results.append(result)
-            previous_context = result.text[-self.context_chars :]
+            previous_context = review_body(result.text)[-self.context_chars :]
             previous_source_context = chunk.text[-self.context_chars :]
             if cached is None and on_chunk_cleaned is not None:
                 await on_chunk_cleaned(result)
@@ -530,10 +535,14 @@ class CleanChunks:
             u.unit_id: u.accepted_text for u in saved_units if u.accepted_text is not None
         }
         frozen_ids = set(unit_edits)
+        advisory_issues: dict[str, list[str]] = {
+            u.unit_id: list(u.advisory_reasons) for u in saved_units if u.advisory_reasons
+        }
         generation_failures: dict[str, list[str]] = {}
         verified_units: dict[str, str] = {}
         attempts_used = 0
         for attempt in range(max(0, self.max_fidelity_retries) + 1):
+            attempt_warnings = cast("tuple[str, ...]", warnings)
             attempts_used = attempt + 1
             limit = max(0, self.max_fidelity_retries) + 1
             if self.on_attempt is not None:
@@ -588,7 +597,7 @@ class CleanChunks:
                                 "semantic-fidelity-failed",
                                 "editorial-quality-failed",
                                 "new-lowercase-paragraph",
-                            }.intersection(warnings)
+                            }.intersection(attempt_warnings)
                         ),
                         previous_edited_context=previous_context,
                         repair_review_traces=repair_review_traces,
@@ -689,10 +698,13 @@ class CleanChunks:
             if (
                 has_units
                 and self.verify_semantics
+                and self.review_mode != "off"
                 and not (structural_failures - {"substantial-content-loss"})
             ):
                 pairs = verification_pairs(
-                    provider_text, units, include_unchanged_prose=self.plain_edits
+                    provider_text,
+                    units,
+                    include_unchanged_prose=self.plain_edits and self.review_mode == "strict",
                 )
                 if self.plain_edits:
                     # Repairs must patch the same canonical text the reviewer audited.
@@ -709,7 +721,15 @@ class CleanChunks:
                                 if previous_context
                                 else ""
                             )
-                pairs = [pair for pair in pairs if pair["id"] not in frozen_ids]
+                pairs = [
+                    pair
+                    for pair in pairs
+                    if pair["id"] not in frozen_ids
+                    and (
+                        self.review_mode == "strict"
+                        or " ".join(pair["source"].split()) != " ".join(pair["edited"].split())
+                    )
+                ]
                 for pair in pairs:
                     if pair["id"] == units[-1].id:
                         pair["context_after"] = following_source_context[:1200]
@@ -736,8 +756,11 @@ class CleanChunks:
                     interval_seconds=self.progress_interval_seconds,
                 )
                 if semantic_warning:
-                    warnings = (*warnings, semantic_warning)
-                    unit_failures = issues
+                    if self.review_mode == "advisory":
+                        advisory_issues.update(issues)
+                    else:
+                        warnings = (*warnings, semantic_warning)
+                        unit_failures = issues
                 else:
                     # A word-count reduction alone is not proof of lost meaning. It is
                     # cleared only after complete unit coverage and an independent audit.
@@ -754,7 +777,8 @@ class CleanChunks:
                             time.monotonic() - started,
                         )
                     )
-            accepted = not FIDELITY_WARNINGS.intersection(warnings)
+            blocking = FIDELITY_WARNINGS if self.review_mode == "strict" else DETERMINISTIC_WARNINGS
+            accepted = not blocking.intersection(warnings)
             if self.on_attempt is not None:
                 await self.on_attempt(
                     CleaningAttempt(
@@ -768,6 +792,38 @@ class CleanChunks:
                     )
                 )
             if accepted:
+                if advisory_issues:
+                    parts: list[str] = []
+                    checkpoints: list[UnitCheckpoint] = []
+                    for unit in units:
+                        edited = unit_edits.get(unit.id, unit.text)
+                        reasons = advisory_issues.get(unit.id, [])
+                        checkpoints.append(
+                            UnitCheckpoint(
+                                unit.id,
+                                unit.text,
+                                unit.kind,
+                                unit.separator,
+                                edited,
+                                tuple(reasons),
+                            )
+                        )
+                        text = (
+                            mark_source(
+                                edited,
+                                unit_id=unit.id,
+                                chunk=chunk.ordinal,
+                                reasons=reasons,
+                                attempts=attempts_used,
+                                original_source=unit.text,
+                            )
+                            if reasons
+                            else edited
+                        )
+                        parts.append((unit.separator if parts else "") + text)
+                    return CleanedChunk(
+                        chunk, "".join(parts), (*warnings, "review-advisory"), tuple(checkpoints)
+                    )
                 return CleanedChunk(
                     chunk=chunk,
                     text=validated.text,
@@ -1199,7 +1255,11 @@ class CleanChunks:
                     unit_id=pair["id"],
                 )
                 record = {"id": pair["id"], "response": response}
-                if issues and warning != "invalid-fidelity-verification":
+                if (
+                    issues
+                    and warning != "invalid-fidelity-verification"
+                    and self.review_mode == "strict"
+                ):
                     confirmed_warning, confirmed, confirmation = await self._request_review(
                         system_prompt=(
                             self.prompt_catalog.get(
@@ -1234,9 +1294,13 @@ class CleanChunks:
                 responses.append(record)
                 if warning == "invalid-fidelity-verification":
                     invalid = True
-                    failures[pair["id"]] = issues.get(
-                        pair["id"],
-                        ["Return a valid issues JSON object using the unchanged unit ID."],
+                    failures[pair["id"]] = (
+                        ["review-unavailable"]
+                        if self.review_mode == "advisory"
+                        else issues.get(
+                            pair["id"],
+                            ["Return a valid issues JSON object using the unchanged unit ID."],
+                        )
                     )
                 elif issues:
                     failures.update(issues)

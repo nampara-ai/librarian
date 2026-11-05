@@ -282,6 +282,7 @@ struct QueueItem: Identifiable {
 
 struct UnitReviewItem: Codable {
     let unitId: String
+    let kind: String?
     let chunk: Int
     let reasons: [String]
     let attempts: Int

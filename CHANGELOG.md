@@ -13,6 +13,10 @@
 
 - Show unresolved source passages, repair reasons, and locations in the Mac quality report.
 
+- Separate advisory semantic review from blocking structural validation. Advisory findings
+  and unavailable reviewer responses are reported without driving content rewrites; strict
+  review remains opt-in, and unchanged prose skips advisory review.
+
 ## 1.9.0 - 2026-09-20
 
 PDF fidelity, reliable long-running processing, and an actionable final quality review.

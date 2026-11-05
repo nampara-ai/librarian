@@ -48,6 +48,12 @@ FIDELITY_WARNINGS = frozenset(
     }
 )
 
+# Review findings are fallible semantic judgments, distinct from structural guards.
+ADVISORY_WARNINGS = frozenset(
+    {"semantic-fidelity-failed", "editorial-quality-failed", "invalid-fidelity-verification"}
+)
+DETERMINISTIC_WARNINGS = FIDELITY_WARNINGS - ADVISORY_WARNINGS
+
 ARTIFACT_PATTERNS = [
     r"I am ready to (?:begin|process)",
     r"I'm ready to (?:begin|process|edit)",
