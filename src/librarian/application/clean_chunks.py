@@ -574,6 +574,7 @@ class CleanChunks:
             + 1
         )
         unit_attempts: dict[str, int] = {}
+        unit_budgets = {u.id: unit_limit for u in units}
         chunk_limit = 2 * unit_limit if has_units else max(0, self.max_fidelity_retries) + 1
 
         prepare_attempt_prompt = partial(self._attempt_prompt, system_prompt, chunk)
@@ -692,13 +693,30 @@ class CleanChunks:
             attempt_warnings = cast("tuple[str, ...]", warnings)
             limit = chunk_limit
             if attempt and self.plain_edits and "editorial-quality-failed" in warnings:
+                original_units = list(units)
                 expanded, updated_edits, updated_failures = coalesce_adjacent_repairs(
                     units,
                     unit_edits,
                     unit_failures,
                     max_chars=coalesce_limit,
+                    frozen_ids=frozenset(frozen_ids),
                 )
                 if len(expanded) != len(units):
+                    # A merged repair must retain, rather than discard or reset,
+                    # the unspent budgets of its original failed source units.
+                    positions = {u.id: i for i, u in enumerate(original_units)}
+                    for index, merged in enumerate(expanded):
+                        start = positions[merged.id]
+                        end = (
+                            positions[expanded[index + 1].id]
+                            if index + 1 < len(expanded)
+                            else len(original_units)
+                        )
+                        members = original_units[start:end]
+                        remaining = sum(
+                            max(0, unit_budgets[u.id] - unit_attempts.get(u.id, 0)) for u in members
+                        )
+                        unit_budgets[merged.id] = unit_attempts.get(merged.id, 0) + remaining
                     units[:] = expanded
                     unit_edits.clear()
                     unit_edits.update(updated_edits)
@@ -716,7 +734,7 @@ class CleanChunks:
             eligible_ids = {
                 u.id
                 for u in units
-                if u.id not in frozen_ids and unit_attempts.get(u.id, 0) < unit_limit
+                if u.id not in frozen_ids and unit_attempts.get(u.id, 0) < unit_budgets[u.id]
             }
             if attempt and has_units and not eligible_ids:
                 break
@@ -815,7 +833,9 @@ class CleanChunks:
             unassigned = structural_failures.difference(unit_warnings, {"substantial-content-loss"})
             # Global failures can occur at a join even when isolated units passed.
             # Retrying must perform real work rather than reconstruct the same draft.
-            _route_document_failures(units, unit_failures, unassigned)
+            _route_document_failures(
+                [u for u in units if u.id not in frozen_ids], unit_failures, unassigned
+            )
             if (
                 has_units
                 and self.verify_semantics

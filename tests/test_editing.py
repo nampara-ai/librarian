@@ -501,3 +501,19 @@ def test_frozen_units_validate_the_exact_bytes_that_will_be_rendered() -> None:
     assert "a" in failures
     assert "missing-verbatim-number" in warnings
     assert "added-verbatim-number" in warnings
+
+
+def test_coalescing_cannot_merge_a_frozen_unit_even_if_a_failure_is_misrouted() -> None:
+    from librarian.pipeline.editing import coalesce_adjacent_repairs
+
+    units = [
+        EditUnit("a", "First source.", "prose", ""),
+        EditUnit("b", "Second source.", "prose", " "),
+    ]
+    edits = {"a": "First accepted.", "b": "Second candidate."}
+    failures = {"a": ["boundary warning"], "b": ["repair needed"]}
+    merged, retained, _ = coalesce_adjacent_repairs(
+        units, edits, failures, frozen_ids=frozenset({"a"})
+    )
+    assert merged == units
+    assert retained["a"] == "First accepted."

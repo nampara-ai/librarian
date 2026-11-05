@@ -214,3 +214,83 @@ async def test_review_can_approve_filler_reduction_without_reopening_it(
     assert editor.second_calls == 3
     assert result.text == body + "\n\nThe second result was 318 units."
     assert not result.fidelity_failed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stubborn", [False, True])
+async def test_merged_failures_preserve_but_cannot_inflate_unspent_unit_budgets(
+    stubborn: bool,
+) -> None:
+    from librarian.application.review_items import review_items
+
+    class Editor:
+        name = "editor"
+        calls = 0
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            self.calls += 1
+            payload = json.loads(user_prompt)
+            if "candidate_spans" not in payload:
+                return (
+                    payload["source"].replace("teh", "The").replace("result stood", "item stayed")
+                )
+            if stubborn:
+                span = payload["candidate_spans"][0]
+                old = "item stayed" if "item stayed" in span["text"] else "item remained"
+                new = "item remained" if old == "item stayed" else "item stayed"
+                return json.dumps({"patches": [{"id": span["id"], "find": old, "replace": new}]})
+            span = next(s for s in payload["candidate_spans"] if "item stayed" in s["text"])
+            return json.dumps(
+                {"patches": [{"id": span["id"], "find": "item stayed", "replace": "result stood"}]}
+            )
+
+    class Reviewer:
+        name = "reviewer"
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            payload = json.loads(user_prompt)
+            if "checks" in payload:
+                return json.dumps(
+                    {
+                        "checks": [
+                            {"id": c["id"], "confirmed": True, "reason": c["problem"]}
+                            for c in payload["checks"]
+                        ]
+                    }
+                )
+            pair = payload["pairs"][0]
+            return json.dumps(
+                {
+                    "issues": [
+                        {
+                            "id": pair["id"],
+                            "problem": "Restore result stood in the altered clauses.",
+                        }
+                    ]
+                    if "item stayed" in pair["edited"] or "item remained" in pair["edited"]
+                    else []
+                }
+            )
+
+    source = "teh first result stood.\n\nteh second result stood."
+    chunk = Chunk(ChunkId("c"), DocumentId("d"), 0, source, 0, len(source), "sha")
+    editor = Editor()
+    cleaner = CleanChunks(
+        editor,
+        PromptCatalog(),
+        "cmos_v8",
+        "test",
+        verification_provider=Reviewer(),
+        review_mode="strict",
+        unit_target_chars=30,
+        unit_max_retries=1,
+        publish_partial=True,
+    )
+    result = (await cleaner.execute([chunk]))[0]
+    # Two original units * (one generation + one retry) = four total calls.
+    assert editor.calls == 4
+    if stubborn:
+        assert review_items(result.text)[0]["source"] == source
+    else:
+        assert result.text == "The first result stood.\n\nThe second result stood."
+        assert not review_items(result.text)

@@ -32,6 +32,12 @@
   decade spelling uses the available source paragraph rather than an arbitrary character
   radius; quantities, versions, durations, quoted labels, and paragraph boundaries remain guarded.
 
+- Persist each review approval immediately with serialized checkpoint writes. Preserve
+  audited filler removal across retries, validate frozen bytes before rendering, exclude
+  accepted units from repair-window merges, and retain merged units’ unspent retry budgets.
+- Update output availability in the publication transaction, so late publication failures
+  cannot advertise an unavailable file.
+
 ## 1.9.0 - 2026-09-20
 
 PDF fidelity, reliable long-running processing, and an actionable final quality review.

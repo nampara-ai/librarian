@@ -263,5 +263,7 @@ quality guarantee for an arbitrary model. Unit edits use the existing worker
 queue; dependent strict semantic patches remain in source order. Accepted units
 are excluded from later editing and review, and their neighbors remain read-only
 context. `units-accepted` attempt records identify accepted IDs and content hashes.
+Merged failed windows share their original units’ unspent retries; merging cannot reset
+or enlarge that allocation, and the whole-chunk safety ceiling still applies.
 The unit budget falls back to `CLEANING_FIDELITY_MAX_RETRIES` when
 `CLEANING_UNIT_MAX_RETRIES` is unset; its effective default is three retries.

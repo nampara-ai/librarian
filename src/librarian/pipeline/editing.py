@@ -261,6 +261,7 @@ def coalesce_adjacent_repairs(
     failures: dict[str, list[str]],
     *,
     max_chars: int = 6000,
+    frozen_ids: frozenset[str] = frozenset(),
 ) -> tuple[list[EditUnit], dict[str, str], dict[str, list[str]]]:
     """Give adjacent rejected prose one bounded, atomic repair window.
 
@@ -278,6 +279,8 @@ def coalesce_adjacent_repairs(
                 left.kind == unit.kind == "prose"
                 and left.id in checks
                 and unit.id in checks
+                and left.id not in frozen_ids
+                and unit.id not in frozen_ids
                 and left.id in updated
                 and unit.id in updated
                 and len(left.text) + len(unit.separator) + len(unit.text) <= max_chars
