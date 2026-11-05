@@ -36,6 +36,22 @@ def test_second_prospective_corpus_is_frozen_and_disjoint_from_exposed_passages(
         assert hashlib.sha256(case["input_text"].encode()).hexdigest() == case["input_sha256"]
 
 
+def test_third_corpus_excludes_both_exposed_cohorts() -> None:
+    root = Path(__file__).resolve().parents[1] / "examples"
+    raw = (root / "editorial_holdout_v3.json").read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == (
+        "8d9d4f90df1008dc2e2a3169073f10ce739aba523a88bcf1958a03d037e95859"
+    )
+    cases = json.loads(raw)["cases"]
+    earlier = {
+        case["reference_sha256"]
+        for version in [1, 2]
+        for case in json.loads((root / f"editorial_holdout_v{version}.json").read_text())["cases"]
+    }
+    assert len(cases) == 10
+    assert not earlier.intersection(case["reference_sha256"] for case in cases)
+
+
 def test_editorial_assessment_accepts_faithful_prose() -> None:
     case = EditorialCase(id="faithful", source="The result remained uncertain.")
     result = validate_assessment(

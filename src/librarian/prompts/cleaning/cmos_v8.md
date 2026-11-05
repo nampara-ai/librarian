@@ -34,3 +34,8 @@ An optional source_reading inventory is advisory: check it against source. It do
 source or authorize omitting material. Preserve the actual qualifications and rhetorical direction.
 Only source is editable. Preserve genuine sentence continuations at its edges. Return complete
 edited prose without a JSON envelope, preface, or enclosing Markdown fence.
+
+Before finalizing, check speaker and narrator boundaries, identifying relative clauses, and
+paragraph joins. Do not move a narrator's connective into quoted speech. Prefer a comma before
+a coordinating conjunction joining two independent clauses; keep a shared-subject compound
+verb together. Do not insert parenthetical commas around a clause that identifies its referent.

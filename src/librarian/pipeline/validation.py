@@ -29,6 +29,7 @@ FIDELITY_WARNINGS = frozenset(
         "missing-verbatim-number",
         "repeated-tail",
         "new-adjacent-repetition",
+        "new-lowercase-paragraph",
         "substantial-content-loss",
         "suspiciously-short-output",
         "invalid-edit-structure",
@@ -82,7 +83,9 @@ LOCAL_IMAGE_REFERENCE_REGEX = re.compile(
 PAGE_BREAK_REGEX = re.compile(r"<!--\s*page-break\s*-->", re.IGNORECASE)
 ALL_IMAGE_REFERENCE_REGEX = re.compile(r"!\[[^\]]*\]\(([^)\n]+)\)")
 UNCLEAR_TRANSCRIPTION_REGEX = re.compile(r"\[transcription unclear:\s*([^\]]+)\]", re.IGNORECASE)
-VERBATIM_NUMBER_REGEX = re.compile(r"(?<![\w])\d+(?:[.,]\d+)*(?![\w])")
+VERBATIM_NUMBER_REGEX = re.compile(
+    r"(?<=\b[vV])\d+(?:[.,]\d+)+|(?<!\w)\d+(?:[.,]\d+)*|(?<!\d)\d+\b"
+)
 LITERAL_LINK_REGEX = re.compile(
     r"(?<![\w@.-])(?:https?://|www\.)[^\s<>()\[\]]+"
     r"|(?<![\w@.-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
@@ -179,6 +182,9 @@ def _markdown_quality_warnings(text: str, *, source_text: str | None) -> list[st
         warnings.append("changed-literal-link")
     if _new_adjacent_repetition(source_text, text):
         warnings.append("new-adjacent-repetition")
+    before = _lowercase_paragraphs(source_text)
+    if any(count > before[word] for word, count in _lowercase_paragraphs(text).items()):
+        warnings.append("new-lowercase-paragraph")
     if _paragraph_count(source_text) >= 3 and _paragraph_count(text) <= 1 and len(text) > 500:
         warnings.append("collapsed-paragraphs")
     if MARKDOWN_HEADING_REGEX.search(source_text) and MARKDOWN_HEADING_REGEX.search(text) is None:
@@ -227,6 +233,27 @@ def _markdown_quality_warnings(text: str, *, source_text: str | None) -> list[st
     if len(source_words) >= 200 and len(output_words) < len(source_words) * 0.8:
         warnings.append("substantial-content-loss")
     return warnings
+
+
+def _lowercase_paragraphs(text: str) -> Counter[str]:
+    found: Counter[str] = Counter()
+
+    def inspect(prose: str) -> str:
+        paragraphs = re.split(r"\n[ \t]*\n", prose)
+        for previous, current in zip(paragraphs, paragraphs[1:], strict=False):
+            if not re.search(r"[.!?][\"'”’)]?$", previous.rstrip()):
+                continue
+            opening = re.match(
+                r"(?:and|but|or|so|now|then|we|the|you|he|she|they|it|this|that|"
+                r"these|those|for|however|there|what|when|where|why|how|as|i)\b",
+                current.lstrip(),
+            )
+            if opening:
+                found[opening.group()] += 1
+        return prose
+
+    transform_prose(text, inspect)
+    return found
 
 
 def _new_adjacent_repetition(source: str, candidate: str) -> bool:

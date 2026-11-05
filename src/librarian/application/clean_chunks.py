@@ -233,7 +233,7 @@ class CleanChunks:
         if self.plain_edits:
             prompts["prose_fidelity_v1"] = self.prompt_catalog.get("repair", "prose_fidelity_v1")
             prompts["prose_patch_v1"] = self.prompt_catalog.get("repair", "prose_patch_v1")
-            for name in ("prose_review_v1", "confirm_prose_v1"):
+            for name in ("prose_review_v2", "confirm_prose_v2"):
                 prompts[name] = self.prompt_catalog.get("repair", name)
             if self.source_reading:
                 prompts["source_reading_v1"] = self.prompt_catalog.get(
@@ -241,7 +241,7 @@ class CleanChunks:
                 )
         policy = json.dumps(
             {
-                "policy": 3,
+                "policy": 4,
                 "source_reading": self.source_reading,
                 "source": hashlib.sha256(source.encode()).hexdigest(),
                 "prompts": prompts,
@@ -366,11 +366,17 @@ class CleanChunks:
         reused = reused or {}
         results: list[CleanedChunk] = []
         previous_context = ""
+        previous_source_context = ""
         for chunk in chunks:
             cached = reused.get(chunk.id)
-            result = cached or await self._clean_one(chunk, previous_context=previous_context)
+            result = cached or await self._clean_one(
+                chunk,
+                previous_context=previous_context,
+                previous_source_context=previous_source_context,
+            )
             results.append(result)
             previous_context = result.text[-self.context_chars :]
+            previous_source_context = chunk.text[-self.context_chars :]
             if cached is None and on_chunk_cleaned is not None:
                 await on_chunk_cleaned(result)
         return results
@@ -420,7 +426,9 @@ class CleanChunks:
                 CleaningAttempt(chunk, number, budget, "waiting", elapsed_seconds=elapsed)
             )
 
-    async def _clean_one(self, chunk: Chunk, *, previous_context: str) -> CleanedChunk:
+    async def _clean_one(
+        self, chunk: Chunk, *, previous_context: str, previous_source_context: str | None = None
+    ) -> CleanedChunk:
         system_prompt = self.prompt_catalog.get("cleaning", self.prompt_version)
         if self.editorial_context:
             system_prompt += (
@@ -466,9 +474,11 @@ class CleanChunks:
                         repair_unit_chars=max(800, 4000 // (2**attempt)) if attempt else None,
                         patch_semantics=self.plain_edits
                         and bool(
-                            {"semantic-fidelity-failed", "editorial-quality-failed"}.intersection(
-                                warnings
-                            )
+                            {
+                                "semantic-fidelity-failed",
+                                "editorial-quality-failed",
+                                "new-lowercase-paragraph",
+                            }.intersection(warnings)
                         ),
                     )
                 else:
@@ -549,7 +559,12 @@ class CleanChunks:
                 if self.plain_edits:
                     for pair in pairs:
                         if pair["id"] == units[0].id:
-                            pair["context_before"] = previous_context[-1200:]
+                            pair["context_before"] = (
+                                previous_source_context
+                                if previous_source_context is not None
+                                else previous_context
+                            )[-1200:]
+                            pair["edited_context_before"] = previous_context[-1200:]
                 if self.on_attempt is not None:
                     await self.on_attempt(
                         CleaningAttempt(
@@ -852,7 +867,8 @@ class CleanChunks:
     ) -> tuple[str | None, dict[str, list[str]], str]:
         queue: asyncio.Queue[dict[str, str]] = asyncio.Queue()
         for pair in pairs:
-            if verified.get(pair["id"]) != pair["edited"]:
+            signature = hashlib.sha256(json.dumps(pair, sort_keys=True).encode()).hexdigest()
+            if verified.get(pair["id"]) != signature:
                 queue.put_nowait(pair)
         count = queue.qsize()
         failures: dict[str, list[str]] = {}
@@ -866,7 +882,7 @@ class CleanChunks:
                 warning, issues, response = await self._request_review(
                     system_prompt=(
                         self.prompt_catalog.get(
-                            "repair", "prose_review_v1" if self.plain_edits else "meaning_v1"
+                            "repair", "prose_review_v2" if self.plain_edits else "meaning_v1"
                         )
                         + (
                             ""
@@ -886,7 +902,7 @@ class CleanChunks:
                         system_prompt=(
                             self.prompt_catalog.get(
                                 "repair",
-                                "confirm_prose_v1" if self.plain_edits else "confirm_meaning_v1",
+                                "confirm_prose_v2" if self.plain_edits else "confirm_meaning_v1",
                             )
                             + (
                                 ""
@@ -912,7 +928,9 @@ class CleanChunks:
                 elif issues:
                     failures.update(issues)
                 else:
-                    verified[pair["id"]] = pair["edited"]
+                    verified[pair["id"]] = hashlib.sha256(
+                        json.dumps(pair, sort_keys=True).encode()
+                    ).hexdigest()
                 queue.task_done()
 
         if count:

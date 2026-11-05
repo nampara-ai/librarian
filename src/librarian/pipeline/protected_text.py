@@ -75,10 +75,13 @@ def _protect(source: str, *, include_links: bool) -> ProtectedText:
         if include_links
         else []
     )
+    existing_markers = [
+        match.span() for match in re.finditer(r"\[\[LBR_[A-Za-z0-9]+_[A-Z]+\]\]", source)
+    ]
     numbers = [
         (m.start(), m.end())
         for m in VERBATIM_NUMBER_REGEX.finditer(source)
-        if not any(left <= m.start() < right for left, right in links)
+        if not any(left <= m.start() < right for left, right in [*links, *existing_markers])
     ]
     pieces: list[str] = []
     cursor = 0

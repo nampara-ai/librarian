@@ -1,0 +1,40 @@
+{
+  "cases": [
+    {
+      "id": "narrative-coordinator-faithful",
+      "source": "Nora put down her glass and said we should wait",
+      "candidate": "Nora put down her glass and said, “We should wait.”",
+      "expected_pass": true
+    },
+    {
+      "id": "narrative-coordinator-damaged",
+      "source": "Nora put down her glass and said we should wait",
+      "candidate": "Nora put down her glass. “And,” she said, “we should wait.”",
+      "expected_pass": false
+    },
+    {
+      "id": "restrictive-clause-faithful",
+      "source": "Return only the boxes that are damaged",
+      "candidate": "Return only the boxes that are damaged.",
+      "expected_pass": true
+    },
+    {
+      "id": "restrictive-clause-damaged",
+      "source": "Return only the boxes that are damaged",
+      "candidate": "Return only the boxes, which are damaged.",
+      "expected_pass": false
+    },
+    {
+      "id": "quoted-qualification-faithful",
+      "source": "Lena said I can stay but I cannot promise to help",
+      "candidate": "Lena said, “I can stay, but I cannot promise to help.”",
+      "expected_pass": true
+    },
+    {
+      "id": "quoted-qualification-damaged",
+      "source": "Lena said I can stay but I cannot promise to help",
+      "candidate": "Lena said, “I can stay, and I promise to help.”",
+      "expected_pass": false
+    }
+  ]
+}

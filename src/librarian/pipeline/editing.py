@@ -184,6 +184,10 @@ def verification_pairs(
             "edited": edit["text"],
             "context_before": units[index - 1].text[-1200:] if index else "",
             "context_after": units[index + 1].text[:1200] if index + 1 < len(units) else "",
+            "edited_context_before": payload["edits"][index - 1]["text"][-1200:] if index else "",
+            "edited_context_after": (
+                payload["edits"][index + 1]["text"][:1200] if index + 1 < len(units) else ""
+            ),
         }
         for index, (unit, edit) in enumerate(zip(units, payload["edits"], strict=True))
         if unit.text != edit["text"] or (include_unchanged_prose and unit.kind == "prose")

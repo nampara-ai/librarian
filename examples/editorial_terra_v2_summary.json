@@ -1,0 +1,607 @@
+{
+  "evidence_tier": "real-provider",
+  "suite_sha256": "a1420b1d0d7fd49266d4e934b12070cf4e076353bc79484f467c5980f9921ad9",
+  "provenance": {
+    "git_revision": "355aa6ac16fbc5ea4ceee1943ae7ecf6f3a6d337",
+    "suite_file_sha256": "b38d05b6dc5b6aa2dfd46b601f3809245f3ccff2d26494d2d418c3748d6a20c5",
+    "judge_reasoning": "medium",
+    "assessor_control_repeat": "20/20 meaning controls and 12/12 style controls; not a claim of infallibility",
+    "purpose": "fixed-cohort continuation after credit interruption; original partial results retained; editor and assessor prompts unchanged"
+  },
+  "judge_model": "gpt-6-luna",
+  "repeats": 3,
+  "planned_trials": 30,
+  "stopped_reason": null,
+  "passed": false,
+  "complete": true,
+  "summary": [
+    {
+      "trial": 1,
+      "passed_cases": 10,
+      "total_cases": 10,
+      "planned_cases": 10,
+      "unattempted_cases": 0,
+      "processing_failures": 0
+    },
+    {
+      "trial": 2,
+      "passed_cases": 8,
+      "total_cases": 10,
+      "planned_cases": 10,
+      "unattempted_cases": 0,
+      "processing_failures": 0
+    },
+    {
+      "trial": 3,
+      "passed_cases": 9,
+      "total_cases": 10,
+      "planned_cases": 10,
+      "unattempted_cases": 0,
+      "processing_failures": 0
+    }
+  ],
+  "purpose": "Fixed-profile editorial evidence; all verdicts retained; not a universal 10/10 claim.",
+  "cases": [
+    {
+      "case_id": "fiction-v2-1",
+      "trial": 1,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "fiction-v2-2",
+      "trial": 1,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "science-v2-1",
+      "trial": 1,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "science-v2-2",
+      "trial": 1,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "political-argument-v2-1",
+      "trial": 1,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "political-argument-v2-2",
+      "trial": 1,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "philosophy-v2-1",
+      "trial": 1,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "philosophy-v2-2",
+      "trial": 1,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "autobiography-v2-1",
+      "trial": 1,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "autobiography-v2-2",
+      "trial": 1,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "fiction-v2-1",
+      "trial": 2,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "fiction-v2-2",
+      "trial": 2,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "science-v2-1",
+      "trial": 2,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "science-v2-2",
+      "trial": 2,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "political-argument-v2-1",
+      "trial": 2,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "political-argument-v2-2",
+      "trial": 2,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "philosophy-v2-1",
+      "trial": 2,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "philosophy-v2-2",
+      "trial": 2,
+      "passed": false,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "fail",
+        "structure": "pass"
+      },
+      "issues": [
+        {
+          "criterion": "style",
+          "source_quote": "the wild and intemperate whom they are accustomed to look down upon",
+          "candidate_quote": "the wild and intemperate, whom they are accustomed to look down upon",
+          "explanation": "The added comma makes the relative clause nonrestrictive, though it identifies which people are meant. Remove the comma to preserve the source’s restrictive construction."
+        }
+      ],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "autobiography-v2-1",
+      "trial": 2,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "autobiography-v2-2",
+      "trial": 2,
+      "passed": false,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "fail",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [
+        {
+          "criterion": "fidelity",
+          "source_quote": "and says he, \"I foresee that you will soon work this man out of his business, and make a fortune in it at Philadelphia.\"",
+          "candidate_quote": "“And,” says he, “I foresee that you will soon work this man out of his business and make a fortune in it at Philadelphia.”",
+          "explanation": "The source’s “and” links the narration to “says he”; it is not part of the man’s quoted speech. The candidate moves it inside the quotation, adding a spoken word that the source does not support."
+        }
+      ],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "fiction-v2-1",
+      "trial": 3,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "fiction-v2-2",
+      "trial": 3,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "science-v2-1",
+      "trial": 3,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "science-v2-2",
+      "trial": 3,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "political-argument-v2-1",
+      "trial": 3,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "political-argument-v2-2",
+      "trial": 3,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "philosophy-v2-1",
+      "trial": 3,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "philosophy-v2-2",
+      "trial": 3,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "autobiography-v2-1",
+      "trial": 3,
+      "passed": true,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "autobiography-v2-2",
+      "trial": 3,
+      "passed": false,
+      "processing_succeeded": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "fail",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [
+        {
+          "criterion": "fidelity",
+          "source_quote": "and says he, \"I foresee that you will soon work this man out of his business, and make a fortune in it at Philadelphia.\"",
+          "candidate_quote": "“And,” says he, “I foresee that you will soon work this man out of his business and make a fortune in it at Philadelphia.”",
+          "explanation": "The source’s “and” connects the narration to the attribution “says he”; it is not part of Decow’s spoken words. The candidate turns it into a quoted word, changing the attribution and the start of the reported speech."
+        }
+      ],
+      "assessment_errors": [],
+      "protected_failures": []
+    }
+  ]
+}

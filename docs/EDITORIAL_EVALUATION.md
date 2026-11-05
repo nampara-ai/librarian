@@ -138,3 +138,23 @@ neither 3/3 nor the later billing errors establish full editing reliability.
 Terminal credit and credential failures now stop a benchmark rather than issuing the remaining
 requests. Completed trials remain recorded, while planned and unattempted trials stay explicit.
 An interrupted or blocked batch cannot pass. Ordinary transient rate limits remain retryable.
+
+The funded continuation at `355aa6ac16fbc5ea4ceee1943ae7ecf6f3a6d337` completed all thirty
+V2 attempts: 10/10, 8/10, and 9/10, with no processing failures. The original verdicts are
+in `examples/editorial_terra_v2_summary.json`. Two failures moved a narrator's connective
+inside quoted speech; one changed an identifying relative clause to a parenthetical clause.
+The grader remains unchanged. The private full transcript completed with five source queries;
+independent review still identified a broken join and a lowercase paragraph opening. That
+output is a review draft, not evidence of fully completed prose.
+
+The next revision reviews actual edited neighbours separately from source context. Review
+approval depends on that context as well as the active text, so a changed neighbour invalidates
+an earlier approval. It also flags newly introduced lowercase paragraph openings and expands
+numeric validation to unit-attached values and versions, while allowing OCR letter/digit repairs
+inside words. All changes stay opt-in under the experimental profile until qualified.
+
+V3 is frozen before evaluation in `examples/editorial_holdout_v3.json`, SHA-256
+`8d9d4f90df1008dc2e2a3169073f10ce739aba523a88bcf1958a03d037e95859`.
+Seed `2026110503` excludes V1 and V2 references; its scope remains new passages from the same
+five books. `examples/editorial_discourse_calibration.json` contains separate, authored
+source-role controls, not phrases from the evaluated corpus.
