@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from functools import partial
 
 from librarian.application.clean_chunks import CleanedChunk
+from librarian.application.review_items import review_items
 from librarian.pipeline.chunking import chunk_separator_before
 from librarian.pipeline.markdown import (
     normalize_markdown_whitespace,
@@ -50,7 +51,11 @@ def assemble_cleaned_document(
             separator = chunk_separator_before(chunk.chunk, source_text) if parts else ""
             parts.append(separator + text.strip())
             previous_sentence = _last_sentence(text)
-    text = normalize_assembled_whitespace("".join(parts))
+    joined = "".join(parts)
+    if review_items(joined):
+        # Length-delimited source must remain byte-identical to its checkpoint.
+        return joined.strip()
+    text = normalize_assembled_whitespace(joined)
     return text.strip()
 
 

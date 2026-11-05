@@ -500,6 +500,21 @@ struct QualityDetailsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            if let items = processing.needsReview, !items.isEmpty {
+                Divider()
+                Text("\(items.count) passage(s) preserved as source for review")
+                    .font(.subheadline.weight(.semibold))
+                ForEach(items.indices, id: \.self) { index in
+                    let item = items[index]
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Chunk \(item.chunk + 1), \(item.unitId)")
+                            .font(.caption.weight(.semibold))
+                        Text(item.reasons.joined(separator: "; "))
+                            .foregroundStyle(.secondary)
+                        Text(item.source).textSelection(.enabled)
+                    }
+                }
+            }
             ForEach(processing.warnings.filter { $0 != "toc-entries-unmatched" }, id: \.self) { warning in
                 Label(warning.replacingOccurrences(of: "-", with: " "), systemImage: "exclamationmark.triangle")
             }

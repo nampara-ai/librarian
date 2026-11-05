@@ -3,12 +3,15 @@
 ## Unreleased
 
 - Retry failed chunk fidelity checks with source-grounded repair instructions and a bounded
-  budget. Fail unresolved cleaning instead of publishing raw source as a successful clean;
-  reprocess legacy raw-fallback cache entries.
+  budget. Publish exhausted content as explicitly marked source passages requiring review,
+  with a strict failure option. Resume accepted units from separate partial checkpoints;
+  never store partial passages as clean cache entries. Reprocess legacy raw-fallback caches.
 - Keep words, fenced code, and Markdown tables intact at chunk boundaries. Preserve source
   quotations, code indentation, hard line breaks, and intentional repetition during cleanup.
 - Report individual cleaning attempts and fidelity failures in live progress. Persist rejected
   candidates and failure diagnostics for review without logging document text.
+
+- Show unresolved source passages, repair reasons, and locations in the Mac quality report.
 
 ## 1.9.0 - 2026-09-20
 

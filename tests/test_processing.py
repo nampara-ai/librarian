@@ -203,7 +203,7 @@ async def test_failed_fidelity_repair_preserves_previous_published_output(tmp_pa
             return "The timeout must remain unchanged."
 
     provider = LosingProvider()
-    cleaner = replace(container.process_document.cleaner, provider=provider)  # type: ignore[arg-type]
+    cleaner = replace(container.process_document.cleaner, provider=provider, publish_partial=False)  # type: ignore[arg-type]
     process = replace(container.process_document, cleaner=cleaner)
     queued = await process.start(ingested.document.id)
 

@@ -87,7 +87,9 @@ async def test_eval_suite_fails_on_unexpected_quality_warnings(tmp_path: Path) -
             del system_prompt, user_prompt, model, max_tokens, temperature
             return "Horse Notes Saddle fit Groundwork"
 
-    cleaner = replace(container.process_document.cleaner, provider=CollapsingProvider())
+    cleaner = replace(
+        container.process_document.cleaner, provider=CollapsingProvider(), publish_partial=False
+    )
     process_document = replace(container.process_document, cleaner=cleaner)
     container = replace(container, process_document=process_document)
     suite = EvalSuite(
@@ -134,8 +136,7 @@ async def test_eval_suite_fails_on_forbidden_text(tmp_path: Path) -> None:
 
     assert not result.passed
     assert any(
-        "found forbidden text: assistant artifact" in item
-        for item in result.cases[0].failures
+        "found forbidden text: assistant artifact" in item for item in result.cases[0].failures
     )
 
 

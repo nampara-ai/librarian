@@ -21,6 +21,7 @@ from librarian.application.errors import (
 )
 from librarian.application.model_output import complete_json
 from librarian.application.ports import LLMProvider
+from librarian.application.review_items import UnitCheckpoint, mark_source
 from librarian.application.source_reading import read_source
 from librarian.domain.ids import ChunkId
 from librarian.domain.models import Chunk
@@ -104,6 +105,7 @@ class CleanedChunk:
     chunk: Chunk
     text: str
     warnings: tuple[str, ...]
+    checkpoint: tuple[UnitCheckpoint, ...] = ()
 
     @property
     def fidelity_failed(self) -> bool:
@@ -194,6 +196,10 @@ class CleanChunks:
     max_response_chars: int = 2 * 1024 * 1024
     max_fidelity_retries: int = 3
     on_attempt: AttemptCallback | None = None
+    resume_units: dict[ChunkId, tuple[UnitCheckpoint, ...]] = field(
+        default_factory=lambda: dict[ChunkId, tuple[UnitCheckpoint, ...]](), repr=False
+    )
+    publish_partial: bool = False
     verify_semantics: bool = True
     editorial_context: str = ""
     provider_endpoint: str = ""
@@ -252,7 +258,8 @@ class CleanChunks:
                 )
         policy = json.dumps(
             {
-                "policy": 11,
+                "policy": 12,
+                "publish_partial": self.publish_partial,
                 "source_reading": self.source_reading,
                 "unit_target_chars": self.unit_target_chars,
                 "source": hashlib.sha256(source.encode()).hexdigest(),
@@ -497,6 +504,15 @@ class CleanChunks:
                 else "\n\nSource-grounded document spelling sheet:\n"
             ) + self.editorial_context
         units = list(self._source_units(chunk.text))
+        saved_units = self.resume_units.get(chunk.id, ())
+        # Only source-identical checkpoints can be reused, including the original
+        # separators and any failed windows coalesced during the earlier run.
+        original = "".join((u.separator if i else "") + u.text for i, u in enumerate(units))
+        restored = "".join((u.separator if i else "") + u.source for i, u in enumerate(saved_units))
+        if saved_units and original == restored:
+            units = [EditUnit(u.unit_id, u.source, u.kind, u.separator) for u in saved_units]
+        else:
+            saved_units = ()
         preceding_separator = chunk_separator_before(chunk, self.document_source)
         has_units = bool(units)
         user_prompt = chunk.text
@@ -510,7 +526,10 @@ class CleanChunks:
 
         warnings: tuple[str, ...] = ()
         unit_failures: dict[str, list[str]] = {}
-        unit_edits: dict[str, str] = {}
+        unit_edits: dict[str, str] = {
+            u.unit_id: u.accepted_text for u in saved_units if u.accepted_text is not None
+        }
+        frozen_ids = set(unit_edits)
         generation_failures: dict[str, list[str]] = {}
         verified_units: dict[str, str] = {}
         attempts_used = 0
@@ -533,13 +552,22 @@ class CleanChunks:
                     unit_edits.update(updated_edits)
                     unit_failures.clear()
                     unit_failures.update(updated_failures)
-                    verified_units.clear()
+                    # Preserve approvals for untouched units. Content signatures still
+                    # invalidate a review when its actual context has changed.
+                    for key in list(verified_units):
+                        if key not in {u.id for u in units}:
+                            verified_units.pop(key)
                     retained = {unit.id for unit in units}
                     for key in list(generation_failures):
                         if key not in retained:
                             generation_failures.pop(key)
             prompt = self._attempt_prompt(
-                system_prompt, chunk, attempt, warnings, unit_failures, structured=has_units
+                system_prompt,
+                chunk,
+                attempt,
+                cast("tuple[str, ...]", warnings),
+                unit_failures,
+                structured=has_units,
             )
             repair_review_traces: list[str] = []
             try:
@@ -681,6 +709,7 @@ class CleanChunks:
                                 if previous_context
                                 else ""
                             )
+                pairs = [pair for pair in pairs if pair["id"] not in frozen_ids]
                 for pair in pairs:
                     if pair["id"] == units[-1].id:
                         pair["context_after"] = following_source_context[:1200]
@@ -695,6 +724,9 @@ class CleanChunks:
                             elapsed_seconds=time.monotonic() - started,
                         )
                     )
+                semantic_warning: str | None
+                issues: dict[str, list[str]]
+                verification: str
                 semantic_warning, issues, verification = await await_with_progress(
                     self._verify_units(
                         pairs,
@@ -746,6 +778,42 @@ class CleanChunks:
                 # The reviewer has exhausted its own format budget. A new draft
                 # cannot repair the reviewer's transport or response schema.
                 break
+        if self.publish_partial:
+            # Invalid candidates never become fallback prose. Preserve the exact
+            # source of unresolved units, while retaining independently passed edits.
+            failures = unit_failures or {unit.id: list(warnings) for unit in units}
+            if not units:
+                return CleanedChunk(
+                    chunk,
+                    mark_source(
+                        chunk.text,
+                        unit_id="chunk",
+                        chunk=chunk.ordinal,
+                        reasons=warnings,
+                        attempts=attempts_used,
+                    ),
+                    ("unit-needs-review",),
+                )
+            parts: list[str] = []
+            checkpoint: list[UnitCheckpoint] = []
+            for unit in units:
+                reasons = failures.get(unit.id)
+                if reasons or unit.id not in unit_edits:
+                    text = mark_source(
+                        unit.text,
+                        unit_id=unit.id,
+                        chunk=chunk.ordinal,
+                        reasons=reasons or warnings,
+                        attempts=attempts_used,
+                    )
+                else:
+                    text = unit_edits[unit.id]
+                accepted_text = unit_edits.get(unit.id) if not reasons else None
+                checkpoint.append(
+                    UnitCheckpoint(unit.id, unit.text, unit.kind, unit.separator, accepted_text)
+                )
+                parts.append((unit.separator if parts else "") + text)
+            return CleanedChunk(chunk, "".join(parts), ("unit-needs-review",), tuple(checkpoint))
         raise FidelityValidationError(chunk, attempts_used, warnings)
 
     async def _edit_units(

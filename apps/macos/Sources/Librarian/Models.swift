@@ -94,6 +94,7 @@ struct ProcessingQuality: Codable {
     let imageReferences: Int
     let tocEntriesWithoutMatchingHeadingOrBody: Int?
     let tocUnmatchedEntries: [String]?
+    let needsReview: [UnitReviewItem]?
     let chunks: Int
     let cachedCleanedChunks: Int
     let verifiedSourceChunks: Int?
@@ -277,4 +278,12 @@ struct QueueItem: Identifiable {
     func exceededPreRunTimeout(at now: Date, timeout: TimeInterval) -> Bool {
         runID == nil && now.timeIntervalSince(startedAt) > timeout
     }
+}
+
+struct UnitReviewItem: Codable {
+    let unitId: String
+    let chunk: Int
+    let reasons: [String]
+    let attempts: Int
+    let source: String
 }

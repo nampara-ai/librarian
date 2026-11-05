@@ -40,6 +40,7 @@ from librarian.application.quality_report import (
     extraction_report_key,
     run_quality_key,
 )
+from librarian.application.review_items import load_checkpoint, partial_key, review_items
 from librarian.domain.ids import DocumentId, RunId
 from librarian.domain.models import (
     Chunk,
@@ -301,17 +302,43 @@ class ProcessDocument:
                     await self.events.emit(run_id, RunStage.CLEAN, "document spelling sheet ready")
                 await self._raise_if_canceled(run_id)
 
+                resume_units = {}
+                for pending_chunk in model_chunks:
+                    checkpoint_key = partial_key(
+                        cache_version,
+                        pending_chunk.sha256,
+                        provider=self.cleaner.provider.name,
+                        model=self.cleaner.model,
+                    )
+                    try:
+                        checkpoint_raw = await self.content.get_text(checkpoint_key)
+                    except KeyError:
+                        checkpoint_raw = "[]"
+                    checkpoint = load_checkpoint(checkpoint_raw)
+                    if checkpoint:
+                        resume_units[pending_chunk.id] = checkpoint
+
                 async def _note_chunk_cleaned(cleaned_chunk: CleanedChunk) -> None:
                     # A later chunk may fail or the app may stop. Persist each
                     # successful result before reporting progress so a retry
                     # can reuse the work already paid for.
                     await self.outputs.save_cleaned_chunks(run_id, [cleaned_chunk])
-                    if cleaned_chunk.text.strip():
+                    if cleaned_chunk.text.strip() and not review_items(cleaned_chunk.text):
                         await self.outputs.save_cleaned_chunk_cache(
                             [cleaned_chunk],
                             prompt_version=cache_version,
                             model_provider=self.cleaner.provider.name,
                             model_name=self.cleaner.model,
+                        )
+                    if cleaned_chunk.checkpoint:
+                        await self.content.put_text(
+                            partial_key(
+                                cache_version,
+                                cleaned_chunk.chunk.sha256,
+                                provider=self.cleaner.provider.name,
+                                model=self.cleaner.model,
+                            ),
+                            json.dumps([u.as_dict() for u in cleaned_chunk.checkpoint]),
                         )
                     progress["completed"] += 1
                     await self.runs.update_run_progress(
@@ -355,6 +382,7 @@ class ProcessDocument:
                     contextual_cleaner,
                     on_attempt=_note_attempt,
                     editorial_context=spelling_sheet,
+                    resume_units=resume_units,
                 )
                 cleaned_missing = await cleaner.execute(
                     chunked,
@@ -397,7 +425,8 @@ class ProcessDocument:
                 RunStage.CLEAN,
                 f"cleaned {completed_chunks}/{len(chunked)} chunk(s) "
                 f"({len(cached_chunks)} cache hit(s), "
-                f"{len(verified_chunks)} verified source chunk(s))",
+                f"{len(verified_chunks)} verified source chunk(s)); "
+                f"{sum(len(review_items(c.text)) for c in cleaned_chunks)} unit(s) need review",
             )
             if fidelity_fallbacks:
                 await self.events.emit(
@@ -431,7 +460,7 @@ class ProcessDocument:
                 "deferred": 0,
                 "actions": [],
             }
-            if self.refiner is not None:
+            if self.refiner is not None and not review_items(assembled):
                 async with self._timed_stage(RunStage.REFINE, run_id, document_id):
                     await self.runs.update_status(
                         run_id,
@@ -479,6 +508,9 @@ class ProcessDocument:
                 )
                 if any("repaired-decade-shorthand" in item.warnings for item in cleaned_chunks):
                     cast("list[str]", final_quality["warnings"]).append("repaired-decade-shorthand")
+                pending_review = review_items(assembled)
+                if pending_review:
+                    cast("list[str]", final_quality["warnings"]).append("unit-needs-review")
                 queries = UNCLEAR_TRANSCRIPTION_REGEX.findall(assembled)
                 if queries:
                     cast("list[str]", final_quality["warnings"]).append("uncertain-transcription")
@@ -487,14 +519,22 @@ class ProcessDocument:
                     json.dumps(
                         {
                             **final_quality,
+                            "output_available": True,
                             "chunks": len(chunked),
                             "cleaned_chunks": completed_chunks,
                             "cached_cleaned_chunks": len(cached_chunks),
                             "verified_source_chunks": len(verified_chunks),
-                            "source_preserved_chunks": fidelity_fallbacks,
+                            "source_preserved_chunks": sum(
+                                bool(review_items(c.text)) for c in cleaned_chunks
+                            )
+                            + fidelity_fallbacks,
                             "refinement": refinement_report,
                             "cleaning_attempts": cleaning_attempts,
-                            "cleaning_status": "needs-review" if queries else "cleaned",
+                            "cleaning_status": "needs-review"
+                            if queries or pending_review
+                            else "cleaned",
+                            "needs_review": pending_review,
+                            "review_units": len(pending_review),
                             "editorial_queries": queries,
                         },
                         ensure_ascii=False,
