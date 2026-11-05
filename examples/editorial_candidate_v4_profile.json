@@ -1,0 +1,32 @@
+{
+  "purpose": "Prospectively fixed V4 candidate after exposed development screening and dependency-aware repair; references withheld from generation.",
+  "settings": {
+    "llm_provider": "openai-compatible",
+    "llm_model": "gpt-6.1-terra",
+    "llm_reasoning_effort": "medium",
+    "llm_max_concurrency": 2,
+    "llm_max_output_tokens": 16384,
+    "cleaning_prompt_version": "cmos_v8",
+    "cleaning_reasoning_effort": "medium",
+    "cleaning_source_reading": true,
+    "cleaning_verification_model": "gpt-6.1-terra",
+    "cleaning_verification_reasoning_effort": "medium",
+    "coherence_mode": "max-coherence",
+    "cleaning_max_fidelity_retries": 3
+  },
+  "assessment": {
+    "model": "gpt-6-luna",
+    "reasoning_effort": "medium",
+    "prompt_version": "editorial_v3",
+    "repeats": 3,
+    "require_all_criteria": true,
+    "allow_unresolved_readings": false,
+    "stop_after_failed_trial": true,
+    "planned_cases": 30
+  },
+  "limitations": [
+    "Independent assessment uses a separate prompt and withheld reference, but shares a model with the production reviewer. Model agreement is not proof of correctness.",
+    "The frozen corpus covers new passages from five known public-domain books; it does not cover all genres, languages, or corruption types.",
+    "One development screen is weak model-selection evidence; this prospective cohort must retain every failure and cannot prove universal reconstruction."
+  ]
+}
