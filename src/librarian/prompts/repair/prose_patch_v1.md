@@ -23,3 +23,13 @@ speech debris there; do not insert an implied actor or rewrite an author's sente
 The edited_context fields show the current neighboring draft, distinct from the source.
 Only candidate_spans belong to this repair. Do not duplicate a neighbor's quotation mark
 or words. Repairs commit in source order; the preceding edited context includes prior repairs.
+
+Recover typographic roles from context when casing or delimiters were lost. Distinguish the
+proper name of an identified institution, organization, or document from a generic category;
+restore appropriate capitalization without capitalizing ordinary generic nouns indiscriminately.
+Numeric protection preserves values, not damaged formatting. Distinguish quantities, versions,
+and identifier components from reference-note markers. Restore recognizable note typography
+when context establishes a run-in number as a reference. Brackets or superscript markup may
+surround an unchanged protected token; never change its value or turn a genuine identifier into
+a note. A linguistic example being discussed, including intentionally faulty grammar, retains
+its wording even without quotation marks. Repair the surrounding explanation instead.

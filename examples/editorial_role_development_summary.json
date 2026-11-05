@@ -1,0 +1,97 @@
+{
+  "purpose": "Authored development checks only, using real provider generation and unchanged independent editorial_v3 assessment. References are withheld from the editor.",
+  "full_passes": 6,
+  "total": 6,
+  "cases": [
+    {
+      "case_id": "institution-versus-generic",
+      "passed": true,
+      "processing_succeeded": true,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": []
+    },
+    {
+      "case_id": "organization-versus-category",
+      "passed": true,
+      "processing_succeeded": true,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": []
+    },
+    {
+      "case_id": "reference-role-from-context",
+      "passed": true,
+      "processing_succeeded": true,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": []
+    },
+    {
+      "case_id": "identifier-role-kept",
+      "passed": true,
+      "processing_succeeded": true,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": []
+    },
+    {
+      "case_id": "versions-and-dose-kept",
+      "passed": true,
+      "processing_succeeded": true,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": []
+    },
+    {
+      "case_id": "linguistic-example-kept",
+      "passed": true,
+      "processing_succeeded": true,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": []
+    }
+  ]
+}

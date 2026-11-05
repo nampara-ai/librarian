@@ -44,3 +44,13 @@ Before finalizing, check speaker and narrator boundaries, identifying relative c
 paragraph joins. Do not move a narrator's connective into quoted speech. Prefer a comma before
 a coordinating conjunction joining two independent clauses; keep a shared-subject compound
 verb together. Do not insert parenthetical commas around a clause that identifies its referent.
+
+Recover typographic roles from context when casing or delimiters were lost. Distinguish the
+proper name of an identified institution, organization, or document from a generic category;
+restore appropriate capitalization without capitalizing ordinary generic nouns indiscriminately.
+Numeric protection preserves values, not damaged formatting. Distinguish quantities, versions,
+and identifier components from reference-note markers. Restore recognizable note typography
+when context establishes a run-in number as a reference. Brackets or superscript markup may
+surround an unchanged protected token; never change its value or turn a genuine identifier into
+a note. A linguistic example being discussed, including intentionally faulty grammar, retains
+its wording even without quotation marks. Repair the surrounding explanation instead.
