@@ -10,6 +10,7 @@ import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Literal, cast
 
 from librarian.application.async_progress import await_with_progress
@@ -409,6 +410,12 @@ class CleanChunks:
                 )
         return prompt
 
+    async def _report_wait(self, chunk: Chunk, number: int, budget: int, elapsed: float) -> None:
+        if self.on_attempt is not None:
+            await self.on_attempt(
+                CleaningAttempt(chunk, number, budget, "waiting", elapsed_seconds=elapsed)
+            )
+
     async def _clean_one(self, chunk: Chunk, *, previous_context: str) -> CleanedChunk:
         system_prompt = self.prompt_catalog.get("cleaning", self.prompt_version)
         if self.editorial_context:
@@ -418,8 +425,9 @@ class CleanChunks:
                 else "\n\nSource-grounded document spelling sheet:\n"
             ) + self.editorial_context
         units = self._source_units(chunk.text)
+        has_units = bool(units)
         user_prompt = chunk.text
-        if units:
+        if has_units:
             user_prompt = json.dumps(
                 {"context": previous_context, "units": [unit.as_dict() for unit in units]},
                 ensure_ascii=False,
@@ -432,16 +440,18 @@ class CleanChunks:
         unit_edits: dict[str, str] = {}
         generation_failures: dict[str, list[str]] = {}
         verified_units: dict[str, str] = {}
+        attempts_used = 0
         for attempt in range(max(0, self.max_fidelity_retries) + 1):
+            attempts_used = attempt + 1
             limit = max(0, self.max_fidelity_retries) + 1
             if self.on_attempt is not None:
                 await self.on_attempt(CleaningAttempt(chunk, attempt + 1, limit, "started"))
             started = time.monotonic()
             prompt = self._attempt_prompt(
-                system_prompt, chunk, attempt, warnings, unit_failures, structured=bool(units)
+                system_prompt, chunk, attempt, warnings, unit_failures, structured=has_units
             )
             try:
-                if units:
+                if has_units:
                     operation = self._edit_units(
                         units,
                         previous_context,
@@ -466,21 +476,7 @@ class CleanChunks:
                         temperature=self.temperature,
                     )
 
-                async def note_wait(
-                    elapsed: float,
-                    number: int = attempt + 1,
-                    budget: int = limit,
-                ) -> None:
-                    if self.on_attempt is not None:
-                        await self.on_attempt(
-                            CleaningAttempt(
-                                chunk,
-                                number,
-                                budget,
-                                "waiting",
-                                elapsed_seconds=elapsed,
-                            )
-                        )
+                note_wait = partial(self._report_wait, chunk, attempt + 1, limit)
 
                 raw = await await_with_progress(
                     operation,
@@ -512,7 +508,7 @@ class CleanChunks:
             provider_text = raw
             unit_warnings: tuple[str, ...] = ()
             stripped_context = False
-            if units:
+            if has_units:
                 raw, unit_warnings, unit_failures = decode_edits(raw, units)
                 unit_failures.update(generation_failures)
                 unit_warnings = tuple(
@@ -539,7 +535,7 @@ class CleanChunks:
             # Retrying must perform real work rather than reconstruct the same draft.
             _route_document_failures(units, unit_failures, unassigned)
             if (
-                units
+                has_units
                 and self.verify_semantics
                 and not (structural_failures - {"substantial-content-loss"})
             ):
@@ -608,7 +604,11 @@ class CleanChunks:
                     warnings=(("repeated-context-stripped",) if stripped_context else ())
                     + warnings,
                 )
-        raise FidelityValidationError(chunk, max(0, self.max_fidelity_retries) + 1, warnings)
+            if "invalid-fidelity-verification" in warnings:
+                # The reviewer has exhausted its own format budget. A new draft
+                # cannot repair the reviewer's transport or response schema.
+                break
+        raise FidelityValidationError(chunk, attempts_used, warnings)
 
     async def _edit_units(
         self,
@@ -797,13 +797,55 @@ class CleanChunks:
             payload["previous_patch"] = raw
         return candidate, ("invalid-prose-patch",)
 
+    async def _request_review(
+        self, system_prompt: str, payload: dict[str, object], unit_id: str
+    ) -> tuple[str | None, dict[str, list[str]], str]:
+        request = dict(payload)
+        attempts: list[dict[str, object]] = []
+        for _ in range(2):
+            try:
+                raw = await complete_json(
+                    self.verification_provider or self.provider,
+                    enabled=self.plain_edits,
+                    system_prompt=system_prompt,
+                    user_prompt=json.dumps(request, ensure_ascii=False),
+                    model=self.verification_model or self.model,
+                    max_tokens=self.max_tokens,
+                    temperature=self.verification_temperature,
+                )
+            except LLMResponseTruncatedError as exc:
+                raw = exc.partial_text[: self.max_response_chars]
+                warning, issues = "invalid-fidelity-verification", {}
+                error = "truncated-review-response"
+            else:
+                if len(raw) > self.max_response_chars:
+                    raise ValueError("Review response exceeded configured character limit")
+                warning, issues = _meaning_issues(raw, {unit_id})
+                error = "invalid-review-json"
+            attempts.append(
+                {
+                    "response": raw,
+                    "format_error": error if warning == "invalid-fidelity-verification" else None,
+                }
+            )
+            if warning != "invalid-fidelity-verification":
+                return warning, issues, json.dumps({"attempts": attempts}, ensure_ascii=False)
+            # Schema repair never supplies a desired substantive verdict.
+            request["review_format_error"] = (
+                error + "; return valid issues JSON with the original ID."
+            )
+            request["previous_review"] = raw[:8192]
+        return (
+            "invalid-fidelity-verification",
+            {},
+            json.dumps({"attempts": attempts}, ensure_ascii=False),
+        )
+
     async def _verify_units(
         self,
         pairs: list[dict[str, str]],
         verified: dict[str, str],
     ) -> tuple[str | None, dict[str, list[str]], str]:
-        provider = self.verification_provider or self.provider
-        model = self.verification_model or self.model
         queue: asyncio.Queue[dict[str, str]] = asyncio.Queue()
         for pair in pairs:
             if verified.get(pair["id"]) != pair["edited"]:
@@ -817,9 +859,7 @@ class CleanChunks:
             nonlocal invalid
             while not queue.empty():
                 pair = queue.get_nowait()
-                response = await complete_json(
-                    provider,
-                    enabled=self.plain_edits,
+                warning, issues, response = await self._request_review(
                     system_prompt=(
                         self.prompt_catalog.get(
                             "repair", "prose_review_v1" if self.plain_edits else "meaning_v1"
@@ -833,17 +873,12 @@ class CleanChunks:
                             + self.editorial_context
                         )
                     ),
-                    user_prompt=json.dumps({"pairs": [pair]}, ensure_ascii=False),
-                    model=model,
-                    max_tokens=self.max_tokens,
-                    temperature=self.verification_temperature,
+                    payload={"pairs": [pair]},
+                    unit_id=pair["id"],
                 )
-                warning, issues = _meaning_issues(response, {pair["id"]})
                 record = {"id": pair["id"], "response": response}
                 if issues and warning != "invalid-fidelity-verification":
-                    confirmation = await complete_json(
-                        provider,
-                        enabled=self.plain_edits,
+                    confirmed_warning, confirmed, confirmation = await self._request_review(
                         system_prompt=(
                             self.prompt_catalog.get(
                                 "repair",
@@ -855,18 +890,9 @@ class CleanChunks:
                                 else "\n\nApproved spelling sheet:\n" + self.editorial_context
                             )
                         ),
-                        user_prompt=json.dumps(
-                            {
-                                "pair": pair,
-                                "proposed_issues": issues[pair["id"]],
-                            },
-                            ensure_ascii=False,
-                        ),
-                        model=model,
-                        max_tokens=self.max_tokens,
-                        temperature=self.verification_temperature,
+                        payload={"pair": pair, "proposed_issues": issues[pair["id"]]},
+                        unit_id=pair["id"],
                     )
-                    confirmed_warning, confirmed = _meaning_issues(confirmation, {pair["id"]})
                     record["confirmation"] = confirmation
                     if confirmed_warning == "invalid-fidelity-verification":
                         warning = confirmed_warning

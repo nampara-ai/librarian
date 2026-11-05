@@ -110,3 +110,20 @@ deleted; intentional source repetition remains permitted. Document-level failure
 be attributed to a single source unit are routed back to prose generation, so retries perform
 real work instead of repeatedly assembling the same rejected draft. In the experimental profile,
 spelling proposals remain advisory and are withheld from the independent reviewer.
+
+Reviewer JSON and truncation failures get a separate two-attempt format budget with the
+candidate frozen. Exhaustion fails review explicitly; it does not trigger another copyedit.
+Each provider request also has a total attempt deadline in addition to HTTP read timeouts.
+
+## Second prospective corpus
+
+`examples/editorial_holdout_v2.json` was frozen on 2026-11-05 before OpenAI candidate evaluation.
+Its SHA-256 is `b38d05b6dc5b6aa2dfd46b601f3809245f3ccff2d26494d2d418c3748d6a20c5`.
+Seed `20261105` selects ten different passages from the same five source books, excluding every
+exposed reference hash. It retains the five real OCR readings/five punctuation transformations
+design. This tests new passages within these genres, not new authors, languages, or every
+real-world corruption process. References remain withheld from editing.
+
+`examples/editorial_style_calibration.json` adds twelve authored assessor controls covering
+legitimate reflow and spelling modernization, authentic quotation, pending events, unfamiliar
+names, and wrapped source text. These are assessor checks, not editor performance results.

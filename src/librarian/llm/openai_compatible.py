@@ -167,6 +167,7 @@ class OpenAICompatibleProvider:
             api_key=api_key, base_url=base_url, timeout=timeout_seconds, max_retries=0
         )
         self._semaphore = asyncio.Semaphore(max_concurrency)
+        self._timeout_seconds = timeout_seconds
         self._max_retries = max_retries
         self._retry_base_delay_seconds = retry_base_delay_seconds
         self._retry_max_delay_seconds = retry_max_delay_seconds
@@ -325,10 +326,13 @@ class OpenAICompatibleProvider:
                 # Kwargs are assembled dynamically (dialect varies per model),
                 # which defeats the SDK's typed overloads; the API contract
                 # is still a ChatCompletion.
-                return cast(
-                    "ChatCompletion",
-                    await self._client.chat.completions.create(**kwargs),
-                )
+                # HTTP read timeouts reset when bytes arrive. Own a total attempt
+                # deadline as well, so a slow or unfinished response cannot live forever.
+                async with asyncio.timeout(self._timeout_seconds):
+                    return cast(
+                        "ChatCompletion",
+                        await self._client.chat.completions.create(**kwargs),
+                    )
             except Exception as exc:  # noqa: BLE001 - provider errors feed retry policy
                 rejected = unsupported_parameter(exc)
                 if adaptations < max_adaptations:
@@ -348,8 +352,13 @@ class OpenAICompatibleProvider:
                         f"LLM provider request failed: {sanitize_error_message(exc)}"
                     ) from None
                 if attempt >= self._max_retries:
+                    detail = (
+                        "request deadline exceeded"
+                        if isinstance(exc, TimeoutError)
+                        else sanitize_error_message(exc)
+                    )
                     raise RuntimeError(
-                        f"LLM provider request failed after retries: {sanitize_error_message(exc)}"
+                        f"LLM provider request failed after retries: {detail}"
                     ) from None
                 server_delay = retry_after_seconds(exc)
                 if server_delay is None:
@@ -385,7 +394,10 @@ class OpenAICompatibleProvider:
 
 def is_retriable_openai_error(exc: Exception) -> bool:
     """Return true for transient OpenAI-compatible transport/status failures."""
-    if isinstance(exc, (APIConnectionError, APITimeoutError, InternalServerError, RateLimitError)):
+    if isinstance(
+        exc,
+        (TimeoutError, APIConnectionError, APITimeoutError, InternalServerError, RateLimitError),
+    ):
         return True
     if isinstance(exc, APIStatusError):
         return int(exc.status_code) >= 500

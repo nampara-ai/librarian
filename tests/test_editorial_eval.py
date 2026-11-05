@@ -18,6 +18,24 @@ def judgment() -> dict[str, object]:
     return {"criteria": dict.fromkeys(CRITERIA, "pass"), "requirements": [], "issues": []}
 
 
+def test_second_prospective_corpus_is_frozen_and_disjoint_from_exposed_passages() -> None:
+    root = Path(__file__).resolve().parents[1] / "examples"
+    raw = (root / "editorial_holdout_v2.json").read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == (
+        "b38d05b6dc5b6aa2dfd46b601f3809245f3ccff2d26494d2d418c3748d6a20c5"
+    )
+    old = json.loads((root / "editorial_holdout_v1.json").read_text())["cases"]
+    cases = json.loads(raw)["cases"]
+    assert len(cases) == 10
+    assert len({case["id"] for case in cases}) == 10
+    assert not (
+        {case["reference_sha256"] for case in cases} & {case["reference_sha256"] for case in old}
+    )
+    for case in cases:
+        assert hashlib.sha256(case["reference"].encode()).hexdigest() == case["reference_sha256"]
+        assert hashlib.sha256(case["input_text"].encode()).hexdigest() == case["input_sha256"]
+
+
 def test_editorial_assessment_accepts_faithful_prose() -> None:
     case = EditorialCase(id="faithful", source="The result remained uncertain.")
     result = validate_assessment(
