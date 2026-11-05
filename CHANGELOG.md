@@ -17,6 +17,17 @@
   and unavailable reviewer responses are reported without driving content rewrites; strict
   review remains opt-in, and unchanged prose skips advisory review.
 
+- Freeze accepted source-aligned units across retries, preserve their exact bytes,
+  checkpoint them before chunk completion, and apply a separate per-unit retry budget.
+  Log accepted unit IDs and hashes; retain neighboring context without reopening approvals.
+- Add experimental source-aligned prose editing with protected numeric data, source-order
+  patches, source-reading support, and neighboring source and edited context. Keep the
+  released cleaning-prompt default unchanged.
+- Add an editorial evaluation CLI, frozen test corpora, independent assessments, and retained
+  development-failure summaries. Evaluation references are withheld from editing calls.
+- Improve provider compatibility and failure handling, including reasoning/token dialects,
+  bounded JSON recovery, access/credit failures, response limits, and cancellation of sibling work.
+
 ## 1.9.0 - 2026-09-20
 
 PDF fidelity, reliable long-running processing, and an actionable final quality review.

@@ -69,6 +69,7 @@ class Settings(BaseSettings):
     # (CJK, tables, dense OCR) needs headroom or the provider truncates.
     llm_max_output_tokens: int = Field(default=16_384, gt=0)
     cleaning_fidelity_max_retries: int = Field(default=3, ge=0, le=5)
+    cleaning_unit_max_retries: int | None = Field(default=None, ge=0, le=5)
     cleaning_publish_partial: bool = Field(default=True)
     cleaning_review_mode: Literal["off", "advisory", "strict"] = "advisory"
     # Deprecated: explicit true preserves the previous strict contract; false disables review.

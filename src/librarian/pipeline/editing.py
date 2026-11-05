@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
 
@@ -111,7 +111,11 @@ def editing_units(
 
 
 def decode_edits(
-    raw: str, units: Sequence[EditUnit], *, context: SourceContext | None = None
+    raw: str,
+    units: Sequence[EditUnit],
+    *,
+    context: SourceContext | None = None,
+    frozen_edits: Mapping[str, str] | None = None,
 ) -> tuple[str, tuple[str, ...], dict[str, list[str]]]:
     """Require every ID exactly once in source order, then validate every edited span."""
     body = raw.strip()
@@ -168,7 +172,12 @@ def decode_edits(
             failures[unit.id] = blocking
         separator = unit.separator
         edited = result.text
-        edited = _canonical_unit_text(edited, unit, parts[-1] if parts else "")
+        edited = (
+            (frozen_edits or {}).get(unit.id)
+            if unit.id in (frozen_edits or {})
+            else _canonical_unit_text(edited, unit, parts[-1] if parts else "")
+        )
+        assert edited is not None
         parts.append((separator if parts else "") + edited)
     return "".join(parts), tuple(dict.fromkeys(all_warnings)), failures
 
@@ -189,7 +198,11 @@ def _canonical_unit_text(text: str, unit: EditUnit, previous: str) -> str:
 
 
 def verification_pairs(
-    raw: str, units: Sequence[EditUnit], *, include_unchanged_prose: bool = False
+    raw: str,
+    units: Sequence[EditUnit],
+    *,
+    include_unchanged_prose: bool = False,
+    frozen_edits: Mapping[str, str] | None = None,
 ) -> list[dict[str, str]]:
     """Read already-validated JSON edits for the independent meaning-preservation audit."""
     body = raw.strip()
@@ -203,7 +216,10 @@ def verification_pairs(
             edit["text"], input_size=len(unit.text), source_text=unit.text
         )
         rendered.append(
-            _canonical_unit_text(validated.text, unit, rendered[-1] if rendered else "")
+            (frozen_edits or {}).get(
+                unit.id,
+                _canonical_unit_text(validated.text, unit, rendered[-1] if rendered else ""),
+            )
         )
     return [
         {

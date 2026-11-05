@@ -41,6 +41,7 @@ from librarian.application.quality_report import (
     run_quality_key,
 )
 from librarian.application.review_items import (
+    UnitCheckpoint,
     load_checkpoint,
     partial_key,
     review_body,
@@ -323,6 +324,19 @@ class ProcessDocument:
                     if checkpoint:
                         resume_units[pending_chunk.id] = checkpoint
 
+                async def _note_units_checkpoint(
+                    chunk: Chunk, units: tuple[UnitCheckpoint, ...]
+                ) -> None:
+                    await self.content.put_text(
+                        partial_key(
+                            cache_version,
+                            chunk.sha256,
+                            provider=self.cleaner.provider.name,
+                            model=self.cleaner.model,
+                        ),
+                        json.dumps([u.as_dict() for u in units]),
+                    )
+
                 async def _note_chunk_cleaned(cleaned_chunk: CleanedChunk) -> None:
                     # A later chunk may fail or the app may stop. Persist each
                     # successful result before reporting progress so a retry
@@ -386,6 +400,7 @@ class ProcessDocument:
                 cleaner = replace(
                     contextual_cleaner,
                     on_attempt=_note_attempt,
+                    on_unit_checkpoint=_note_units_checkpoint,
                     editorial_context=spelling_sheet,
                     resume_units=resume_units,
                 )

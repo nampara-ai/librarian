@@ -117,3 +117,55 @@ async def test_document_publishes_explicit_partial_output_and_review_report(tmp_
     repeated_quality = json.loads(await container.repository.get_text(run_quality_key(repeated.id)))
     assert repeated_quality["cached_cleaned_chunks"] == 0
     assert repeated_quality["review_units"] == 1
+
+
+@pytest.mark.asyncio
+async def test_infrastructure_failure_resumes_units_accepted_before_chunk_completed(
+    tmp_path: Path,
+) -> None:
+    class InterruptedEditor(NumericEditor):
+        recover = False
+        second_calls = 0
+
+        async def complete(self, *, user_prompt: str, **kwargs: object) -> str:
+            if not user_prompt.lstrip().startswith("{"):
+                return json.dumps({"corrections": []})
+            source_text = json.loads(user_prompt).get("source", "")
+            if "second" in source_text:
+                self.second_calls += 1
+                if self.recover:
+                    self.sources.append(source_text)
+                    return source_text
+                if self.second_calls > 1:
+                    raise RuntimeError("provider unavailable")
+            return await super().complete(user_prompt=user_prompt, **kwargs)
+
+    source = tmp_path / "notes.txt"
+    source.write_text(
+        "The first result was teh expected result.\n\nThe second result was 318 units."
+    )
+    container = await build_container(Settings(data_dir=tmp_path / "data"))
+    ingested = await container.ingest_document.execute(source)
+    editor = InterruptedEditor()
+    cleaner = replace(
+        container.process_document.cleaner,
+        provider=editor,
+        preparation_provider=editor,
+        prompt_version="cmos_v8",
+        verify_semantics=False,
+        unit_target_chars=45,
+    )
+    process = replace(container.process_document, cleaner=cleaner, refiner=None)
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        await process.execute(ingested.document.id)
+    assert await container.repository.get_cleaned_output(ingested.document.id) is None
+    editor.recover = True
+    editor.sources.clear()
+    completed = await process.execute(ingested.document.id)
+    assert completed.status == RunStatus.SUCCEEDED
+    assert len(editor.sources) == 1
+    assert "second" in editor.sources[0]
+    output = await container.repository.get_cleaned_output(ingested.document.id)
+    assert output is not None
+    assert "The first result was the expected result." in output.text
+    assert "318 units" in output.text

@@ -145,6 +145,7 @@ class CleaningAttempt:
         "verification-rejected",
         "repair-reviewed",
         "accepted",
+        "units-accepted",
         "rejected",
         "error",
     ]
@@ -154,6 +155,7 @@ class CleaningAttempt:
 
 
 AttemptCallback = Callable[[CleaningAttempt], Awaitable[None]]
+UnitCheckpointCallback = Callable[[Chunk, tuple[UnitCheckpoint, ...]], Awaitable[None]]
 
 
 _CONTEXT_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
@@ -196,7 +198,9 @@ class CleanChunks:
     balanced_group_size: int = 4
     max_response_chars: int = 2 * 1024 * 1024
     max_fidelity_retries: int = 3
+    unit_max_retries: int | None = None
     on_attempt: AttemptCallback | None = None
+    on_unit_checkpoint: UnitCheckpointCallback | None = None
     resume_units: dict[ChunkId, tuple[UnitCheckpoint, ...]] = field(
         default_factory=lambda: dict[ChunkId, tuple[UnitCheckpoint, ...]](), repr=False
     )
@@ -260,7 +264,8 @@ class CleanChunks:
                 )
         policy = json.dumps(
             {
-                "policy": 13,
+                "policy": 14,
+                "unit_max_retries": self.unit_max_retries,
                 "review_mode": self.review_mode,
                 "publish_partial": self.publish_partial,
                 "source_reading": self.source_reading,
@@ -534,26 +539,109 @@ class CleanChunks:
         unit_edits: dict[str, str] = {
             u.unit_id: u.accepted_text for u in saved_units if u.accepted_text is not None
         }
-        frozen_ids = set(unit_edits)
+        if saved_units:
+            cached_response = json.dumps(
+                {"edits": [{"id": u.id, "text": unit_edits.get(u.id, u.text)} for u in units]}
+            )
+            _, _, checkpoint_failures = decode_edits(
+                cached_response,
+                units,
+                context=SourceContext(
+                    previous_source_context or previous_context, following_source_context
+                ),
+            )
+            for invalid_id in checkpoint_failures:
+                unit_edits.pop(invalid_id, None)
+        frozen_edits = dict(unit_edits)
+        frozen_ids = set(frozen_edits)
         advisory_issues: dict[str, list[str]] = {
-            u.unit_id: list(u.advisory_reasons) for u in saved_units if u.advisory_reasons
+            u.unit_id: list(u.advisory_reasons)
+            for u in saved_units
+            if u.advisory_reasons and u.unit_id in frozen_ids
         }
         generation_failures: dict[str, list[str]] = {}
         verified_units: dict[str, str] = {}
         attempts_used = 0
-        for attempt in range(max(0, self.max_fidelity_retries) + 1):
+        unit_limit = (
+            max(
+                0,
+                self.unit_max_retries
+                if self.unit_max_retries is not None
+                else self.max_fidelity_retries,
+            )
+            + 1
+        )
+        unit_attempts: dict[str, int] = {}
+        chunk_limit = 2 * unit_limit if has_units else max(0, self.max_fidelity_retries) + 1
+
+        prepare_attempt_prompt = partial(self._attempt_prompt, system_prompt, chunk)
+        verify_units = self._verify_units
+        progress_interval = self.progress_interval_seconds
+        coalesce_limit = max(6000, min(12_000, self.unit_target_chars * 2))
+        source_context = SourceContext(
+            (previous_source_context or previous_context) + preceding_separator,
+            following_source_context,
+        )
+
+        async def generate_attempt(
+            prompt: str,
+            attempt: int,
+            attempt_warnings: tuple[str, ...],
+            eligible_ids: set[str],
+            repair_review_traces: list[str],
+            limit: int,
+        ) -> str:
+            if has_units:
+                operation = self._edit_units(
+                    units,
+                    (previous_source_context or previous_context)
+                    if self.plain_edits
+                    else previous_context,
+                    prompt,
+                    unit_edits,
+                    unit_failures,
+                    generation_failures,
+                    repair_unit_chars=max(800, 4000 // (2**attempt)) if attempt else None,
+                    patch_semantics=self.plain_edits
+                    and bool(
+                        {
+                            "semantic-fidelity-failed",
+                            "editorial-quality-failed",
+                            "new-lowercase-paragraph",
+                        }.intersection(attempt_warnings)
+                    ),
+                    previous_edited_context=previous_context,
+                    repair_review_traces=repair_review_traces,
+                    following_context=following_source_context,
+                    preceding_separator=preceding_separator,
+                    eligible_unit_ids=eligible_ids,
+                )
+            else:
+                operation = self.provider.complete(
+                    system_prompt=prompt,
+                    user_prompt=user_prompt,
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    temperature=self.temperature,
+                )
+
+            note_wait = partial(self._report_wait, chunk, attempt + 1, limit)
+
+            return await await_with_progress(
+                operation,
+                note_wait,
+                interval_seconds=self.progress_interval_seconds,
+            )
+
+        for attempt in range(chunk_limit):
             attempt_warnings = cast("tuple[str, ...]", warnings)
-            attempts_used = attempt + 1
-            limit = max(0, self.max_fidelity_retries) + 1
-            if self.on_attempt is not None:
-                await self.on_attempt(CleaningAttempt(chunk, attempt + 1, limit, "started"))
-            started = time.monotonic()
+            limit = chunk_limit
             if attempt and self.plain_edits and "editorial-quality-failed" in warnings:
                 expanded, updated_edits, updated_failures = coalesce_adjacent_repairs(
                     units,
                     unit_edits,
                     unit_failures,
-                    max_chars=max(6000, min(12_000, self.unit_target_chars * 2)),
+                    max_chars=coalesce_limit,
                 )
                 if len(expanded) != len(units):
                     units[:] = expanded
@@ -570,55 +658,30 @@ class CleanChunks:
                     for key in list(generation_failures):
                         if key not in retained:
                             generation_failures.pop(key)
-            prompt = self._attempt_prompt(
-                system_prompt,
-                chunk,
+            eligible_ids = {
+                u.id
+                for u in units
+                if u.id not in frozen_ids and unit_attempts.get(u.id, 0) < unit_limit
+            }
+            if attempt and has_units and not eligible_ids:
+                break
+            attempts_used = attempt + 1
+            if self.on_attempt is not None:
+                await self.on_attempt(CleaningAttempt(chunk, attempt + 1, limit, "started"))
+            started = time.monotonic()
+            for unit_id in eligible_ids:
+                unit_attempts[unit_id] = unit_attempts.get(unit_id, 0) + 1
+            prompt = prepare_attempt_prompt(
                 attempt,
                 cast("tuple[str, ...]", warnings),
                 unit_failures,
                 structured=has_units,
             )
             repair_review_traces: list[str] = []
+            note_wait = partial(self._report_wait, chunk, attempt + 1, limit)
             try:
-                if has_units:
-                    operation = self._edit_units(
-                        units,
-                        (previous_source_context or previous_context)
-                        if self.plain_edits
-                        else previous_context,
-                        prompt,
-                        unit_edits,
-                        unit_failures,
-                        generation_failures,
-                        repair_unit_chars=max(800, 4000 // (2**attempt)) if attempt else None,
-                        patch_semantics=self.plain_edits
-                        and bool(
-                            {
-                                "semantic-fidelity-failed",
-                                "editorial-quality-failed",
-                                "new-lowercase-paragraph",
-                            }.intersection(attempt_warnings)
-                        ),
-                        previous_edited_context=previous_context,
-                        repair_review_traces=repair_review_traces,
-                        following_context=following_source_context,
-                        preceding_separator=preceding_separator,
-                    )
-                else:
-                    operation = self.provider.complete(
-                        system_prompt=prompt,
-                        user_prompt=user_prompt,
-                        model=self.model,
-                        max_tokens=self.max_tokens,
-                        temperature=self.temperature,
-                    )
-
-                note_wait = partial(self._report_wait, chunk, attempt + 1, limit)
-
-                raw = await await_with_progress(
-                    operation,
-                    note_wait,
-                    interval_seconds=self.progress_interval_seconds,
+                raw = await generate_attempt(
+                    prompt, attempt, attempt_warnings, eligible_ids, repair_review_traces, limit
                 )
             except (ProcessingCanceled, LLMAccessError):
                 raise
@@ -660,11 +723,17 @@ class CleanChunks:
                 raw, unit_warnings, unit_failures = decode_edits(
                     raw,
                     units,
-                    context=SourceContext(
-                        (previous_source_context or previous_context) + preceding_separator,
-                        following_source_context,
-                    ),
+                    context=source_context,
+                    frozen_edits=frozen_edits,
                 )
+                if "invalid-edit-structure" not in unit_warnings:
+                    canonical = verification_pairs(
+                        provider_text,
+                        units,
+                        include_unchanged_prose=True,
+                        frozen_edits=frozen_edits,
+                    )
+                    unit_edits.update({pair["id"]: pair["edited"] for pair in canonical})
                 unit_failures.update(generation_failures)
                 unit_warnings = tuple(
                     dict.fromkeys(
@@ -684,10 +753,7 @@ class CleanChunks:
                 raw,
                 input_size=len(chunk.text),
                 source_text=chunk.text,
-                context=SourceContext(
-                    (previous_source_context or previous_context) + preceding_separator,
-                    following_source_context,
-                ),
+                context=source_context,
             )
             warnings = tuple(dict.fromkeys((*unit_warnings, *validated.warnings)))
             structural_failures = FIDELITY_WARNINGS.intersection(warnings)
@@ -699,12 +765,13 @@ class CleanChunks:
                 has_units
                 and self.verify_semantics
                 and self.review_mode != "off"
-                and not (structural_failures - {"substantial-content-loss"})
+                and "invalid-edit-structure" not in unit_warnings
             ):
                 pairs = verification_pairs(
                     provider_text,
                     units,
                     include_unchanged_prose=self.plain_edits and self.review_mode == "strict",
+                    frozen_edits=frozen_edits,
                 )
                 if self.plain_edits:
                     # Repairs must patch the same canonical text the reviewer audited.
@@ -725,6 +792,7 @@ class CleanChunks:
                     pair
                     for pair in pairs
                     if pair["id"] not in frozen_ids
+                    and pair["id"] not in unit_failures
                     and (
                         self.review_mode == "strict"
                         or " ".join(pair["source"].split()) != " ".join(pair["edited"].split())
@@ -748,20 +816,20 @@ class CleanChunks:
                 issues: dict[str, list[str]]
                 verification: str
                 semantic_warning, issues, verification = await await_with_progress(
-                    self._verify_units(
+                    verify_units(
                         pairs,
                         verified_units,
                     ),
                     note_wait,
-                    interval_seconds=self.progress_interval_seconds,
+                    interval_seconds=progress_interval,
                 )
                 if semantic_warning:
                     if self.review_mode == "advisory":
                         advisory_issues.update(issues)
                     else:
                         warnings = (*warnings, semantic_warning)
-                        unit_failures = issues
-                else:
+                        unit_failures.update(issues)
+                elif not unit_failures:
                     # A word-count reduction alone is not proof of lost meaning. It is
                     # cleared only after complete unit coverage and an independent audit.
                     warnings = tuple(w for w in warnings if w != "substantial-content-loss")
@@ -777,6 +845,52 @@ class CleanChunks:
                             time.monotonic() - started,
                         )
                     )
+            if has_units and "invalid-edit-structure" not in warnings:
+                newly_accepted: list[str] = []
+                for unit in units:
+                    if unit.id not in unit_failures and unit.id in unit_edits:
+                        if unit.id not in frozen_edits:
+                            newly_accepted.append(unit.id)
+                        frozen_edits.setdefault(unit.id, unit_edits[unit.id])
+                frozen_ids = set(frozen_edits)
+                unit_edits.update(frozen_edits)
+                if newly_accepted:
+                    accepted_checkpoint = tuple(
+                        UnitCheckpoint(
+                            u.id,
+                            u.text,
+                            u.kind,
+                            u.separator,
+                            frozen_edits.get(u.id),
+                            tuple(advisory_issues.get(u.id, [])),
+                        )
+                        for u in units
+                    )
+                    if self.on_unit_checkpoint is not None:
+                        await self.on_unit_checkpoint(chunk, accepted_checkpoint)
+                    if self.on_attempt is not None:
+                        await self.on_attempt(
+                            CleaningAttempt(
+                                chunk,
+                                attempt + 1,
+                                limit,
+                                "units-accepted",
+                                text=json.dumps(
+                                    {
+                                        "units": [
+                                            {
+                                                "id": uid,
+                                                "sha256": hashlib.sha256(
+                                                    frozen_edits[uid].encode()
+                                                ).hexdigest(),
+                                                "attempts": unit_attempts.get(uid, 0),
+                                            }
+                                            for uid in newly_accepted
+                                        ]
+                                    }
+                                ),
+                            )
+                        )
             blocking = FIDELITY_WARNINGS if self.review_mode == "strict" else DETERMINISTIC_WARNINGS
             accepted = not blocking.intersection(warnings)
             if self.on_attempt is not None:
@@ -860,7 +974,7 @@ class CleanChunks:
                         unit_id=unit.id,
                         chunk=chunk.ordinal,
                         reasons=reasons or warnings,
-                        attempts=attempts_used,
+                        attempts=unit_attempts.get(unit.id, attempts_used),
                     )
                 else:
                     text = unit_edits[unit.id]
@@ -888,6 +1002,7 @@ class CleanChunks:
         previous_edited_context: str = "",
         repair_review_traces: list[str] | None = None,
         preceding_separator: str = "\n\n",
+        eligible_unit_ids: set[str] | None = None,
     ) -> str:
         """Edit modest source spans independently and retry only rejected spans."""
         if self.plain_edits:
@@ -896,7 +1011,12 @@ class CleanChunks:
                     edits[unit.id] = unit.text
                     failures.pop(unit.id, None)
                     generation_failures.pop(unit.id, None)
-        pending = [unit for unit in units if unit.id not in edits or unit.id in failures]
+        pending = [
+            unit
+            for unit in units
+            if (unit.id not in edits or unit.id in failures)
+            and (eligible_unit_ids is None or unit.id in eligible_unit_ids)
+        ]
         queue: asyncio.Queue[EditUnit] = asyncio.Queue()
         for unit in pending:
             queue.put_nowait(unit)

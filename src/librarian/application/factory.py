@@ -174,6 +174,7 @@ async def build_container(
         max_parallel_chunks=resolved_settings.llm_max_concurrency,
         max_response_chars=resolved_settings.llm_max_response_chars,
         max_fidelity_retries=resolved_settings.cleaning_fidelity_max_retries,
+        unit_max_retries=resolved_settings.cleaning_unit_max_retries,
         publish_partial=resolved_settings.cleaning_publish_partial,
         review_mode=(
             resolved_settings.cleaning_review_mode
