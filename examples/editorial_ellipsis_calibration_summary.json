@@ -1,0 +1,154 @@
+{
+  "purpose": "Source-only independent assessor calibration, distinct from editor performance; original V4 grading is retained.",
+  "prompt_version": "editorial_v3",
+  "models": [
+    {
+      "model": "gpt-6.1-terra",
+      "reasoning_effort": "medium",
+      "correct": 8,
+      "total": 8,
+      "cases": [
+        {
+          "case": "independent-possessive-faithful",
+          "expected": true,
+          "model_pass": true,
+          "composite_pass": true,
+          "valid": true,
+          "correct": true
+        },
+        {
+          "case": "independent-possessive-damaged",
+          "expected": false,
+          "model_pass": false,
+          "composite_pass": false,
+          "valid": true,
+          "correct": true
+        },
+        {
+          "case": "pronoun-not-determiner-faithful",
+          "expected": true,
+          "model_pass": true,
+          "composite_pass": true,
+          "valid": true,
+          "correct": true
+        },
+        {
+          "case": "pronoun-not-determiner-damaged",
+          "expected": false,
+          "model_pass": false,
+          "composite_pass": false,
+          "valid": true,
+          "correct": true
+        },
+        {
+          "case": "comparative-possessive-faithful",
+          "expected": true,
+          "model_pass": true,
+          "composite_pass": true,
+          "valid": true,
+          "correct": true
+        },
+        {
+          "case": "comparative-possessive-damaged",
+          "expected": false,
+          "model_pass": false,
+          "composite_pass": false,
+          "valid": true,
+          "correct": true
+        },
+        {
+          "case": "coordinated-ellipsis-faithful",
+          "expected": true,
+          "model_pass": true,
+          "composite_pass": true,
+          "valid": true,
+          "correct": true
+        },
+        {
+          "case": "coordinated-ellipsis-damaged",
+          "expected": false,
+          "model_pass": false,
+          "composite_pass": false,
+          "valid": true,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "model": "gpt-6-luna",
+      "reasoning_effort": "medium",
+      "correct": 8,
+      "total": 8,
+      "cases": [
+        {
+          "case": "independent-possessive-faithful",
+          "expected": true,
+          "model_pass": true,
+          "composite_pass": true,
+          "valid": true,
+          "correct": true
+        },
+        {
+          "case": "independent-possessive-damaged",
+          "expected": false,
+          "model_pass": false,
+          "composite_pass": false,
+          "valid": true,
+          "correct": true
+        },
+        {
+          "case": "pronoun-not-determiner-faithful",
+          "expected": true,
+          "model_pass": true,
+          "composite_pass": true,
+          "valid": true,
+          "correct": true
+        },
+        {
+          "case": "pronoun-not-determiner-damaged",
+          "expected": false,
+          "model_pass": false,
+          "composite_pass": false,
+          "valid": true,
+          "correct": true
+        },
+        {
+          "case": "comparative-possessive-faithful",
+          "expected": true,
+          "model_pass": true,
+          "composite_pass": true,
+          "valid": true,
+          "correct": true
+        },
+        {
+          "case": "comparative-possessive-damaged",
+          "expected": false,
+          "model_pass": false,
+          "composite_pass": false,
+          "valid": true,
+          "correct": true
+        },
+        {
+          "case": "coordinated-ellipsis-faithful",
+          "expected": true,
+          "model_pass": true,
+          "composite_pass": true,
+          "valid": true,
+          "correct": true
+        },
+        {
+          "case": "coordinated-ellipsis-damaged",
+          "expected": false,
+          "model_pass": false,
+          "composite_pass": false,
+          "valid": true,
+          "correct": true
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "Both models handled these eight simple controls correctly. This does not establish reliable handling of a longer unfamiliar sentence.",
+    "A passing control score does not supersede an observed false positive."
+  ]
+}
