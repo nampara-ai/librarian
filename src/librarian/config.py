@@ -73,6 +73,7 @@ class Settings(BaseSettings):
     cleaning_reasoning_effort: ReasoningEffortSetting | None = Field(default=None)
     cleaning_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     cleaning_source_reading: bool = False
+    cleaning_unit_target_chars: int = Field(default=2000, ge=500, le=12_000)
     cleaning_verification_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     cleaning_verification_model: str | None = Field(default=None, min_length=1)
     cleaning_verification_reasoning_effort: ReasoningEffortSetting | None = Field(default=None)

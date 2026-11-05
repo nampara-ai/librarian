@@ -6,7 +6,26 @@ import hashlib
 import re
 from dataclasses import dataclass
 
-from librarian.pipeline.validation import LITERAL_LINK_REGEX, VERBATIM_NUMBER_REGEX
+from librarian.pipeline.validation import (
+    LITERAL_LINK_REGEX,
+    VERBATIM_NUMBER_REGEX,
+    SourceContext,
+    repairable_number_spans,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class NumericReading:
+    observed: str
+    reading: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "observed": self.observed,
+            "reading": self.reading,
+            "role": "decade-shorthand",
+            "century": "unspecified",
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -14,6 +33,7 @@ class ProtectedText:
     text: str
     prefix: str
     values: tuple[tuple[str, str], ...]
+    numeric_readings: tuple[NumericReading, ...] = ()
 
     def restore(self, candidate: str) -> tuple[str, tuple[str, ...]]:
         warnings: list[str] = []
@@ -39,12 +59,20 @@ def protect_numerals(source: str) -> ProtectedText:
     return _protect(source, include_links=False)
 
 
-def protect_prose_data(source: str) -> ProtectedText:
+def protect_prose_data(
+    source: str, *, source_context: str | None = None, context: SourceContext | None = None
+) -> ProtectedText:
     """URLs are identifiers, so do not spell-correct them as names or prose."""
-    return _protect(source, include_links=True)
+    return _protect(source, include_links=True, source_context=source_context, context=context)
 
 
-def _protect(source: str, *, include_links: bool) -> ProtectedText:
+def _protect(
+    source: str,
+    *,
+    include_links: bool,
+    source_context: str | None = None,
+    context: SourceContext | None = None,
+) -> ProtectedText:
     salt = 0
     while True:
         digest = hashlib.sha256((str(salt) + "\0" + source).encode()).hexdigest()[:8]
@@ -78,10 +106,16 @@ def _protect(source: str, *, include_links: bool) -> ProtectedText:
     existing_markers = [
         match.span() for match in re.finditer(r"\[\[LBR_[A-Za-z0-9]+_[A-Z]+\]\]", source)
     ]
+    lexical_repairs = (
+        repairable_number_spans(source, source_context=source_context, context=context)
+        if include_links
+        else {}
+    )
     numbers = [
         (m.start(), m.end())
         for m in VERBATIM_NUMBER_REGEX.finditer(source)
-        if not any(left <= m.start() < right for left, right in [*links, *existing_markers])
+        if m.span() not in lexical_repairs
+        and not any(left <= m.start() < right for left, right in [*links, *existing_markers])
     ]
     pieces: list[str] = []
     cursor = 0
@@ -89,4 +123,10 @@ def _protect(source: str, *, include_links: bool) -> ProtectedText:
         pieces.extend((source[cursor:left], replace(source[left:right])))
         cursor = right
     pieces.append(source[cursor:])
-    return ProtectedText("".join(pieces), prefix, tuple(values))
+    readings = tuple(
+        NumericReading(observed, reading)
+        for observed, reading in dict.fromkeys(
+            (source[left:right], reading) for (left, right), reading in lexical_repairs.items()
+        )
+    )
+    return ProtectedText("".join(pieces), prefix, tuple(values), readings)

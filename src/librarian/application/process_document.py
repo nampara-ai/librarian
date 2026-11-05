@@ -266,7 +266,8 @@ class ProcessDocument:
                 model_chunks, verified_chunks = select_pdf_chunks_for_cleaning(
                     chunked, normalized_text, extraction_report
                 )
-                cache_version = self.cleaner.cache_version(normalized_text)
+                contextual_cleaner = replace(self.cleaner, document_source=normalized_text.strip())
+                cache_version = contextual_cleaner.cache_version(normalized_text)
                 loaded_cached_chunks = await self.outputs.get_cached_cleaned_chunks(
                     model_chunks,
                     prompt_version=cache_version,
@@ -276,7 +277,7 @@ class ProcessDocument:
                 cached_chunks = [
                     validated
                     for chunk in loaded_cached_chunks
-                    if not (validated := self.cleaner.revalidate(chunk)).fidelity_failed
+                    if not (validated := contextual_cleaner.revalidate(chunk)).fidelity_failed
                 ]
                 if cached_chunks != loaded_cached_chunks:
                     # Upgrade stale cache entries to the current validation
@@ -348,10 +349,9 @@ class ProcessDocument:
                     await self.events.emit(run_id, RunStage.CLEAN, message)
 
                 cleaner = replace(
-                    self.cleaner,
+                    contextual_cleaner,
                     on_attempt=_note_attempt,
                     editorial_context=spelling_sheet,
-                    document_source=normalized_text,
                 )
                 cleaned_missing = await cleaner.execute(
                     chunked,
@@ -474,6 +474,8 @@ class ProcessDocument:
                 final_quality = audit_final_document(
                     normalized_text, assembled, title=classification.title
                 )
+                if any("repaired-decade-shorthand" in item.warnings for item in cleaned_chunks):
+                    cast("list[str]", final_quality["warnings"]).append("repaired-decade-shorthand")
                 queries = UNCLEAR_TRANSCRIPTION_REGEX.findall(assembled)
                 if queries:
                     cast("list[str]", final_quality["warnings"]).append("uncertain-transcription")

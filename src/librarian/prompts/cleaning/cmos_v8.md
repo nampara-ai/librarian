@@ -54,3 +54,8 @@ when context establishes a run-in number as a reference. Brackets or superscript
 surround an unchanged protected token; never change its value or turn a genuine identifier into
 a note. A linguistic example being discussed, including intentionally faulty grammar, retains
 its wording even without quotation marks. Repair the surrounding explanation instead.
+
+Optional numeric_readings describe a narrowly recognized spelling repair in unmasked temporal
+decade shorthand. They do not authorize changing quantities, versions, identifiers, or protected
+tokens. Keep the century unspecified. Check the observed wording and context before using a
+reading; preserve the raw spelling in a local query if its material meaning remains unresolved.

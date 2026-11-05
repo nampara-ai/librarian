@@ -218,3 +218,15 @@ async def test_cached_predecessor_is_available_as_actual_draft_context_in_fast_m
         [first, second], cached_chunks=[CleanedChunk(first, "The first clause", ())]
     )
     assert [result.text for result in results] == ["The first clause", "continues here."]
+
+
+def test_cached_numeric_reading_uses_the_same_document_context_as_generation() -> None:
+    from librarian.application.clean_chunks import CleanedChunk
+
+    source = "We lived during the '7s, a decade of change."
+    start = source.index("'7s")
+    chunk = Chunk(ChunkId("decade"), DocumentId("doc"), 1, "'7s", start, start + 3, "source")
+    cleaner = CleanChunks(object(), PromptCatalog(), "cmos_v8", "test", document_source=source)  # type: ignore[arg-type]
+    checked = cleaner.revalidate(CleanedChunk(chunk, "’70s", ()))
+    assert not checked.fidelity_failed
+    assert "repaired-decade-shorthand" in checked.warnings

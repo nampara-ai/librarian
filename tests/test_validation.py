@@ -391,9 +391,86 @@ def test_linked_superscript_citation_preserves_identity() -> None:
     assert "missing-citation-marker" not in result.warnings
 
 
-
 def test_author_year_citation_spacing_is_typographical() -> None:
     source = "An observation (Smith,2020)."
     output = "An observation (Smith, 2020)."
     result = validate_cleaned_text(output, input_size=len(source), source_text=source)
     assert "missing-citation-marker" not in result.warnings
+
+
+@pytest.mark.parametrize("digit", ["2", "7", "9"])
+def test_temporal_decade_lexical_repair_keeps_one_canonical_reading(digit: str) -> None:
+    source = f"Across decades, that style was popular during the '{digit}s."
+    result = validate_cleaned_text(
+        f"Across decades, that style was popular during the ’{digit}0s.",
+        input_size=len(source),
+        source_text=source,
+    )
+    assert "missing-verbatim-number" not in result.warnings
+    assert "added-verbatim-number" not in result.warnings
+    assert "repaired-decade-shorthand" in result.warnings
+
+
+@pytest.mark.parametrize(
+    "source, output",
+    [
+        ("The interval was 9s.", "The interval was 90s."),
+        ("The model was '9s'.", "The model was '90s'."),
+        ("We worked in the '9s' series.", "We worked in the '90s' series."),
+        ("The version was v9.0.", "The version was v90.0."),
+        ("A literal: `in the '9s`.", "A literal: `in the '90s`."),
+        ("This happened in the '9s.", "This happened in the ’80s."),
+        ("This happened in the '9s.", "This happened in the 1990s."),
+        (
+            "In the '9s, a decade of change, the dose was 9 mg.",
+            "In the ’90s, a decade of change, the dose was 90 mg.",
+        ),
+        ("During the '9s interval, we waited.", "During the ’90s interval, we waited."),
+        (
+            "Decades later, we tested in the '9s interval.",
+            "Decades later, we tested in the ’90s interval.",
+        ),
+        ("It happened during the '9s.", "It happened during the ’90s."),
+    ],
+)
+def test_decade_repair_does_not_relax_numeric_fact_or_identifier_protection(
+    source: str,
+    output: str,
+) -> None:
+    result = validate_cleaned_text(output, input_size=len(source), source_text=source)
+    assert "missing-verbatim-number" in result.warnings
+    assert "added-verbatim-number" in result.warnings
+
+
+def test_local_query_can_preserve_an_unresolved_decade_spelling() -> None:
+    source = "This happened in the '9s, a decade of change."
+    candidate = "This happened in the [transcription unclear: '9s], a decade of change."
+    result = validate_cleaned_text(candidate, input_size=len(source), source_text=source)
+    assert "uncertain-transcription" in result.warnings
+    assert "missing-verbatim-number" not in result.warnings
+    assert "added-verbatim-number" not in result.warnings
+
+
+def test_decade_role_uses_read_only_neighbors_without_counting_their_numbers() -> None:
+    from librarian.pipeline.validation import SourceContext
+
+    source = "'7s"
+    context = SourceContext("The earlier dose was 12.5mg. During the ", ", a decade of change.")
+    result = validate_cleaned_text(
+        "’70s", input_size=len(source), source_text=source, context=context
+    )
+    assert "repaired-decade-shorthand" in result.warnings
+    assert "missing-verbatim-number" not in result.warnings
+    assert "added-verbatim-number" not in result.warnings
+
+
+def test_duration_context_prevents_decade_repair_at_a_transport_boundary() -> None:
+    from librarian.pipeline.validation import SourceContext
+
+    source = "'9s"
+    context = SourceContext("Decades later, we tested during the ", " interval.")
+    result = validate_cleaned_text(
+        "’90s", input_size=len(source), source_text=source, context=context
+    )
+    assert "missing-verbatim-number" in result.warnings
+    assert "added-verbatim-number" in result.warnings

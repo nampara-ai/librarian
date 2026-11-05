@@ -1,0 +1,41 @@
+{
+  "purpose": "Authored real-provider development tests for role-specific numeric corruption and counterexamples; not heldout generalization evidence. References are withheld from generation.",
+  "cases": [
+    {
+      "id": "decade-repair-with-quantities",
+      "input_text": "Across decades styles changed in the '7s the interval remained 9s not 90s the dose was 9mg and firmware v9.0 stayed on device C7s",
+      "reference": "Across decades, styles changed in the ’70s. The interval remained 9s, not 90s. The dose was 9mg, and firmware v9.0 stayed on device C7s.",
+      "requirements": [
+        "Repair the contextually identified missing zero in the abbreviated decade without adding a century.",
+        "Preserve both interval values, the dosage, the version, and the device identifier."
+      ],
+      "exact_fragments": [
+        "v9.0",
+        "C7s"
+      ]
+    },
+    {
+      "id": "quoted-label-is-not-decade",
+      "input_text": "We worked in the '7s' series it was a product label and the test interval was 9s",
+      "reference": "We worked in the ‘7s’ series. It was a product label, and the test interval was 9s.",
+      "requirements": [
+        "Keep the product label 7s unchanged; it is not a decade.",
+        "Keep the test interval as 9 seconds."
+      ],
+      "exact_fragments": [
+        "7s"
+      ]
+    },
+    {
+      "id": "literal-decade-spelling-kept",
+      "input_text": "The literal string is `in the '7s`; it is an example about decades, not a date claim.",
+      "reference": "The literal string is `in the '7s`; it is an example about decades, not a date claim.",
+      "requirements": [
+        "Preserve the literal example exactly, including its intentionally deficient numeral spelling."
+      ],
+      "exact_fragments": [
+        "`in the '7s`"
+      ]
+    }
+  ]
+}

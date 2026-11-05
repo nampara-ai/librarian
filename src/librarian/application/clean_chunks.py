@@ -34,10 +34,12 @@ from librarian.pipeline.editing import (
     verification_pairs,
 )
 from librarian.pipeline.prose_patches import apply_prose_patches, candidate_spans
-from librarian.pipeline.protected_text import protect_prose_data
+from librarian.pipeline.protected_text import NumericReading, protect_prose_data
 from librarian.pipeline.validation import (
     FIDELITY_WARNINGS,
     VERBATIM_NUMBER_REGEX,
+    SourceContext,
+    repairable_number_spans,
     validate_cleaned_text,
 )
 from librarian.prompts.loader import PromptCatalog
@@ -203,6 +205,7 @@ class CleanChunks:
     preparation_provider: LLMProvider | None = None
     generation_signature: str = ""
     source_reading: bool = False
+    unit_target_chars: int = 2000
     document_source: str | None = field(default=None, repr=False)
     # Trailing characters of the preceding chunk handed to the cleaner as
     # read-only continuity context. Chunks no longer overlap in the source, so
@@ -223,7 +226,7 @@ class CleanChunks:
         return tuple(
             editing_units(
                 text,
-                target_chars=2000 if self.plain_edits else 4000,
+                target_chars=self.unit_target_chars if self.plain_edits else 4000,
                 pack_prose_blocks=self.plain_edits,
             )
         )
@@ -242,7 +245,7 @@ class CleanChunks:
         if self.plain_edits:
             prompts["prose_fidelity_v1"] = self.prompt_catalog.get("repair", "prose_fidelity_v1")
             prompts["prose_patch_v1"] = self.prompt_catalog.get("repair", "prose_patch_v1")
-            for name in ("prose_review_v5", "confirm_prose_v5"):
+            for name in ("prose_review_v6", "confirm_prose_v6"):
                 prompts[name] = self.prompt_catalog.get("repair", name)
             if self.source_reading:
                 prompts["source_reading_v1"] = self.prompt_catalog.get(
@@ -250,8 +253,9 @@ class CleanChunks:
                 )
         policy = json.dumps(
             {
-                "policy": 8,
+                "policy": 10,
                 "source_reading": self.source_reading,
+                "unit_target_chars": self.unit_target_chars,
                 "source": hashlib.sha256(source.encode()).hexdigest(),
                 "prompts": prompts,
                 "semantic_verification": self.verify_semantics,
@@ -519,7 +523,10 @@ class CleanChunks:
             started = time.monotonic()
             if attempt and self.plain_edits and "editorial-quality-failed" in warnings:
                 expanded, updated_edits, updated_failures = coalesce_adjacent_repairs(
-                    units, unit_edits, unit_failures
+                    units,
+                    unit_edits,
+                    unit_failures,
+                    max_chars=max(6000, min(12_000, self.unit_target_chars * 2)),
                 )
                 if len(expanded) != len(units):
                     units[:] = expanded
@@ -614,7 +621,14 @@ class CleanChunks:
             unit_warnings: tuple[str, ...] = ()
             stripped_context = False
             if has_units:
-                raw, unit_warnings, unit_failures = decode_edits(raw, units)
+                raw, unit_warnings, unit_failures = decode_edits(
+                    raw,
+                    units,
+                    context=SourceContext(
+                        (previous_source_context or previous_context) + preceding_separator,
+                        following_source_context,
+                    ),
+                )
                 unit_failures.update(generation_failures)
                 unit_warnings = tuple(
                     dict.fromkeys(
@@ -631,7 +645,13 @@ class CleanChunks:
             else:
                 raw, stripped_context = strip_repeated_context(raw, previous_context)
             validated = validate_cleaned_text(
-                raw, input_size=len(chunk.text), source_text=chunk.text
+                raw,
+                input_size=len(chunk.text),
+                source_text=chunk.text,
+                context=SourceContext(
+                    (previous_source_context or previous_context) + preceding_separator,
+                    following_source_context,
+                ),
             )
             warnings = tuple(dict.fromkeys((*unit_warnings, *validated.warnings)))
             structural_failures = FIDELITY_WARNINGS.intersection(warnings)
@@ -863,7 +883,9 @@ class CleanChunks:
                         continue
                 try:
                     protection_warnings: tuple[str, ...] = ()
-                    protected = protect_prose_data(unit.text)
+                    protected = protect_prose_data(
+                        unit.text, context=SourceContext(before + " ", " " + after)
+                    )
                     payload: dict[str, object] = {
                         "context_before": before,
                         "context_after": after,
@@ -886,6 +908,10 @@ class CleanChunks:
                             else ""
                         )
                         payload["protected_values"] = dict(protected.values)
+                        if protected.numeric_readings:
+                            payload["numeric_readings"] = [
+                                reading.as_dict() for reading in protected.numeric_readings
+                            ]
                         if self.source_reading:
                             reading = await read_source(
                                 self.verification_provider or self.provider,
@@ -919,7 +945,9 @@ class CleanChunks:
                 if self.plain_edits:
                     response, protection_warnings = protected.restore(response)
                     response = json.dumps({"edits": [{"id": unit.id, "text": response}]})
-                decoded, problems, _ = decode_edits(response, [unit])
+                decoded, problems, _ = decode_edits(
+                    response, [unit], context=SourceContext(before + " ", " " + after)
+                )
                 if "invalid-edit-structure" in problems:
                     edits[unit.id] = response
                     generation_failures[unit.id] = ["invalid-edit-structure"]
@@ -956,7 +984,9 @@ class CleanChunks:
         edited_before: str = "",
         edited_after: str = "",
     ) -> tuple[str, tuple[str, ...]]:
-        protected = protect_prose_data(candidate)
+        protected = protect_prose_data(
+            candidate, source_context=unit.text, context=SourceContext(before + " ", " " + after)
+        )
         payload: dict[str, object] = {
             "source": unit.text,
             "candidate_spans": [
@@ -968,6 +998,7 @@ class CleanChunks:
             "edited_context_after": edited_after,
             "checks": checks,
             "protected_values": dict(protected.values),
+            "numeric_readings": [reading.as_dict() for reading in protected.numeric_readings],
         }
         for _ in range(2):
             try:
@@ -1041,7 +1072,23 @@ class CleanChunks:
         verified: dict[str, str],
     ) -> tuple[str | None, dict[str, list[str]], str]:
         queue: asyncio.Queue[dict[str, str]] = asyncio.Queue()
-        for pair in pairs:
+        for original_pair in pairs:
+            pair = dict(original_pair)
+            if self.plain_edits:
+                readings = repairable_number_spans(
+                    pair["source"],
+                    context=SourceContext(
+                        pair.get("context_before", "") + " ",
+                        " " + pair.get("context_after", ""),
+                    ),
+                )
+                if readings:
+                    pair["numeric_readings"] = json.dumps(
+                        [
+                            NumericReading(pair["source"][start:end], reading).as_dict()
+                            for (start, end), reading in readings.items()
+                        ]
+                    )
             signature = hashlib.sha256(json.dumps(pair, sort_keys=True).encode()).hexdigest()
             if verified.get(pair["id"]) != signature:
                 queue.put_nowait(pair)
@@ -1057,7 +1104,7 @@ class CleanChunks:
                 warning, issues, response = await self._request_review(
                     system_prompt=(
                         self.prompt_catalog.get(
-                            "repair", "prose_review_v5" if self.plain_edits else "meaning_v1"
+                            "repair", "prose_review_v6" if self.plain_edits else "meaning_v1"
                         )
                         + (
                             ""
@@ -1077,7 +1124,7 @@ class CleanChunks:
                         system_prompt=(
                             self.prompt_catalog.get(
                                 "repair",
-                                "confirm_prose_v5" if self.plain_edits else "confirm_meaning_v1",
+                                "confirm_prose_v6" if self.plain_edits else "confirm_meaning_v1",
                             )
                             + (
                                 ""
@@ -1132,6 +1179,16 @@ class CleanChunks:
             cleaned.text,
             input_size=len(cleaned.chunk.text),
             source_text=cleaned.chunk.text,
+            context=SourceContext(
+                self.document_source[
+                    max(0, cleaned.chunk.start_char - self.context_chars) : cleaned.chunk.start_char
+                ],
+                self.document_source[
+                    cleaned.chunk.end_char : cleaned.chunk.end_char + self.context_chars
+                ],
+            )
+            if self.document_source is not None
+            else None,
         )
         validation_warnings = validated.warnings
         if self.source_aligned and self.verify_semantics:

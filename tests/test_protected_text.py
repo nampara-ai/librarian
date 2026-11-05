@@ -75,3 +75,46 @@ def test_protection_supports_many_distinct_numeric_occurrences() -> None:
     protected = protect_numerals(source)
     assert len(protected.values) == 200
     assert protected.restore(protected.text) == (source, ())
+
+
+def test_prose_mask_allows_contextual_decade_repair_but_freezes_other_numbers() -> None:
+    source = (
+        "Across decades, styles changed during the '7s; "
+        "the interval was 9s and the dose was 12.5mg."
+    )
+    protected = protect_prose_data(source)
+    assert "'7s" in protected.text
+    assert [reading.as_dict() for reading in protected.numeric_readings] == [
+        {"observed": "7", "reading": "70", "role": "decade-shorthand", "century": "unspecified"}
+    ]
+    assert {value for _, value in protected.values} == {"9", "12.5"}
+    edited, warnings = protected.restore(protected.text.replace("'7s", "’70s"))
+    assert (
+        edited == "Across decades, styles changed during the ’70s; "
+        "the interval was 9s and the dose was 12.5mg."
+    )
+    assert warnings == ()
+
+
+def test_patch_can_resolve_a_local_query_using_original_temporal_context() -> None:
+    source = "This happened during the '7s, a decade of change."
+    candidate = "This happened during the [transcription unclear: '7s], a decade of change."
+    protected = protect_prose_data(candidate, source_context=source)
+    assert not protected.values
+    edited, warnings = protected.restore(
+        protected.text.replace("[transcription unclear: '7s]", "’70s")
+    )
+    assert edited == "This happened during the ’70s, a decade of change."
+    assert not warnings
+
+
+def test_established_decade_role_survives_a_narrative_rewrite() -> None:
+    source = "During the '7s, the decade brought changes."
+    candidate = "The ’7s brought changes."
+    protected = protect_prose_data(candidate, source_context=source)
+    assert not protected.values
+    edited, warnings = protected.restore(protected.text.replace("’7s", "’70s"))
+    result = validate_cleaned_text(edited, input_size=len(source), source_text=source)
+    assert not warnings
+    assert "missing-verbatim-number" not in result.warnings
+    assert "added-verbatim-number" not in result.warnings

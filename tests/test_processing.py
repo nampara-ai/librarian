@@ -1315,3 +1315,22 @@ async def test_processing_persists_incremental_chunk_progress(tmp_path: Path) ->
     assert len(observed) >= run.total_chunks
     assert sorted(set(increasing)) == list(range(min(increasing), run.total_chunks + 1))
     assert observed[-1] == run.total_chunks
+
+
+@pytest.mark.asyncio
+async def test_configured_editing_window_reaches_the_engine_and_invalidates_its_cache(
+    tmp_path: Path,
+) -> None:
+    container = await build_container(
+        Settings(
+            data_dir=tmp_path,
+            llm_provider="mock",
+            cleaning_prompt_version="cmos_v8",
+            cleaning_unit_target_chars=6000,
+        )
+    )
+    cleaner = container.process_document.cleaner
+    assert cleaner.unit_target_chars == 6000
+    assert cleaner.cache_version("A source passage.") != replace(
+        cleaner, unit_target_chars=2000
+    ).cache_version("A source passage.")

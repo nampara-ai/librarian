@@ -100,6 +100,12 @@ REPEATED_TAIL_MIN_REPEATS = 8
 
 
 @dataclass(frozen=True, slots=True)
+class SourceContext:
+    before: str = ""
+    after: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class ValidationResult:
     """Validated text and warnings."""
 
@@ -116,6 +122,7 @@ def validate_cleaned_text(
     *,
     input_size: int,
     source_text: str | None = None,
+    context: SourceContext | None = None,
 ) -> ValidationResult:
     """Remove obvious LLM artifacts and report suspicious output."""
     warnings: list[str] = []
@@ -137,7 +144,7 @@ def validate_cleaned_text(
         warnings.append("suspiciously-short-output")
 
     text = _normalize_output_whitespace(text)
-    warnings.extend(_markdown_quality_warnings(text, source_text=source_text))
+    warnings.extend(_markdown_quality_warnings(text, source_text=source_text, context=context))
     return ValidationResult(text=text, warnings=tuple(warnings))
 
 
@@ -158,6 +165,73 @@ def filter_artifact_lines(text: str, *, source_text: str | None = None) -> str:
         return "".join(kept)
 
     return transform_prose(text, filter_prose).strip()
+
+
+def repairable_number_spans(
+    text: str, *, source_context: str | None = None, context: SourceContext | None = None
+) -> dict[tuple[int, int], str]:
+    """Recognize missing-zero decade spelling only with temporal and decade evidence.
+
+    Values in measurements, versions, identifiers, and quoted labels stay immutable.
+    Each recognized digit has exactly one canonical reading. Read-only neighbors
+    keep the decision independent of transport boundaries; queries can retain raw spelling.
+    """
+    prefix = context.before[-600:] if context else ""
+    suffix = context.after[:600] if context else ""
+    combined = prefix + text + suffix
+    offset = len(prefix)
+    supported: set[str] = (
+        set(repairable_number_spans(source_context, context=context).values())
+        if source_context is not None
+        else set()
+    )
+    pattern = re.compile(
+        r"\b(?:in|during|since|throughout|from)\s+(?:the\s+)?['’]([1-9])s\b(?!['’])", re.I
+    )
+    duration = re.compile(
+        r"\s+(?:interval|duration|delay|timeout|pulse|measurement|timer|window)\b", re.I
+    )
+    peers = re.compile(
+        r"\b(?:in|during|since|throughout|from)\s+(?:the\s+['’]?|['’])[1-9]0s\b", re.I
+    )
+    protected = [*protected_spans(text), *(m.span() for m in re.finditer(r"`[^`\n]+`", text))]
+    readings: dict[tuple[int, int], str] = {}
+    for match in pattern.finditer(combined):
+        start, end = match.start(1) - offset, match.end(1) - offset
+        if not 0 <= start < end <= len(text):
+            continue
+        if any(left <= start < right for left, right in protected):
+            continue
+        if duration.match(combined[match.end() :]):
+            continue
+        canonical = match.group(1) + "0"
+        local = combined[max(0, match.start() - 600) : match.end() + 600]
+        if (
+            canonical in supported
+            or re.search(r"\bdecades?\b", local, re.I)
+            or any(not duration.match(local[peer.end() :]) for peer in peers.finditer(local))
+        ):
+            readings[(start, end)] = canonical
+    # A rewrite or a local query can move the same observed decade away from
+    # its original preposition. Inherit its established role from source only.
+    for match in re.finditer(r"['’]([1-9])s\b(?!['’])", text):
+        canonical = match.group(1) + "0"
+        if (
+            canonical in supported
+            and not duration.match(text[match.end() :])
+            and not any(left <= match.start(1) < right for left, right in protected)
+        ):
+            readings[match.span(1)] = canonical
+    return readings
+
+
+def verbatim_number_values(
+    text: str, *, source_context: str | None = None, context: SourceContext | None = None
+) -> list[str]:
+    readings = repairable_number_spans(text, source_context=source_context, context=context)
+    return [
+        readings.get(match.span(), match.group()) for match in VERBATIM_NUMBER_REGEX.finditer(text)
+    ]
 
 
 def _citation_markers(text: str) -> Counter[str]:
@@ -185,7 +259,9 @@ def _citation_markers(text: str) -> Counter[str]:
     return markers
 
 
-def _markdown_quality_warnings(text: str, *, source_text: str | None) -> list[str]:
+def _markdown_quality_warnings(
+    text: str, *, source_text: str | None, context: SourceContext | None = None
+) -> list[str]:
     warnings: list[str] = []
     if CONTEXT_MARKER_REGEX.search(text):
         warnings.append("context-marker-leak")
@@ -246,12 +322,18 @@ def _markdown_quality_warnings(text: str, *, source_text: str | None) -> list[st
             warnings.append("changed-table-values")
     if len(PAGE_BREAK_REGEX.findall(source_text)) != len(PAGE_BREAK_REGEX.findall(text)):
         warnings.append("changed-page-breaks")
-    source_numbers = Counter(VERBATIM_NUMBER_REGEX.findall(source_text))
-    output_numbers = Counter(VERBATIM_NUMBER_REGEX.findall(text))
+    source_numbers = Counter(verbatim_number_values(source_text, context=context))
+    output_numbers = Counter(
+        verbatim_number_values(text, source_context=source_text, context=context)
+    )
     if source_numbers - output_numbers:
         warnings.append("missing-verbatim-number")
     if output_numbers - source_numbers:
         warnings.append("added-verbatim-number")
+    if source_numbers == output_numbers and Counter(
+        VERBATIM_NUMBER_REGEX.findall(source_text)
+    ) != Counter(VERBATIM_NUMBER_REGEX.findall(text)):
+        warnings.append("repaired-decade-shorthand")
     source_words = re.findall(r"\b\w+\b", source_text)
     output_words = re.findall(r"\b\w+\b", text)
     if len(source_words) >= 200 and len(output_words) < len(source_words) * 0.8:

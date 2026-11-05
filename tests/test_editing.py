@@ -381,3 +381,65 @@ async def test_pipeline_repairs_coupled_unit_boundaries_in_one_atomic_window(
     result = (await cleaner.execute([chunk]))[0]
     assert result.text == "She said, “A greeting and goodbye.”"
     assert provider.patch_calls == 1
+
+
+@pytest.mark.parametrize(
+    "source, candidate, warning",
+    [
+        ("A damaged term.", "A [transcription unclear: damaged] term.", "uncertain-transcription"),
+        (
+            "It happened during the '7s, a decade of change.",
+            "It happened during the ’70s, a decade of change.",
+            "repaired-decade-shorthand",
+        ),
+    ],
+)
+def test_review_advisories_do_not_schedule_automatic_unit_regeneration(
+    source: str,
+    candidate: str,
+    warning: str,
+) -> None:
+    units = [EditUnit("u0000", source, "prose", "")]
+    text, warnings, failures = decode_edits(
+        json.dumps({"edits": [{"id": "u0000", "text": candidate}]}), units
+    )
+    assert text == candidate
+    assert warning in warnings
+    assert failures == {}
+
+
+@pytest.mark.asyncio
+async def test_editor_and_reviewer_share_the_same_contextual_numeric_contract() -> None:
+    class Provider:
+        name = "numeric-contract"
+        reviewed = False
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            payload = json.loads(user_prompt)
+            expected = [
+                {
+                    "observed": "7",
+                    "reading": "70",
+                    "role": "decade-shorthand",
+                    "century": "unspecified",
+                }
+            ]
+            if "pairs" in payload:
+                self.reviewed = True
+                assert json.loads(payload["pairs"][0]["numeric_readings"]) == expected
+                return '{"issues": []}'
+            assert payload["numeric_readings"] == expected
+            assert list(payload["protected_values"].values()) == ["9"]
+            return payload["source"].replace("'7s", "’70s")
+
+    source = "Styles changed in the '7s, a decade when the dose was 9 mg."
+    chunk = Chunk(
+        ChunkId("numeric-contract"), DocumentId("doc"), 0, source, 0, len(source), "source"
+    )
+    provider = Provider()
+    cleaner = CleanChunks(provider, PromptCatalog(), "cmos_v8", "test")
+    result = (await cleaner.execute([chunk]))[0]
+    assert result.text == "Styles changed in the ’70s, a decade when the dose was 9 mg."
+    assert not result.fidelity_failed
+    assert "repaired-decade-shorthand" in result.warnings
+    assert provider.reviewed

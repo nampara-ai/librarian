@@ -12,7 +12,12 @@ from typing import cast
 from librarian.domain.ids import DocumentId
 from librarian.pipeline.chunking import ChunkingPolicy, chunk_text
 from librarian.pipeline.markdown import protected_spans
-from librarian.pipeline.validation import VERBATIM_NUMBER_REGEX, validate_cleaned_text
+from librarian.pipeline.validation import (
+    FIDELITY_WARNINGS,
+    VERBATIM_NUMBER_REGEX,
+    SourceContext,
+    validate_cleaned_text,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,7 +111,7 @@ def editing_units(
 
 
 def decode_edits(
-    raw: str, units: Sequence[EditUnit]
+    raw: str, units: Sequence[EditUnit], *, context: SourceContext | None = None
 ) -> tuple[str, tuple[str, ...], dict[str, list[str]]]:
     """Require every ID exactly once in source order, then validate every edited span."""
     body = raw.strip()
@@ -124,14 +129,29 @@ def decode_edits(
         return "", ("invalid-edit-structure",), {}
     parts: list[str] = []
     failures: dict[str, list[str]] = {}
-    for unit, item in zip(units, cast("list[object]", edits), strict=True):
+    all_warnings: list[str] = []
+    for index, (unit, item) in enumerate(zip(units, cast("list[object]", edits), strict=True)):
         if not isinstance(item, dict):
             return "", ("invalid-edit-structure",), {}
         entry = cast("dict[str, object]", item)
         text = entry.get("text")
         if set(entry) != {"id", "text"} or entry.get("id") != unit.id or not isinstance(text, str):
             return "", ("invalid-edit-structure",), {}
-        result = validate_cleaned_text(text, input_size=len(unit.text), source_text=unit.text)
+        neighbors = SourceContext(
+            (units[index - 1].text + unit.separator)[-600:]
+            if index
+            else context.before
+            if context
+            else "",
+            (units[index + 1].separator + units[index + 1].text)[:600]
+            if index + 1 < len(units)
+            else context.after
+            if context
+            else "",
+        )
+        result = validate_cleaned_text(
+            text, input_size=len(unit.text), source_text=unit.text, context=neighbors
+        )
         warnings = list(result.warnings)
         if (
             unit.kind == "prose"
@@ -142,14 +162,15 @@ def decode_edits(
             warnings.append("unchanged-unclean-prose")
         if unit.kind == "code" and result.text != unit.text:
             warnings.append("changed-code-block")
-        if warnings:
-            failures[unit.id] = warnings
+        all_warnings.extend(warnings)
+        blocking = [warning for warning in warnings if warning in FIDELITY_WARNINGS]
+        if blocking:
+            failures[unit.id] = blocking
         separator = unit.separator
         edited = result.text
         edited = _canonical_unit_text(edited, unit, parts[-1] if parts else "")
         parts.append((separator if parts else "") + edited)
-    warnings = tuple(dict.fromkeys(warning for values in failures.values() for warning in values))
-    return "".join(parts), warnings, failures
+    return "".join(parts), tuple(dict.fromkeys(all_warnings)), failures
 
 
 def _canonical_unit_text(text: str, unit: EditUnit, previous: str) -> str:

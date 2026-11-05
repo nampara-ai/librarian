@@ -169,6 +169,7 @@ async def build_container(
         max_tokens=resolved_settings.llm_max_output_tokens,
         temperature=resolved_settings.cleaning_temperature,
         source_reading=resolved_settings.cleaning_source_reading,
+        unit_target_chars=resolved_settings.cleaning_unit_target_chars,
         coherence_mode=resolved_settings.coherence_mode,
         max_parallel_chunks=resolved_settings.llm_max_concurrency,
         max_response_chars=resolved_settings.llm_max_response_chars,
