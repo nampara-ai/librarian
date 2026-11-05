@@ -34,12 +34,11 @@ from librarian.pipeline.editing import (
     verification_pairs,
 )
 from librarian.pipeline.prose_patches import apply_prose_patches, candidate_spans
-from librarian.pipeline.protected_text import NumericReading, protect_prose_data
+from librarian.pipeline.protected_text import protect_prose_data
 from librarian.pipeline.validation import (
     FIDELITY_WARNINGS,
     VERBATIM_NUMBER_REGEX,
     SourceContext,
-    repairable_number_spans,
     validate_cleaned_text,
 )
 from librarian.prompts.loader import PromptCatalog
@@ -245,15 +244,15 @@ class CleanChunks:
         if self.plain_edits:
             prompts["prose_fidelity_v1"] = self.prompt_catalog.get("repair", "prose_fidelity_v1")
             prompts["prose_patch_v1"] = self.prompt_catalog.get("repair", "prose_patch_v1")
-            for name in ("prose_review_v6", "confirm_prose_v6"):
+            for name in ("prose_review_v8", "confirm_prose_v8"):
                 prompts[name] = self.prompt_catalog.get("repair", name)
             if self.source_reading:
-                prompts["source_reading_v1"] = self.prompt_catalog.get(
-                    "repair", "source_reading_v1"
+                prompts["source_reading_v2"] = self.prompt_catalog.get(
+                    "repair", "source_reading_v2"
                 )
         policy = json.dumps(
             {
-                "policy": 10,
+                "policy": 11,
                 "source_reading": self.source_reading,
                 "unit_target_chars": self.unit_target_chars,
                 "source": hashlib.sha256(source.encode()).hexdigest(),
@@ -922,6 +921,7 @@ class CleanChunks:
                                 after,
                                 max_tokens=min(self.max_tokens, 8192),
                                 temperature=self.verification_temperature,
+                                prompt_version="source_reading_v2",
                             )
                             payload["source_reading"] = reading.model_dump()
                     else:
@@ -1023,7 +1023,12 @@ class CleanChunks:
         return candidate, ("invalid-prose-patch",)
 
     async def _request_review(
-        self, system_prompt: str, payload: dict[str, object], unit_id: str
+        self,
+        system_prompt: str,
+        payload: dict[str, object],
+        unit_id: str,
+        *,
+        confirmation_checks: Sequence[str] | None = None,
     ) -> tuple[str | None, dict[str, list[str]], str]:
         request = dict(payload)
         attempts: list[dict[str, object]] = []
@@ -1045,7 +1050,11 @@ class CleanChunks:
             else:
                 if len(raw) > self.max_response_chars:
                     raise ValueError("Review response exceeded configured character limit")
-                warning, issues = _meaning_issues(raw, {unit_id})
+                warning, issues = (
+                    _confirmation_issues(raw, unit_id, confirmation_checks)
+                    if confirmation_checks is not None
+                    else _meaning_issues(raw, {unit_id})
+                )
                 error = "invalid-review-json"
             attempts.append(
                 {
@@ -1056,8 +1065,10 @@ class CleanChunks:
             if warning != "invalid-fidelity-verification":
                 return warning, issues, json.dumps({"attempts": attempts}, ensure_ascii=False)
             # Schema repair never supplies a desired substantive verdict.
-            request["review_format_error"] = (
-                error + "; return valid issues JSON with the original ID."
+            request["review_format_error"] = error + (
+                "; return exactly one checks entry for every original check ID, in order."
+                if confirmation_checks is not None
+                else "; return valid issues JSON with the original ID."
             )
             request["previous_review"] = raw[:8192]
         return (
@@ -1075,19 +1086,20 @@ class CleanChunks:
         for original_pair in pairs:
             pair = dict(original_pair)
             if self.plain_edits:
-                readings = repairable_number_spans(
+                data = protect_prose_data(
                     pair["source"],
                     context=SourceContext(
                         pair.get("context_before", "") + " ",
                         " " + pair.get("context_after", ""),
                     ),
                 )
-                if readings:
+                if data.numeric_readings:
                     pair["numeric_readings"] = json.dumps(
-                        [
-                            NumericReading(pair["source"][start:end], reading).as_dict()
-                            for (start, end), reading in readings.items()
-                        ]
+                        [reading.as_dict() for reading in data.numeric_readings]
+                    )
+                if data.values:
+                    pair["immutable_source_values"] = json.dumps(
+                        dict(Counter(value for _, value in data.values))
                     )
             signature = hashlib.sha256(json.dumps(pair, sort_keys=True).encode()).hexdigest()
             if verified.get(pair["id"]) != signature:
@@ -1104,7 +1116,7 @@ class CleanChunks:
                 warning, issues, response = await self._request_review(
                     system_prompt=(
                         self.prompt_catalog.get(
-                            "repair", "prose_review_v6" if self.plain_edits else "meaning_v1"
+                            "repair", "prose_review_v8" if self.plain_edits else "meaning_v1"
                         )
                         + (
                             ""
@@ -1124,7 +1136,7 @@ class CleanChunks:
                         system_prompt=(
                             self.prompt_catalog.get(
                                 "repair",
-                                "confirm_prose_v6" if self.plain_edits else "confirm_meaning_v1",
+                                "confirm_prose_v8" if self.plain_edits else "confirm_meaning_v1",
                             )
                             + (
                                 ""
@@ -1132,8 +1144,19 @@ class CleanChunks:
                                 else "\n\nApproved spelling sheet:\n" + self.editorial_context
                             )
                         ),
-                        payload={"pair": pair, "proposed_issues": issues[pair["id"]]},
+                        payload=(
+                            {
+                                "pair": pair,
+                                "checks": [
+                                    {"id": f"c{index}", "problem": problem}
+                                    for index, problem in enumerate(issues[pair["id"]])
+                                ],
+                            }
+                            if self.plain_edits
+                            else {"pair": pair, "proposed_issues": issues[pair["id"]]}
+                        ),
                         unit_id=pair["id"],
+                        confirmation_checks=issues[pair["id"]] if self.plain_edits else None,
                     )
                     record["confirmation"] = confirmation
                     if confirmed_warning == "invalid-fidelity-verification":
@@ -1240,3 +1263,38 @@ def _meaning_issues(raw: str, ids: set[str]) -> tuple[str | None, dict[str, list
             return "invalid-fidelity-verification", {}
         problems.setdefault(unit_id, []).append(problem[:1000])
     return ("semantic-fidelity-failed" if problems else None), problems
+
+
+def _confirmation_issues(
+    raw: str, unit_id: str, proposed: Sequence[str]
+) -> tuple[str | None, dict[str, list[str]]]:
+    """Require an explicit decision for every check, including rejected ones."""
+    fenced = re.fullmatch(r"```(?:json)?\s*([\s\S]+?)\s*```", raw.strip(), re.I)
+    if fenced:
+        raw = fenced.group(1)
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return "invalid-fidelity-verification", {}
+    if not isinstance(value, dict) or set(cast("dict[str, object]", value)) != {"checks"}:
+        return "invalid-fidelity-verification", {}
+    checks = cast("dict[str, object]", value)["checks"]
+    if not isinstance(checks, list) or len(cast("list[object]", checks)) != len(proposed):
+        return "invalid-fidelity-verification", {}
+    confirmed: list[str] = []
+    for index, item in enumerate(cast("list[object]", checks)):
+        if not isinstance(item, dict):
+            return "invalid-fidelity-verification", {}
+        entry = cast("dict[str, object]", item)
+        reason = entry.get("reason")
+        if (
+            set(entry) != {"id", "confirmed", "reason"}
+            or entry.get("id") != f"c{index}"
+            or not isinstance(entry.get("confirmed"), bool)
+            or not isinstance(reason, str)
+            or not reason.strip()
+        ):
+            return "invalid-fidelity-verification", {}
+        if entry["confirmed"]:
+            confirmed.append(reason[:1000])
+    return ("semantic-fidelity-failed", {unit_id: confirmed}) if confirmed else (None, {})

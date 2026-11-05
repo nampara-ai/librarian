@@ -42,3 +42,9 @@ reading; preserve the raw spelling in a local query if its material meaning rema
 If a material reading remains unresolved, use exactly [transcription unclear: actual source words]
 around that source span. Do not add ad hoc “source reads,” “verify,” or speculative question notes.
 A query preserves observed wording; it does not assert one reading and append an alternative.
+
+Keep modifiers attached to the claims they qualify. When restoring punctuation, preserve the
+attachment indicated by source word order, grammar, and context. Do not move a postposed time,
+cause, condition, or confidence qualifier into a later sentence to make the prose smoother.
+Preserve forward attachment when source punctuation or context establishes it. A qualifier's
+scope is part of meaning, even if all its words survive elsewhere in the paragraph.

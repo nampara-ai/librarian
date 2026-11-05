@@ -59,3 +59,9 @@ Optional numeric_readings describe a narrowly recognized spelling repair in unma
 decade shorthand. They do not authorize changing quantities, versions, identifiers, or protected
 tokens. Keep the century unspecified. Check the observed wording and context before using a
 reading; preserve the raw spelling in a local query if its material meaning remains unresolved.
+
+Keep modifiers attached to the claims they qualify. When restoring punctuation, preserve the
+attachment indicated by source word order, grammar, and context. Do not move a postposed time,
+cause, condition, or confidence qualifier into a later sentence to make the prose smoother.
+Preserve forward attachment when source punctuation or context establishes it. A qualifier's
+scope is part of meaning, even if all its words survive elsewhere in the paragraph.

@@ -25,6 +25,15 @@ async def test_changed_neighbour_invalidates_an_unchanged_units_review() -> None
         async def complete(self, *, user_prompt: str, **_: object) -> str:
             self.calls += 1
             payload = json.loads(user_prompt)
+            if "pair" in payload and "checks" in payload:
+                return json.dumps(
+                    {
+                        "checks": [
+                            {"id": check["id"], "confirmed": True, "reason": check["problem"]}
+                            for check in payload["checks"]
+                        ]
+                    }
+                )
             pair = payload.get("pair") or payload["pairs"][0]
             return json.dumps(
                 {

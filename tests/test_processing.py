@@ -1334,3 +1334,102 @@ async def test_configured_editing_window_reaches_the_engine_and_invalidates_its_
     assert cleaner.cache_version("A source passage.") != replace(
         cleaner, unit_target_chars=2000
     ).cache_version("A source passage.")
+
+
+@pytest.mark.asyncio
+async def test_fully_cached_prose_skips_unavailable_spelling_preparation(tmp_path: Path) -> None:
+    class UnavailablePreparation:
+        name = "unavailable-preparation"
+        calls = 0
+
+        async def complete(self, **_: object) -> str:
+            self.calls += 1
+            raise RuntimeError("The preparation service is unavailable")
+
+    container = await build_container(
+        Settings(data_dir=tmp_path / "data", cleaning_prompt_version="cmos_v8", llm_provider="mock")
+    )
+    source = tmp_path / "complete.md"
+    source.write_text("The committee accepted the evidence. The report is ready for publication.")
+    document = await container.ingest_document.execute(source)
+
+    class FixtureProvider:
+        name = "cache-fixture"
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            try:
+                payload = json.loads(user_prompt)
+            except ValueError:
+                return '{"corrections": []}'
+            if "pairs" in payload:
+                return '{"issues": []}'
+            return payload["source"]
+
+    fixture = FixtureProvider()
+    original_process = replace(
+        container.process_document,
+        cleaner=replace(
+            container.process_document.cleaner,
+            provider=fixture,
+            preparation_provider=fixture,
+            verification_provider=fixture,
+        ),
+    )
+    await original_process.execute(document.document.id)
+    original = await container.repository.get_cleaned_output(document.document.id)
+    unavailable = UnavailablePreparation()
+    process = replace(
+        original_process,
+        cleaner=replace(original_process.cleaner, preparation_provider=unavailable),
+    )
+    run = await process.execute(document.document.id)
+    quality = json.loads(await container.repository.get_text(run_quality_key(run.id)))
+    output = await container.repository.get_cleaned_output(document.document.id)
+    assert unavailable.calls == 0
+    assert run.status == RunStatus.SUCCEEDED
+    assert quality["cached_cleaned_chunks"] == quality["chunks"] == 1
+    assert original is not None and output is not None
+    assert output.text == original.text
+
+
+@pytest.mark.asyncio
+async def test_accepted_local_query_is_published_as_needs_review_not_fully_cleaned(
+    tmp_path: Path,
+) -> None:
+    class FixtureProvider:
+        name = "query-fixture"
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            try:
+                payload = json.loads(user_prompt)
+            except ValueError:
+                return '{"corrections": []}'
+            if "pairs" in payload:
+                return '{"issues": []}'
+            return payload["source"].replace(
+                "[unintelligible]", "[transcription unclear: unintelligible]"
+            )
+
+    container = await build_container(
+        Settings(data_dir=tmp_path / "data", llm_provider="mock", cleaning_prompt_version="cmos_v8")
+    )
+    fixture = FixtureProvider()
+    process = replace(
+        container.process_document,
+        cleaner=replace(
+            container.process_document.cleaner,
+            provider=fixture,
+            preparation_provider=fixture,
+            verification_provider=fixture,
+        ),
+    )
+    source = tmp_path / "source.md"
+    source.write_text("The shipment contains 318 units of [unintelligible].")
+    document = await container.ingest_document.execute(source)
+    run = await process.execute(document.document.id)
+    quality = json.loads(await container.repository.get_text(run_quality_key(run.id)))
+    output = await container.repository.get_cleaned_output(document.document.id)
+    assert run.status == RunStatus.SUCCEEDED
+    assert quality["cleaning_status"] == "needs-review"
+    assert quality["editorial_queries"] == ["unintelligible"]
+    assert output is not None and "318" in output.text

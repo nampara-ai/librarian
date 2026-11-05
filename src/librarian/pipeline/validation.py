@@ -243,6 +243,17 @@ def _citation_markers(text: str) -> Counter[str]:
     )
     for match in pattern.finditer(text):
         identity = next(value for value in match.groups() if value is not None)
+        if not match.group().startswith("[^") and identity.casefold() in {
+            "inaudible",
+            "unintelligible",
+            "unclear",
+            "music",
+            "applause",
+            "laughter",
+            "silence",
+            "crosstalk",
+        }:
+            continue
         if text[max(0, match.start() - 1) : match.start()] == "!":
             continue
         if (

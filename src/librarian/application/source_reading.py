@@ -31,6 +31,7 @@ async def read_source(
     *,
     max_tokens: int,
     temperature: float,
+    prompt_version: str = "source_reading_v1",
 ) -> SourceReading:
     payload: dict[str, object] = {
         "source": source,
@@ -40,7 +41,7 @@ async def read_source(
     for attempt in range(2):
         raw = await complete_json(
             provider,
-            system_prompt=catalog.get("repair", "source_reading_v1"),
+            system_prompt=catalog.get("repair", prompt_version),
             user_prompt=json.dumps(payload, ensure_ascii=False),
             model=model,
             max_tokens=max_tokens,

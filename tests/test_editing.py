@@ -212,6 +212,15 @@ async def test_dependent_repairs_receive_preceding_committed_draft() -> None:
 
         async def complete(self, *, user_prompt: str, **_: object) -> str:
             payload = json.loads(user_prompt)
+            if "pair" in payload and "checks" in payload:
+                return json.dumps(
+                    {
+                        "checks": [
+                            {"id": check["id"], "confirmed": True, "reason": check["problem"]}
+                            for check in payload["checks"]
+                        ]
+                    }
+                )
             if "pairs" in payload or "pair" in payload:
                 return json.dumps(
                     {"issues": [{"id": "u0001", "problem": "Second source still needs repair."}]}
@@ -350,6 +359,15 @@ async def test_pipeline_repairs_coupled_unit_boundaries_in_one_atomic_window(
 
         async def complete(self, *, user_prompt: str, **_: object) -> str:
             payload = json.loads(user_prompt)
+            if "pair" in payload and "checks" in payload:
+                return json.dumps(
+                    {
+                        "checks": [
+                            {"id": check["id"], "confirmed": True, "reason": check["problem"]}
+                            for check in payload["checks"]
+                        ]
+                    }
+                )
             if "pairs" in payload or "pair" in payload:
                 pair = payload.get("pair") or payload["pairs"][0]
                 if pair["edited"] == "She said, “A greeting and goodbye.”":

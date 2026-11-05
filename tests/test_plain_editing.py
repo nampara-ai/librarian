@@ -79,6 +79,15 @@ async def test_semantic_repair_patches_draft_without_rewriting_accepted_prose() 
 
         async def complete(self, *, user_prompt: str, **_: object) -> str:
             payload = json.loads(user_prompt)
+            if "pair" in payload and "checks" in payload:
+                return json.dumps(
+                    {
+                        "checks": [
+                            {"id": check["id"], "confirmed": True, "reason": check["problem"]}
+                            for check in payload["checks"]
+                        ]
+                    }
+                )
             pair = payload.get("pair") or payload["pairs"][0]
             return json.dumps(
                 {
@@ -130,6 +139,15 @@ async def test_unchanged_short_damaged_prose_is_reviewed_and_locally_repaired() 
             self.calls += 1
             assert "grammatical" in system_prompt
             payload = json.loads(user_prompt)
+            if "pair" in payload and "checks" in payload:
+                return json.dumps(
+                    {
+                        "checks": [
+                            {"id": check["id"], "confirmed": True, "reason": check["problem"]}
+                            for check in payload["checks"]
+                        ]
+                    }
+                )
             pair = payload.get("pair") or payload["pairs"][0]
             return json.dumps(
                 {

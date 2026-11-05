@@ -474,3 +474,22 @@ def test_duration_context_prevents_decade_repair_at_a_transport_boundary() -> No
     )
     assert "missing-verbatim-number" in result.warnings
     assert "added-verbatim-number" in result.warnings
+
+
+def test_transcription_metadata_can_be_normalized_without_losing_a_citation() -> None:
+    source = "The shipment contains 318 units of [unintelligible]."
+    result = validate_cleaned_text(
+        "The shipment contains 318 units of [transcription unclear: unintelligible].",
+        input_size=len(source),
+        source_text=source,
+    )
+    assert "uncertain-transcription" in result.warnings
+    assert "missing-citation-marker" not in result.warnings
+
+
+def test_explicit_footnote_label_stays_protected_even_if_it_names_an_audio_marker() -> None:
+    source = "The statement has support [^music]."
+    result = validate_cleaned_text(
+        "The statement has support.", input_size=len(source), source_text=source
+    )
+    assert "missing-citation-marker" in result.warnings

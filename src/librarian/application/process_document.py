@@ -226,35 +226,6 @@ class ProcessDocument:
                     total_chunks=len(chunked),
                 )
                 await self.runs.save_run(run)
-                spelling_sheet = ""
-                if self.cleaner.source_aligned:
-                    await self.events.emit(
-                        run_id, RunStage.CLEAN, "building document spelling sheet"
-                    )
-                    await self._raise_if_canceled(run_id)
-
-                    async def context_wait(elapsed: float) -> None:
-                        await self._raise_if_canceled(run_id)
-                        await self.events.emit(
-                            run_id,
-                            RunStage.CLEAN,
-                            f"building document spelling sheet: waiting {elapsed:.0f}s",
-                        )
-
-                    spelling_sheet = await await_with_progress(
-                        editorial_context(
-                            self.cleaner.preparation_provider or self.cleaner.provider,
-                            self.cleaner.prompt_catalog,
-                            self.cleaner.model,
-                            normalized_text,
-                            advisory=self.cleaner.plain_edits,
-                        ),
-                        context_wait,
-                    )
-                    await self._raise_if_canceled(run_id)
-                    await self.content.put_text(f"quality:context:{run_id}", spelling_sheet)
-                    await self.events.emit(run_id, RunStage.CLEAN, "document spelling sheet ready")
-                await self._raise_if_canceled(run_id)
                 extraction_report: object = None
                 if document.source.filename.lower().endswith(".pdf"):
                     try:
@@ -297,6 +268,38 @@ class ProcessDocument:
                     failed_chunks=0,
                     stage=RunStage.CLEAN,
                 )
+
+                spelling_sheet = ""
+                if self.cleaner.source_aligned and len(cached_chunks) + len(verified_chunks) < len(
+                    chunked
+                ):
+                    await self.events.emit(
+                        run_id, RunStage.CLEAN, "building document spelling sheet"
+                    )
+                    await self._raise_if_canceled(run_id)
+
+                    async def context_wait(elapsed: float) -> None:
+                        await self._raise_if_canceled(run_id)
+                        await self.events.emit(
+                            run_id,
+                            RunStage.CLEAN,
+                            f"building document spelling sheet: waiting {elapsed:.0f}s",
+                        )
+
+                    spelling_sheet = await await_with_progress(
+                        editorial_context(
+                            self.cleaner.preparation_provider or self.cleaner.provider,
+                            self.cleaner.prompt_catalog,
+                            self.cleaner.model,
+                            normalized_text,
+                            advisory=self.cleaner.plain_edits,
+                        ),
+                        context_wait,
+                    )
+                    await self._raise_if_canceled(run_id)
+                    await self.content.put_text(f"quality:context:{run_id}", spelling_sheet)
+                    await self.events.emit(run_id, RunStage.CLEAN, "document spelling sheet ready")
+                await self._raise_if_canceled(run_id)
 
                 async def _note_chunk_cleaned(cleaned_chunk: CleanedChunk) -> None:
                     # A later chunk may fail or the app may stop. Persist each
