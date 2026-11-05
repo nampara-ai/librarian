@@ -12,7 +12,7 @@
     "cleaning_verification_model": "gpt-6.1-terra",
     "cleaning_verification_reasoning_effort": "medium",
     "coherence_mode": "max-coherence",
-    "cleaning_max_fidelity_retries": 3
+    "cleaning_fidelity_max_retries": 3
   },
   "assessment": {
     "model": "gpt-6-luna",
@@ -25,7 +25,7 @@
     "planned_cases": 30
   },
   "limitations": [
-    "Independent assessment uses a separate prompt and withheld reference, but shares a model with the production reviewer. Model agreement is not proof of correctness.",
+    "Independent assessment uses a separate model, an unchanged prompt, and withheld reference, but models share a provider family. Agreement is not proof of correctness.",
     "The frozen corpus covers new passages from five known public-domain books; it does not cover all genres, languages, or corruption types.",
     "One development screen is weak model-selection evidence; this prospective cohort must retain every failure and cannot prove universal reconstruction."
   ]
