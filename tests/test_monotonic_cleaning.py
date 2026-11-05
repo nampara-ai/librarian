@@ -59,3 +59,158 @@ async def test_passed_units_are_never_edited_or_reviewed_again(
     assert result.text == (
         "The first result stands.\n\nThe second result was 318 units.\n\nThe third result stands."
     )
+
+
+@pytest.mark.asyncio
+async def test_passed_review_checkpoints_before_other_reviewer_fails() -> None:
+    import asyncio
+    from dataclasses import replace
+
+    from librarian.application.errors import LLMAccessError
+    from librarian.application.review_items import UnitCheckpoint
+
+    checkpoint_written = asyncio.Event()
+    snapshots: list[tuple[UnitCheckpoint, ...]] = []
+
+    class Editor:
+        name = "editor"
+        sources: list[str] = []
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            source = json.loads(user_prompt)["source"]
+            self.sources.append(source)
+            return source.replace("teh", "The")
+
+    class Reviewer:
+        name = "reviewer"
+        recover = False
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            source = json.loads(user_prompt)["pairs"][0]["source"]
+            if "second" in source and not self.recover:
+                await checkpoint_written.wait()
+                raise LLMAccessError("provider unavailable", reason="authentication")
+            return json.dumps({"issues": []})
+
+    async def persist(_chunk: Chunk, units: tuple[UnitCheckpoint, ...]) -> None:
+        snapshots.append(units)
+        checkpoint_written.set()
+
+    source = "teh first result stands.\n\nteh second result stands."
+    chunk = Chunk(ChunkId("c"), DocumentId("d"), 0, source, 0, len(source), "sha")
+    editor, reviewer = Editor(), Reviewer()
+    cleaner = CleanChunks(
+        editor,
+        PromptCatalog(),
+        "cmos_v8",
+        "test",
+        unit_target_chars=30,
+        review_mode="strict",
+        verification_provider=reviewer,
+        on_unit_checkpoint=persist,
+    )
+    with pytest.raises(LLMAccessError):
+        await cleaner.execute([chunk])
+    saved = snapshots[-1]
+    assert saved[0].accepted_text == "The first result stands."
+    assert saved[1].accepted_text is None
+    reviewer.recover = True
+    editor.sources.clear()
+    resumed = replace(cleaner, resume_units={chunk.id: saved})
+    result = (await resumed.execute([chunk]))[0]
+    assert editor.sources == ["teh second result stands."]
+    assert result.text == "The first result stands.\n\nThe second result stands."
+
+
+@pytest.mark.asyncio
+async def test_parallel_approvals_cannot_overwrite_a_newer_checkpoint() -> None:
+    import asyncio
+
+    from librarian.application.review_items import UnitCheckpoint
+
+    completions: list[int] = []
+
+    class Editor:
+        name = "editor"
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            return json.loads(user_prompt)["source"].replace("teh", "The")
+
+    class Reviewer:
+        name = "reviewer"
+
+        async def complete(self, **_: object) -> str:
+            return json.dumps({"issues": []})
+
+    async def persist(_chunk: Chunk, units: tuple[UnitCheckpoint, ...]) -> None:
+        accepted = sum(u.accepted_text is not None for u in units)
+        if accepted == 1:
+            await asyncio.sleep(0.02)
+        completions.append(accepted)
+
+    source = "teh first result stands.\n\nteh second result stands."
+    chunk = Chunk(ChunkId("c"), DocumentId("d"), 0, source, 0, len(source), "sha")
+    cleaner = CleanChunks(
+        Editor(),
+        PromptCatalog(),
+        "cmos_v8",
+        "test",
+        unit_target_chars=30,
+        review_mode="strict",
+        verification_provider=Reviewer(),
+        on_unit_checkpoint=persist,
+    )
+    await cleaner.execute([chunk])
+    assert completions == [1, 2]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["strict", "advisory"])
+async def test_review_can_approve_filler_reduction_without_reopening_it(
+    mode: Literal["strict", "advisory"],
+) -> None:
+    body = " ".join(
+        f"The archive entry {letter} remains unchanged." for letter in "abcdefghijklmnopqrstuvwxyz"
+    )
+    first = "um " * 80 + body
+    source = first + "\n\nThe second result was 318 units."
+
+    class Editor:
+        name = "editor"
+        first_calls = 0
+        second_calls = 0
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            text = json.loads(user_prompt)["source"]
+            if "second" in text:
+                self.second_calls += 1
+                return "The second result is unknown." if self.second_calls < 3 else text
+            self.first_calls += 1
+            return body
+
+    class Reviewer:
+        name = "reviewer"
+        first_calls = 0
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            if "archive" in json.loads(user_prompt)["pairs"][0]["source"]:
+                self.first_calls += 1
+            return json.dumps({"issues": []})
+
+    chunk = Chunk(ChunkId("c"), DocumentId("d"), 0, source, 0, len(source), "sha")
+    editor, reviewer = Editor(), Reviewer()
+    cleaner = CleanChunks(
+        editor,
+        PromptCatalog(),
+        "cmos_v8",
+        "test",
+        review_mode=mode,
+        verification_provider=reviewer,
+        unit_target_chars=len(first),
+        unit_max_retries=2,
+    )
+    result = (await cleaner.execute([chunk]))[0]
+    assert editor.first_calls == reviewer.first_calls == 1
+    assert editor.second_calls == 3
+    assert result.text == body + "\n\nThe second result was 318 units."
+    assert not result.fidelity_failed

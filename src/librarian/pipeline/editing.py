@@ -158,11 +158,16 @@ def decode_edits(
         text = entry.get("text")
         if set(entry) != {"id", "text"} or entry.get("id") != unit.id or not isinstance(text, str):
             return "", ("invalid-edit-structure",), {}
+        text = (frozen_edits or {}).get(unit.id, text)
         neighbors = unit_source_context(units, index, context)
         result = validate_cleaned_text(
             text, input_size=len(unit.text), source_text=unit.text, context=neighbors
         )
-        warnings = list(result.warnings)
+        warnings = [
+            w
+            for w in result.warnings
+            if not (w == "substantial-content-loss" and unit.id in (frozen_edits or {}))
+        ]
         if (
             unit.kind == "prose"
             and result.text == unit.text
@@ -219,7 +224,9 @@ def verification_pairs(
     rendered: list[str] = []
     for unit, edit in zip(units, payload["edits"], strict=True):
         validated = validate_cleaned_text(
-            edit["text"], input_size=len(unit.text), source_text=unit.text
+            (frozen_edits or {}).get(unit.id, edit["text"]),
+            input_size=len(unit.text),
+            source_text=unit.text,
         )
         rendered.append(
             (frozen_edits or {}).get(

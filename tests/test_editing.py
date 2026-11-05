@@ -484,3 +484,20 @@ def test_numeric_protection_and_validation_share_full_available_source_context()
     assert not failures
     assert "missing-verbatim-number" not in warnings
     assert "added-verbatim-number" not in warnings
+
+
+def test_frozen_units_validate_the_exact_bytes_that_will_be_rendered() -> None:
+    units = [EditUnit("a", "The timeout is 318 seconds.", "prose", "")]
+    raw = json.dumps({"edits": [{"id": "a", "text": "The timeout is unchanged."}]})
+    frozen = {"a": "The timeout is 318 seconds."}
+    rendered, warnings, failures = decode_edits(raw, units, frozen_edits=frozen)
+    assert rendered == frozen["a"]
+    assert not failures
+    assert "missing-verbatim-number" not in warnings
+    # Even an incorrect caller cannot bypass data guards using the frozen map.
+    _, warnings, failures = decode_edits(
+        raw, units, frozen_edits={"a": "The timeout is 319 seconds."}
+    )
+    assert "a" in failures
+    assert "missing-verbatim-number" in warnings
+    assert "added-verbatim-number" in warnings

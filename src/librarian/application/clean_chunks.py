@@ -157,6 +157,7 @@ class CleaningAttempt:
 
 AttemptCallback = Callable[[CleaningAttempt], Awaitable[None]]
 UnitCheckpointCallback = Callable[[Chunk, tuple[UnitCheckpoint, ...]], Awaitable[None]]
+VerifiedUnitCallback = Callable[[str, str], Awaitable[None]]
 
 
 _CONTEXT_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
@@ -584,6 +585,59 @@ class CleanChunks:
             following_source_context,
         )
 
+        acceptance_lock = asyncio.Lock()
+
+        async def accept_unit(uid: str, text: str, *, number: int, limit: int) -> None:
+            async with acceptance_lock:
+                if uid in frozen_edits:
+                    if frozen_edits[uid] != text:
+                        raise RuntimeError("Accepted unit text cannot be replaced")
+                    return
+                remaining = [
+                    w for w in unit_failures.get(uid, []) if w != "substantial-content-loss"
+                ]
+                if remaining:
+                    raise RuntimeError(
+                        "A unit with unresolved structural violations cannot be accepted"
+                    )
+                unit_failures.pop(uid, None)
+                frozen_edits[uid] = text
+                frozen_ids.add(uid)
+                unit_edits[uid] = text
+                checkpoint = tuple(
+                    UnitCheckpoint(
+                        u.id,
+                        u.text,
+                        u.kind,
+                        u.separator,
+                        frozen_edits.get(u.id),
+                        tuple(advisory_issues.get(u.id, [])),
+                    )
+                    for u in units
+                )
+                if self.on_unit_checkpoint is not None:
+                    await self.on_unit_checkpoint(chunk, checkpoint)
+                if self.on_attempt is not None:
+                    await self.on_attempt(
+                        CleaningAttempt(
+                            chunk,
+                            number,
+                            limit,
+                            "units-accepted",
+                            text=json.dumps(
+                                {
+                                    "units": [
+                                        {
+                                            "id": uid,
+                                            "sha256": hashlib.sha256(text.encode()).hexdigest(),
+                                            "attempts": unit_attempts.get(uid, 0),
+                                        }
+                                    ]
+                                }
+                            ),
+                        )
+                    )
+
         async def generate_attempt(
             prompt: str,
             attempt: int,
@@ -793,7 +847,7 @@ class CleanChunks:
                     pair
                     for pair in pairs
                     if pair["id"] not in frozen_ids
-                    and pair["id"] not in unit_failures
+                    and not (set(unit_failures.get(pair["id"], [])) - {"substantial-content-loss"})
                     and (
                         self.review_mode == "strict"
                         or " ".join(pair["source"].split()) != " ".join(pair["edited"].split())
@@ -824,6 +878,7 @@ class CleanChunks:
                             u.id: unit_source_context(units, i, source_context)
                             for i, u in enumerate(units)
                         },
+                        on_verified=partial(accept_unit, number=attempt + 1, limit=limit),
                     ),
                     note_wait,
                     interval_seconds=progress_interval,
@@ -851,51 +906,12 @@ class CleanChunks:
                         )
                     )
             if has_units and "invalid-edit-structure" not in warnings:
-                newly_accepted: list[str] = []
                 for unit in units:
                     if unit.id not in unit_failures and unit.id in unit_edits:
-                        if unit.id not in frozen_edits:
-                            newly_accepted.append(unit.id)
-                        frozen_edits.setdefault(unit.id, unit_edits[unit.id])
-                frozen_ids = set(frozen_edits)
+                        await accept_unit(
+                            unit.id, unit_edits[unit.id], number=attempt + 1, limit=limit
+                        )
                 unit_edits.update(frozen_edits)
-                if newly_accepted:
-                    accepted_checkpoint = tuple(
-                        UnitCheckpoint(
-                            u.id,
-                            u.text,
-                            u.kind,
-                            u.separator,
-                            frozen_edits.get(u.id),
-                            tuple(advisory_issues.get(u.id, [])),
-                        )
-                        for u in units
-                    )
-                    if self.on_unit_checkpoint is not None:
-                        await self.on_unit_checkpoint(chunk, accepted_checkpoint)
-                    if self.on_attempt is not None:
-                        await self.on_attempt(
-                            CleaningAttempt(
-                                chunk,
-                                attempt + 1,
-                                limit,
-                                "units-accepted",
-                                text=json.dumps(
-                                    {
-                                        "units": [
-                                            {
-                                                "id": uid,
-                                                "sha256": hashlib.sha256(
-                                                    frozen_edits[uid].encode()
-                                                ).hexdigest(),
-                                                "attempts": unit_attempts.get(uid, 0),
-                                            }
-                                            for uid in newly_accepted
-                                        ]
-                                    }
-                                ),
-                            )
-                        )
             blocking = FIDELITY_WARNINGS if self.review_mode == "strict" else DETERMINISTIC_WARNINGS
             accepted = not blocking.intersection(warnings)
             if self.on_attempt is not None:
@@ -953,10 +969,11 @@ class CleanChunks:
                 # The reviewer has exhausted its own format budget. A new draft
                 # cannot repair the reviewer's transport or response schema.
                 break
+        final_warnings = cast("tuple[str, ...]", warnings)
         if self.publish_partial:
             # Invalid candidates never become fallback prose. Preserve the exact
             # source of unresolved units, while retaining independently passed edits.
-            failures = unit_failures or {unit.id: list(warnings) for unit in units}
+            failures = unit_failures or {unit.id: list(final_warnings) for unit in units}
             if not units:
                 return CleanedChunk(
                     chunk,
@@ -964,7 +981,7 @@ class CleanChunks:
                         chunk.text,
                         unit_id="chunk",
                         chunk=chunk.ordinal,
-                        reasons=warnings,
+                        reasons=final_warnings,
                         attempts=attempts_used,
                     ),
                     ("unit-needs-review",),
@@ -978,7 +995,7 @@ class CleanChunks:
                         unit.text,
                         unit_id=unit.id,
                         chunk=chunk.ordinal,
-                        reasons=reasons or warnings,
+                        reasons=reasons or final_warnings,
                         attempts=unit_attempts.get(unit.id, attempts_used),
                     )
                 else:
@@ -989,7 +1006,7 @@ class CleanChunks:
                 )
                 parts.append((unit.separator if parts else "") + text)
             return CleanedChunk(chunk, "".join(parts), ("unit-needs-review",), tuple(checkpoint))
-        raise FidelityValidationError(chunk, attempts_used, warnings)
+        raise FidelityValidationError(chunk, attempts_used, final_warnings)
 
     async def _edit_units(
         self,
@@ -1354,6 +1371,7 @@ class CleanChunks:
         verified: dict[str, str],
         *,
         source_contexts: dict[str, SourceContext] | None = None,
+        on_verified: VerifiedUnitCallback | None = None,
     ) -> tuple[str | None, dict[str, list[str]], str]:
         queue: asyncio.Queue[dict[str, str]] = asyncio.Queue()
         for original_pair in pairs:
@@ -1460,6 +1478,8 @@ class CleanChunks:
                     verified[pair["id"]] = hashlib.sha256(
                         json.dumps(pair, sort_keys=True).encode()
                     ).hexdigest()
+                    if on_verified is not None:
+                        await on_verified(pair["id"], pair["edited"])
                 queue.task_done()
 
         if count:
