@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Retain reviewer-approved filler reductions when restoring unit checkpoints. Continue
+  enforcing numeric/structural guards and explicitly log invalidated checkpoint approvals.
+
 - Check later editorial-risk cues in bounded confirmation batches; never mark partial
   cue coverage as complete. Report excessive review work explicitly and upgrade old receipts.
 

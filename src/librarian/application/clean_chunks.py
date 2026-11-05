@@ -584,6 +584,7 @@ class CleanChunks:
         unit_edits: dict[str, str] = {
             u.unit_id: u.accepted_text for u in saved_units if u.accepted_text is not None
         }
+        checkpoint_deferred: list[dict[str, str]] = []
         if saved_units:
             cached_response = json.dumps(
                 {"edits": [{"id": u.id, "text": unit_edits.get(u.id, u.text)} for u in units]}
@@ -591,15 +592,24 @@ class CleanChunks:
             _, _, checkpoint_failures = decode_edits(
                 cached_response,
                 units,
+                frozen_edits=unit_edits,
                 context=SourceContext(
                     previous_source_context or previous_context, following_source_context
                 ),
             )
             for invalid_id in checkpoint_failures:
+                if invalid_id in unit_edits:
+                    checkpoint_deferred.append(
+                        {
+                            "id": invalid_id,
+                            "reason": "checkpoint-validation-requires-review:"
+                            + ",".join(checkpoint_failures[invalid_id]),
+                        }
+                    )
                 unit_edits.pop(invalid_id, None)
         frozen_edits = dict(unit_edits)
         frozen_ids = set(frozen_edits)
-        legacy_deferred: list[dict[str, str]] = []
+        legacy_deferred = checkpoint_deferred
         editorially_audited = {
             u.unit_id for u in saved_units if u.editorial_audit == EDITORIAL_AUDIT
         }

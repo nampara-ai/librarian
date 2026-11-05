@@ -215,6 +215,27 @@ async def test_review_can_approve_filler_reduction_without_reopening_it(
     assert result.text == body + "\n\nThe second result was 318 units."
     assert not result.fidelity_failed
 
+    from dataclasses import replace
+
+    from librarian.application.review_items import UnitCheckpoint
+
+    restarted_editor, restarted_reviewer = Editor(), Reviewer()
+    restarted = replace(
+        cleaner,
+        provider=restarted_editor,
+        verification_provider=restarted_reviewer,
+        resume_units={
+            chunk.id: (
+                UnitCheckpoint("u0000", first, "prose", "", body),
+                UnitCheckpoint("u0001", "The second result was 318 units.", "prose", "\n\n", None),
+            )
+        },
+    )
+    resumed = (await restarted.execute([chunk]))[0]
+    assert resumed.text == result.text
+    assert restarted_editor.first_calls == restarted_reviewer.first_calls == 0
+    assert restarted_editor.second_calls == 3
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stubborn", [False, True])
@@ -398,3 +419,48 @@ async def test_small_unit_profile_bounds_failed_windows_and_preserves_accepted_n
     assert "The final note is sound." in result.text
     assert editor.sources.count("The final note is sound.") == (0 if legacy_checkpoint else 1)
     assert all(len(s) <= 52 for s in editor.sources)
+
+
+@pytest.mark.asyncio
+async def test_numeric_checkpoint_violation_is_rechecked_and_explicitly_audited() -> None:
+    from librarian.application.clean_chunks import CleaningAttempt
+    from librarian.application.review_items import UnitCheckpoint
+
+    events: list[CleaningAttempt] = []
+
+    async def record(attempt: CleaningAttempt) -> None:
+        events.append(attempt)
+
+    class Provider:
+        name = "test"
+        drafts = 0
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            payload = json.loads(user_prompt)
+            if "pairs" in payload:
+                return json.dumps({"issues": []})
+            self.drafts += 1
+            return payload["source"]
+
+    source = "The shipment had 318 units."
+    chunk = Chunk(ChunkId("c"), DocumentId("d"), 0, source, 0, len(source), "sha")
+    provider = Provider()
+    cleaner = CleanChunks(
+        provider,
+        PromptCatalog(),
+        "cmos_v8",
+        "test",
+        review_mode="strict",
+        on_attempt=record,
+        resume_units={
+            chunk.id: (UnitCheckpoint("u0000", source, "prose", "", "The shipment had 319 units."),)
+        },
+    )
+    result = (await cleaner.execute([chunk]))[0]
+    assert result.text == source
+    assert provider.drafts == 1
+    deferred = next(e for e in events if e.status == "context-approval-deferred")
+    assert deferred.text is not None
+    item = json.loads(deferred.text)["units"][0]
+    assert item["id"] == "u0000"
+    assert item["reason"].startswith("checkpoint-validation-requires-review:")
