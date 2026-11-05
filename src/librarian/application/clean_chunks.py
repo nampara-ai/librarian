@@ -14,7 +14,11 @@ from functools import partial
 from typing import Any, Literal, cast
 
 from librarian.application.async_progress import await_with_progress
-from librarian.application.errors import LLMResponseTruncatedError, ProcessingCanceled
+from librarian.application.errors import (
+    LLMAccessError,
+    LLMResponseTruncatedError,
+    ProcessingCanceled,
+)
 from librarian.application.model_output import complete_json
 from librarian.application.ports import LLMProvider
 from librarian.application.source_reading import read_source
@@ -483,7 +487,7 @@ class CleanChunks:
                     note_wait,
                     interval_seconds=self.progress_interval_seconds,
                 )
-            except ProcessingCanceled:
+            except (ProcessingCanceled, LLMAccessError):
                 raise
             except Exception as exc:  # noqa: BLE001 - identify the chunk without its source text
                 if self.on_attempt is not None:

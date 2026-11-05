@@ -22,7 +22,7 @@ from openai import (
 )
 from openai.types.chat import ChatCompletion
 
-from librarian.application.errors import LLMResponseTruncatedError
+from librarian.application.errors import LLMAccessError, LLMResponseTruncatedError
 from librarian.observability import sanitize_error_message
 
 
@@ -348,6 +348,12 @@ class OpenAICompatibleProvider:
                         adaptations += 1
                         continue
                 if not is_retriable_openai_error(exc):
+                    blocked = provider_access_failure(exc)
+                    if blocked:
+                        raise LLMAccessError(
+                            f"LLM provider request failed: {sanitize_error_message(exc)}",
+                            reason=blocked,
+                        ) from None
                     raise RuntimeError(
                         f"LLM provider request failed: {sanitize_error_message(exc)}"
                     ) from None
@@ -392,8 +398,31 @@ class OpenAICompatibleProvider:
         )
 
 
+def provider_access_failure(exc: Exception) -> str | None:
+    if not isinstance(exc, APIStatusError):
+        return None
+    if int(exc.status_code) in {401, 403}:
+        return "credentials-or-permissions"
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        payload = cast("dict[str, object]", body)
+        error = payload.get("error", payload)
+        if isinstance(error, dict):
+            details = cast("dict[str, object]", error)
+            for field in ("code", "type"):
+                value = details.get(field)
+                if isinstance(value, str) and value in {
+                    "insufficient_quota",
+                    "credit_balance_exhausted",
+                }:
+                    return "credit-exhausted"
+    return None
+
+
 def is_retriable_openai_error(exc: Exception) -> bool:
     """Return true for transient OpenAI-compatible transport/status failures."""
+    if provider_access_failure(exc):
+        return False
     if isinstance(
         exc,
         (TimeoutError, APIConnectionError, APITimeoutError, InternalServerError, RateLimitError),

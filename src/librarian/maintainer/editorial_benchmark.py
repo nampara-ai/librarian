@@ -12,6 +12,7 @@ from typing import Self
 
 from pydantic import BaseModel, Field, model_validator
 
+from librarian.application.errors import LLMAccessError
 from librarian.application.factory import build_container
 from librarian.application.ports import LLMProvider
 from librarian.application.quality_report import run_quality_key
@@ -51,6 +52,7 @@ class EditorialTrial(BaseModel):
     cached_cleaned_chunks: int = 0
     elapsed_seconds: float = 0.0
     error: str | None = None
+    error_kind: str | None = None
     assessment: EditorialAssessment | None = None
     artifact_dir: str
 
@@ -63,21 +65,31 @@ class EditorialBenchmarkResult(BaseModel):
     settings: dict[str, object]
     judge_model: str
     repeats: int
+    planned_trials: int
+    stopped_reason: str | None = None
     trials: list[EditorialTrial]
     artifact_dir: str
 
     @property
     def passed(self) -> bool:
-        return bool(self.trials) and all(trial.passed for trial in self.trials)
+        return (
+            len(self.trials) == self.planned_trials
+            and not self.stopped_reason
+            and all(trial.passed for trial in self.trials)
+        )
 
     def report(self) -> dict[str, object]:
         rows = self.model_dump(mode="json")
         rows["passed"] = self.passed
+        rows["complete"] = len(self.trials) == self.planned_trials and not self.stopped_reason
         rows["summary"] = [
             {
                 "trial": index,
                 "passed_cases": sum(row.passed for row in self.trials if row.trial == index),
                 "total_cases": sum(row.trial == index for row in self.trials),
+                "planned_cases": self.planned_trials // self.repeats,
+                "unattempted_cases": self.planned_trials // self.repeats
+                - sum(row.trial == index for row in self.trials),
                 "processing_failures": sum(
                     not row.processing_succeeded for row in self.trials if row.trial == index
                 ),
@@ -103,6 +115,7 @@ async def run_editorial_benchmark(
     root = output_dir / run_name
     root.mkdir(parents=True, mode=0o700)
     rows: list[EditorialTrial] = []
+    stopped_reason: str | None = None
     serialized = suite.model_dump_json()
     for trial in range(1, repeats + 1):
         for case in suite.cases:
@@ -154,8 +167,13 @@ async def run_editorial_benchmark(
                     max_tokens=16_384,
                 )
                 row.passed = row.assessment.passed
+            except LLMAccessError as exc:
+                row.error = sanitize_error_message(exc)
+                row.error_kind = "provider-access"
+                stopped_reason = exc.reason
             except Exception as exc:  # noqa: BLE001 - every failed trial remains in the denominator
                 row.error = sanitize_error_message(exc)
+                row.error_kind = "assessment" if row.processing_succeeded else "pipeline"
             row.elapsed_seconds = time.monotonic() - started
             (folder / "trial.json").write_text(row.model_dump_json(indent=2), encoding="utf-8")
             (folder / "metrics.json").write_text(
@@ -167,6 +185,10 @@ async def run_editorial_benchmark(
                 json.dumps([item.model_dump(mode="json") for item in rows], indent=2),
                 encoding="utf-8",
             )
+            if stopped_reason:
+                break
+        if stopped_reason:
+            break
     result = EditorialBenchmarkResult(
         evidence_tier="mock-smoke" if settings.llm_provider == "mock" else "real-provider",
         suite_sha256=hashlib.sha256(serialized.encode()).hexdigest(),
@@ -174,6 +196,8 @@ async def run_editorial_benchmark(
         settings=settings.redacted_config(),
         judge_model=judge_model,
         repeats=repeats,
+        planned_trials=len(suite.cases) * repeats,
+        stopped_reason=stopped_reason,
         trials=rows,
         artifact_dir=str(root),
     )

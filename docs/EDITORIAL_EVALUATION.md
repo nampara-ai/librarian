@@ -127,3 +127,14 @@ real-world corruption process. References remain withheld from editing.
 `examples/editorial_style_calibration.json` adds twelve authored assessor controls covering
 legitimate reflow and spelling modernization, authentic quotation, pending events, unfamiliar
 names, and wrapped source text. These are assessor checks, not editor performance results.
+
+OpenAI access was verified with `gpt-6.1-terra` and `gpt-6-luna`. Both passed the twenty meaning
+controls and twelve style controls once using medium reasoning and the unchanged `editorial_v3`
+assessor. This is calibration evidence, not a guarantee. The subsequent Terra trial was blocked
+by the provider's `credit_balance_exhausted` / `insufficient_quota` response after three new
+passages passed. The full private transcript did not finish. The cohort remains incomplete;
+neither 3/3 nor the later billing errors establish full editing reliability.
+
+Terminal credit and credential failures now stop a benchmark rather than issuing the remaining
+requests. Completed trials remain recorded, while planned and unattempted trials stay explicit.
+An interrupted or blocked batch cannot pass. Ordinary transient rate limits remain retryable.

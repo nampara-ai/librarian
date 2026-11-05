@@ -5,6 +5,14 @@ class ProcessingCanceled(RuntimeError):
     """Raised when an operator cancels a processing run."""
 
 
+class LLMAccessError(RuntimeError):
+    """Credentials or credit must change before another provider request can succeed."""
+
+    def __init__(self, message: str, *, reason: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
 class LLMResponseTruncatedError(RuntimeError):
     """A provider exhausted its output budget; partial text is not an accepted answer."""
 

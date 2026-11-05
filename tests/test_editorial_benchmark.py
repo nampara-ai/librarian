@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from librarian.application.errors import LLMAccessError
 from librarian.config import Settings
 from librarian.maintainer.editorial_benchmark import (
     EditorialBenchmarkCase,
@@ -64,3 +65,32 @@ def test_benchmark_rejects_duplicate_case_ids() -> None:
     case = EditorialBenchmarkCase(id="same", input_text="A source.")
     with pytest.raises(ValidationError, match="unique"):
         EditorialBenchmarkSuite(cases=[case, case])
+
+
+@pytest.mark.asyncio
+async def test_credit_failure_stops_batch_without_claiming_incomplete_trials_passed(
+    tmp_path: Path,
+) -> None:
+    class Judge:
+        name = "credit-exhausted"
+        calls = 0
+
+        async def complete(self, **_: object) -> str:
+            self.calls += 1
+            raise LLMAccessError("No credit", reason="credit-exhausted")
+
+    suite = EditorialBenchmarkSuite(
+        cases=[
+            EditorialBenchmarkCase(id="first", input_text="A complete source sentence."),
+            EditorialBenchmarkCase(id="second", input_text="Another complete source sentence."),
+        ]
+    )
+    judge = Judge()
+    result = await run_editorial_benchmark(Settings(), suite, judge, "test", tmp_path, repeats=3)
+    assert not result.passed
+    assert result.stopped_reason == "credit-exhausted"
+    assert result.planned_trials == 6
+    assert len(result.trials) == judge.calls == 1
+    assert result.trials[0].error_kind == "provider-access"
+    assert result.trials[0].processing_succeeded
+    assert result.report()["complete"] is False
