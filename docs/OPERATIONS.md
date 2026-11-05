@@ -210,3 +210,58 @@ SQLite migrations live in `src/librarian/storage/migrations` and apply in lexica
 - Treat applied migrations as immutable; add a new migration for follow-up changes.
 - Keep migrations small enough to review.
 - Add tests for new migrations.
+
+## Bounded editorial recovery
+
+Content repair and provider recovery have separate outcomes. With
+`LIBRARIAN_CLEANING_PUBLISH_PARTIAL=true` (the application default), exhausted
+content repairs publish a draft with explicit `librarian:needs-review` HTML
+comments around unresolved source spans. The run succeeds and the document is
+ready to open, but its quality report says `cleaning_status: needs-review`.
+`needs_review` records unit ID, zero-based chunk index, reasons, attempt count,
+and source text. `kind: source` means the exact source was retained;
+`kind: advisory` retains the edit and records a fallible reviewer concern.
+Neither outcome is a claim that the passage has been fully cleaned.
+The comments remain in Markdown exports; consult the quality report or the Mac
+quality view before treating a draft as final.
+
+Partial work is stored separately from the clean cache. Reprocessing uses
+source- and policy-matched unit checkpoints, preserving accepted bytes and
+retrying unresolved source units. Accepted units also checkpoint before the
+chunk finishes, so a later provider failure does not discard them. Changed
+source, prompts, model settings, or review policy invalidate reuse. Authentication,
+credit, cancellation, storage, and provider failures still stop a run; they do
+not become successful source fallbacks.
+
+`LIBRARIAN_CLEANING_REVIEW_MODE` accepts `off`, `advisory` (default), or `strict`.
+Advisory findings never instruct the editor or cause another draft. Unusable
+reviewer JSON gets one format retry and is then reported as `review-unavailable`.
+Strict review can request bounded, source-grounded repairs and blocks acceptance
+of unresolved semantic issues. To retain the earlier all-or-nothing behavior,
+combine strict review with `LIBRARIAN_CLEANING_PUBLISH_PARTIAL=false`.
+The deprecated `LIBRARIAN_CLEANING_SEMANTIC_VERIFICATION` alias maps explicit
+`true` to strict and `false` to off; remove it when using the new setting.
+Deterministic checks detect defined failures; passing them does not prove
+semantic correctness.
+
+For constrained models, this explicit profile reduces each editing job and
+avoids source-reading and unchanged-prose review calls:
+
+```dotenv
+LIBRARIAN_CLEANING_PROMPT_VERSION=cmos_v8
+LIBRARIAN_CLEANING_REVIEW_MODE=advisory
+LIBRARIAN_CLEANING_PUBLISH_PARTIAL=true
+LIBRARIAN_CLEANING_UNIT_TARGET_CHARS=1200
+LIBRARIAN_CLEANING_UNIT_MAX_RETRIES=3
+LIBRARIAN_CLEANING_SOURCE_READING=false
+LIBRARIAN_LLM_MAX_CONCURRENCY=2
+```
+
+The source-aligned `cmos_v8` editor remains experimental; the release prompt
+selection is unchanged. This profile is a bounded recovery strategy, not a
+quality guarantee for an arbitrary model. Unit edits use the existing worker
+queue; dependent strict semantic patches remain in source order. Accepted units
+are excluded from later editing and review, and their neighbors remain read-only
+context. `units-accepted` attempt records identify accepted IDs and content hashes.
+The unit budget falls back to `CLEANING_FIDELITY_MAX_RETRIES` when
+`CLEANING_UNIT_MAX_RETRIES` is unset; its effective default is three retries.
