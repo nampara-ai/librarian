@@ -111,9 +111,11 @@ be attributed to a single source unit are routed back to prose generation, so re
 real work instead of repeatedly assembling the same rejected draft. In the experimental profile,
 spelling proposals remain advisory and are withheld from the independent reviewer.
 
-Reviewer JSON and truncation failures get a separate two-attempt format budget with the
-candidate frozen. Exhaustion fails review explicitly; it does not trigger another copyedit.
-Each provider request also has a total attempt deadline in addition to HTTP read timeouts.
+Reviewer JSON and truncation failures have a separate format budget with the candidate
+frozen. In advisory mode, exhaustion records `review-unavailable` and does not trigger a
+copyedit or fail publication. Strict mode retains blocking review. With partial publication
+enabled, exhausted content remains explicitly marked for review instead of aborting the
+document. Each provider request also has a total attempt deadline in addition to HTTP timeouts.
 
 ## Second prospective corpus
 
@@ -166,3 +168,49 @@ tag despite an equivalent question. `prose_review_v3` compares pragmatic force i
 requiring the tag verbatim; it handled all 26 controls once. Both results are retained in
 `examples/editorial_production_gate_calibration_summary.json`. The independent evaluation
 prompt remains `editorial_v3`; its gates have not been relaxed.
+
+
+## Recovery contract verification (2026-11-05)
+
+The outside diagnosis at `c24c391` correctly identified blocking reviewer feedback, fragile
+acceptance, and document-wide publication failures. Two qualifications matter: completed
+chunks already had caches, so their work was withheld rather than deleted; and deterministic
+guards are fallible heuristics, not a proof of semantic fidelity. In particular, a word-count
+threshold can reject legitimate removal of transcript filler. A reviewer-approved reduction
+must retain that approval without weakening numeric or structural checks.
+
+The current application defaults to advisory review and explicit partial publication.
+Strict review remains available. A source fallback is never described as cleaned: its exact
+source body has a machine-readable marker and a quality-report item. Infrastructure failures
+still fail the run and preserve accepted-unit checkpoints. Complete chunks use clean caches;
+partial checkpoints retry unresolved units. Accepted bodies are immutable within the active
+review contract. A quotation continuation whose predecessor is unresolved stays provisional.
+Upgrading an old approval that lacks a required review facet is explicitly logged, rather
+than silently called an immutable acceptance.
+
+The private 7,879-word transcript was run through the actual processing service at
+`37a14790bb01f842915ffd38dca35a05e8253085`, using `cmos_v8`, Terra writing and strict review at
+medium reasoning, source reading disabled, 1,200-character source-unit targets, and three unit
+retries. The final recovery completed four chunks with no source fallbacks or unit review
+markers and three retained transcription queries. This recovery used 11 editing calls and
+42 review/confirmation calls; it is not a cold-start timing result. A subsequent full-cache
+run produced byte-identical Markdown with zero editing calls, zero review calls, and one
+classification call. The audit examined 93 recorded editor requests and 15 active accepted
+windows: no unapproved post-acceptance editing or changed accepted bytes. Eight older approvals
+were explicitly reopened across contract upgrades (one quotation dependency and seven missing
+editorial audits); these are reported separately, not hidden as zero rechecks.
+
+The independent Luna assessment, with the unchanged `editorial_v3` rubric, passed five of six
+criteria: completeness, fluency, voice, style, and structure. It failed fidelity on a homophone
+correction inside quoted speech. The local context supports the correction, but the primary
+failed verdict remains retained and is not converted to a pass. Three source queries also
+prevent a full completed-cleanup pass. The preceding recovery had passed fidelity but failed
+fluency and style; that assessment remains retained as well. Neither recovery establishes
+100% editorial reliability.
+
+Five live controls for the added editorial-risk checks preserved genuine alternatives,
+authored expressions, and literal speech while repairing an abandoned referent. They passed
+once with source reading enabled and once with it explicitly disabled. These are the same
+five development cases repeated under two settings, not ten independent holdout cases.
+The frozen V5 corpus remains unevaluated. Private sources, candidates, and provider traces
+remain outside Git. Cerebras qualification has not resumed.
