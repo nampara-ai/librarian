@@ -309,6 +309,7 @@ class ProcessDocument:
                 await self._raise_if_canceled(run_id)
 
                 resume_units = {}
+                accepted_coverage: dict[str, tuple[int, int, int]] = {}
                 for pending_chunk in model_chunks:
                     checkpoint_key = partial_key(
                         cache_version,
@@ -335,6 +336,20 @@ class ProcessDocument:
                             model=self.cleaner.model,
                         ),
                         json.dumps([u.as_dict() for u in units]),
+                    )
+                    lengths = [
+                        len(u.source) + (len(u.separator) if i else 0) for i, u in enumerate(units)
+                    ]
+                    total = sum(lengths)
+                    covered = sum(
+                        size
+                        for u, size in zip(units, lengths, strict=True)
+                        if u.accepted_text is not None
+                    )
+                    accepted_coverage[str(chunk.id)] = (
+                        sum(u.accepted_text is not None for u in units),
+                        len(units),
+                        round(100 * covered / max(1, total)),
                     )
 
                 async def _note_chunk_cleaned(cleaned_chunk: CleanedChunk) -> None:
@@ -391,6 +406,18 @@ class ProcessDocument:
                         f"chunk {attempt.chunk.ordinal + 1}/{len(chunked)} "
                         f"attempt {attempt.number}/{attempt.limit}: {attempt.status}"
                     )
+                    if (
+                        attempt.status == "units-accepted"
+                        and str(attempt.chunk.id) in accepted_coverage
+                    ):
+                        accepted, total, percent = accepted_coverage[str(attempt.chunk.id)]
+                        message = (
+                            f"chunk {attempt.chunk.ordinal + 1}/{len(chunked)}: "
+                            f"accepted {accepted}/{total} units ({percent}% of source)"
+                        )
+                        record["accepted_units"] = accepted
+                        record["total_units"] = total
+                        record["accepted_source_percent"] = percent
                     if attempt.warnings:
                         message += " (" + ", ".join(attempt.warnings) + ")"
                     if attempt.elapsed_seconds:

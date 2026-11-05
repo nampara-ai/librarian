@@ -108,6 +108,8 @@ async def test_document_publishes_explicit_partial_output_and_review_report(tmp_
     assert quality["cleaning_status"] == "needs-review"
     assert len(quality["needs_review"]) == 1
     assert quality["needs_review"][0]["attempts"] == 1
+    events = await container.repository.list_events(run.id)
+    assert any("% of source" in event for event in events)
 
     editor.sources.clear()
     repeated = await process.execute(ingested.document.id)
