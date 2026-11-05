@@ -206,3 +206,31 @@ simpler medium configuration that passed the screen, followed by fresh prospecti
 High reasoning is not presumed to guarantee better editing. The high-reasoning private transcript
 also failed on coupled punctuation repairs before the dependency fixes; no failed output replaced
 the previously completed review draft.
+
+## V4 and independent disagreements
+
+The frozen V4 candidate at `f448a00ebed938412aca70d8ca48d4f1e6a7a4c1` completed its
+first ten cases with 7/10 full Luna-assessed passes and no processing failures. Qualification
+stopped; the other twenty planned generations remain unattempted. Original verdicts are in
+`examples/editorial_terra_v4_summary.json`. A single, separate Terra assessment of **all ten
+unchanged candidates**, blinded to primary scores, returned 8/10. It did not regenerate text
+or supersede the primary scores; see `examples/editorial_terra_v4_secondary_summary.json`.
+
+Both reviewers flagged institution capitalization and run-in footnote numbers in two passages.
+Luna also mistakenly treated an independent possessive pronoun as an incomplete noun phrase.
+The original source ends in the same valid construction. Eight authored controls in
+`examples/editorial_ellipsis_calibration.json` distinguish grammatical ellipsis and independent
+possessives from malformed syntax and invented events. Both models handled all eight once;
+this demonstrates that simple calibration success does not eliminate long-context false positives.
+The independent assessment prompt remains `editorial_v3`, without case-specific exceptions.
+
+V5 broadens the prospective corpus to five previously unused books and authors: Brontë's
+*Jane Eyre*, Faraday's *The Chemical History of a Candle*, Paine's *Common Sense*, Strunk's
+*The Elements of Style*, and Douglass's *Narrative*. Seed `2026110505` selects ten passages,
+five actual OCR readings and five punctuation-removal transformations. The frozen file
+`examples/editorial_holdout_v5.json` has SHA-256
+`811ce24bcfa3bd0aabb802e46c7fe1d41154f27665f3e82227df50fa053339dd`.
+Book catalog IDs and titles are checked before selection. An earlier preparation draft had
+an incorrect science-book ID; it was archived with the metadata error, never evaluated, and
+replaced before this freeze. None of the selected V5 passages was inspected for prompt tuning.
+This expands author and genre coverage but still does not represent every real-world document.

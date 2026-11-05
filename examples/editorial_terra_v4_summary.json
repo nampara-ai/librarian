@@ -1,0 +1,234 @@
+{
+  "planned_cases": 30,
+  "completed_cases": 10,
+  "unattempted_cases": 20,
+  "complete": false,
+  "passed": false,
+  "stopped_reason": "failed-qualification-trial-1",
+  "git_revision": "f448a00ebed938412aca70d8ca48d4f1e6a7a4c1",
+  "suite_file_sha256": "8443edabcc90844f8395acfd25757d1cf69f159d51aed3203b41e3b871204a01",
+  "profile": "examples/editorial_candidate_v4_profile.json",
+  "purpose": "Original prospective V4 scores, retained without modification. Qualification stopped after the failed first trial; secondary assessment, if any, is separate.",
+  "full_passes": 7,
+  "cases": [
+    {
+      "case_id": "fiction-v4-1",
+      "qualification_trial": 1,
+      "passed": true,
+      "processing_succeeded": true,
+      "error_kind": null,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "fiction-v4-2",
+      "qualification_trial": 1,
+      "passed": false,
+      "processing_succeeded": true,
+      "error_kind": null,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "fail",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [
+        {
+          "criterion": "fluency",
+          "source_quote": "in the enjoyment of his",
+          "candidate_quote": "in the enjoyment of his.",
+          "explanation": "The passage ends with “his,” a possessive that has no following noun or completed thought. Adding a period makes the unfinished sentence read as a complete one."
+        }
+      ],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "science-v4-1",
+      "qualification_trial": 1,
+      "passed": true,
+      "processing_succeeded": true,
+      "error_kind": null,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "science-v4-2",
+      "qualification_trial": 1,
+      "passed": true,
+      "processing_succeeded": true,
+      "error_kind": null,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "political-argument-v4-1",
+      "qualification_trial": 1,
+      "passed": true,
+      "processing_succeeded": true,
+      "error_kind": null,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "political-argument-v4-2",
+      "qualification_trial": 1,
+      "passed": false,
+      "processing_succeeded": true,
+      "error_kind": null,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "fail",
+        "structure": "pass"
+      },
+      "issues": [
+        {
+          "criterion": "style",
+          "source_quote": "the Senate, together with the chancellor and judges of the Supreme Court",
+          "candidate_quote": "the senate, together with the chancellor and judges of the supreme court",
+          "explanation": "The candidate lowercases the named legislative body and court, unlike the capitalization used in the reference's historical style."
+        },
+        {
+          "criterion": "style",
+          "source_quote": "The proportion, in point of numbers, of the chancellor and judges to the senators, is so inconsiderable",
+          "candidate_quote": "The proportion in point of numbers of the chancellor and judges to the senators is so inconsiderable",
+          "explanation": "The candidate omits commas around the parenthetical phrase “in point of numbers,” making the sentence less clearly punctuated."
+        }
+      ],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "philosophy-v4-1",
+      "qualification_trial": 1,
+      "passed": true,
+      "processing_succeeded": true,
+      "error_kind": null,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "philosophy-v4-2",
+      "qualification_trial": 1,
+      "passed": true,
+      "processing_succeeded": true,
+      "error_kind": null,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "autobiography-v4-1",
+      "qualification_trial": 1,
+      "passed": true,
+      "processing_succeeded": true,
+      "error_kind": null,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "autobiography-v4-2",
+      "qualification_trial": 1,
+      "passed": false,
+      "processing_succeeded": true,
+      "error_kind": null,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "fail",
+        "structure": "pass"
+      },
+      "issues": [
+        {
+          "criterion": "style",
+          "source_quote": "M. Dalibard[109]",
+          "candidate_quote": "M. Dalibard109",
+          "explanation": "The candidate drops the brackets around the reference marker, making the number run directly into the name. The marker after Buffon is similarly rendered as a bare number."
+        }
+      ],
+      "assessment_errors": [],
+      "protected_failures": [
+        "missing-citation-marker"
+      ]
+    }
+  ]
+}

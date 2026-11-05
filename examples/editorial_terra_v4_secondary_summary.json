@@ -1,0 +1,196 @@
+{
+  "purpose": "Separate blinded assessment of every completed candidate from original V4 trial; no regeneration, no previous verdicts in prompts, no replacement of primary scores.",
+  "model": "gpt-6.1-terra",
+  "reasoning_effort": "medium",
+  "prompt": "editorial_v3",
+  "passed_count": 8,
+  "total": 10,
+  "cases": [
+    {
+      "case_id": "fiction-v4-1",
+      "passed": true,
+      "primary_passed": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "fiction-v4-2",
+      "passed": true,
+      "primary_passed": false,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "science-v4-1",
+      "passed": true,
+      "primary_passed": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "science-v4-2",
+      "passed": true,
+      "primary_passed": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "political-argument-v4-1",
+      "passed": true,
+      "primary_passed": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "political-argument-v4-2",
+      "passed": false,
+      "primary_passed": false,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "fail",
+        "structure": "pass"
+      },
+      "issues": [
+        {
+          "criterion": "style",
+          "source_quote": "the Senate, together with the chancellor and judges of the Supreme Court",
+          "candidate_quote": "the senate, together with the chancellor and judges of the supreme court",
+          "explanation": "The names of the specific legislative body and court should be capitalized."
+        }
+      ],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "philosophy-v4-1",
+      "passed": true,
+      "primary_passed": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "philosophy-v4-2",
+      "passed": true,
+      "primary_passed": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "autobiography-v4-1",
+      "passed": true,
+      "primary_passed": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "assessment_errors": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "autobiography-v4-2",
+      "passed": false,
+      "primary_passed": false,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "fail",
+        "structure": "pass"
+      },
+      "issues": [
+        {
+          "criterion": "style",
+          "source_quote": "Count de Buffon,[108]",
+          "candidate_quote": "Count de Buffon,108",
+          "explanation": "The citation numbers are not formatted as recognizable note markers; both 108 and 109 are attached directly to the surrounding text."
+        }
+      ],
+      "assessment_errors": [],
+      "protected_failures": [
+        "missing-citation-marker"
+      ]
+    }
+  ]
+}
