@@ -206,7 +206,10 @@ correction inside quoted speech. The local context supports the correction, but 
 failed verdict remains retained and is not converted to a pass. Three source queries also
 prevent a full completed-cleanup pass. The preceding recovery had passed fidelity but failed
 fluency and style; that assessment remains retained as well. Neither recovery establishes
-100% editorial reliability.
+100% editorial reliability. A separately recorded blind Terra assessment passed fidelity,
+completeness, and voice but failed fluency, style, and structure on the three retained
+transcription annotations. It did not replace the primary Luna judgment. The disagreement
+reinforces the distinction between a published review draft and fully resolved prose.
 
 Five live controls for the added editorial-risk checks preserved genuine alternatives,
 authored expressions, and literal speech while repairing an abandoned referent. They passed
