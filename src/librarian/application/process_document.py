@@ -539,7 +539,7 @@ class ProcessDocument:
                     json.dumps(
                         {
                             **final_quality,
-                            "output_available": True,
+                            "output_available": False,
                             "chunks": len(chunked),
                             "cleaned_chunks": completed_chunks,
                             "cached_cleaned_chunks": len(cached_chunks),

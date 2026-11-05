@@ -807,6 +807,8 @@ async def test_late_publish_failure_marks_run_failed_and_hides_output(tmp_path: 
     assert document is not None
     assert latest.status == RunStatus.FAILED
     assert latest.error == "publish boom"
+    quality = json.loads(await container.repository.get_text(run_quality_key(run.id)))
+    assert quality["output_available"] is False
     assert document.status == DocumentStatus.FAILED
     assert output is None
     assert classification is None

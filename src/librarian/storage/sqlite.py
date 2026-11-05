@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, LiteralString, cast
 from librarian.application.clean_chunks import CleanedChunk
 from librarian.application.jobs import QueuedRun, QueueStatus
 from librarian.application.ports import SearchScope
+from librarian.application.quality_report import run_quality_key
 from librarian.application.transcripts import find_quote_in_transcript, parse_transcript
 from librarian.domain.ids import ChunkId, DocumentId, RunId
 from librarian.domain.models import (
@@ -323,8 +324,7 @@ class SQLiteDatabase:
             )
             cleaned_cache_text_bytes = self._scalar_int(
                 connection,
-                "SELECT COALESCE(SUM(LENGTH(CAST(text AS BLOB))), 0) "
-                "FROM cleaned_chunk_cache",
+                "SELECT COALESCE(SUM(LENGTH(CAST(text AS BLOB))), 0) FROM cleaned_chunk_cache",
             )
             cleaned_output_text_bytes = self._scalar_int(
                 connection,
@@ -516,9 +516,7 @@ class SQLiteRepository:
         """Count documents."""
         return await asyncio.to_thread(self._count_documents_sync)
 
-    async def update_document_status(
-        self, document_id: DocumentId, status: DocumentStatus
-    ) -> None:
+    async def update_document_status(self, document_id: DocumentId, status: DocumentStatus) -> None:
         """Update document status."""
         await asyncio.to_thread(self._update_document_status_sync, document_id, status)
 
@@ -591,9 +589,7 @@ class SQLiteRepository:
 
     async def get_extraction(self, content_sha256: str, config_signature: str) -> str | None:
         """Return cached extracted text for a content digest + config signature."""
-        return await asyncio.to_thread(
-            self._get_extraction_sync, content_sha256, config_signature
-        )
+        return await asyncio.to_thread(self._get_extraction_sync, content_sha256, config_signature)
 
     async def put_extraction(self, entry: ExtractionCacheEntry) -> None:
         """Store extracted text in the content-hash extraction cache."""
@@ -1540,6 +1536,21 @@ class SQLiteRepository:
                     RunStatus.RUNNING.value,
                 ),
             )
+            # Publish availability with the output and terminal status. Staging a
+            # quality report must not advertise output if indexing later fails.
+            quality_key = run_quality_key(output.run_id)
+            quality_row = connection.execute(
+                "SELECT text FROM content_blobs WHERE key = ?", (quality_key,)
+            ).fetchone()
+            if quality_row is not None:
+                quality = json.loads(str(quality_row["text"]))
+                if not isinstance(quality, dict):
+                    raise ValueError("Run quality report must be a JSON object")
+                cast("dict[str, object]", quality)["output_available"] = True
+                connection.execute(
+                    "UPDATE content_blobs SET text = ? WHERE key = ?",
+                    (json.dumps(quality, ensure_ascii=False), quality_key),
+                )
             connection.executemany(
                 """
                 INSERT INTO run_events (run_id, stage, message, created_at)
@@ -2575,8 +2586,8 @@ class SQLiteRunQueue:
             attempts = int(row["attempts"]) if row else 0
             status = QueueStatus.FAILED if attempts >= max_attempts else QueueStatus.RETRY
             backoff_seconds = min(300, max(1, 2 ** max(attempts - 1, 0)))
-            available_at = now if status is QueueStatus.FAILED else now + timedelta(
-                seconds=backoff_seconds
+            available_at = (
+                now if status is QueueStatus.FAILED else now + timedelta(seconds=backoff_seconds)
             )
             connection.execute(
                 """
