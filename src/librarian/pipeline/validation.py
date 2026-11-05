@@ -74,9 +74,6 @@ MARKDOWN_TABLE_SEPARATOR_REGEX = re.compile(
     r"(?m)^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$"
 )
 MARKDOWN_TABLE_ROW_REGEX = re.compile(r"(?m)^\s*\|.+\|\s*$")
-CITATION_MARKER_REGEX = re.compile(
-    r"(?:\[[0-9A-Za-z][0-9A-Za-z .:-]{0,20}\]|\([A-Z][A-Za-z-]+,\s*\d{4}\))"
-)
 LOCAL_IMAGE_REFERENCE_REGEX = re.compile(
     r"!\[[^\]]*\]\((?![a-z][a-z0-9+.-]*:|/|#)([^)\s]+)\)", re.IGNORECASE
 )
@@ -163,6 +160,21 @@ def filter_artifact_lines(text: str, *, source_text: str | None = None) -> str:
     return transform_prose(text, filter_prose).strip()
 
 
+def _citation_markers(text: str) -> Counter[str]:
+    """Compare identities across bracket, Markdown footnote, and HTML superscript forms."""
+    markers: Counter[str] = Counter()
+    pattern = re.compile(
+        r"\[(?:\^)?([0-9A-Za-z][0-9A-Za-z .:-]{0,20})\]"
+        r"|<sup>\s*([0-9]+)\s*</sup>"
+        r"|(\([A-Z][A-Za-z-]+,\s*\d{4}\))",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(text):
+        identity = next(value for value in match.groups() if value is not None)
+        markers[" ".join(identity.split())] += 1
+    return markers
+
+
 def _markdown_quality_warnings(text: str, *, source_text: str | None) -> list[str]:
     warnings: list[str] = []
     if CONTEXT_MARKER_REGEX.search(text):
@@ -193,7 +205,9 @@ def _markdown_quality_warnings(text: str, *, source_text: str | None) -> list[st
         warnings.append("missing-markdown-list")
     if _has_markdown_table(source_text) and not _has_markdown_table(text):
         warnings.append("missing-markdown-table")
-    if CITATION_MARKER_REGEX.search(source_text) and CITATION_MARKER_REGEX.search(text) is None:
+    source_citations = _citation_markers(source_text)
+    output_citations = _citation_markers(text)
+    if source_citations - output_citations:
         warnings.append("missing-citation-marker")
     source_images = Counter(ALL_IMAGE_REFERENCE_REGEX.findall(source_text))
     output_images = Counter(ALL_IMAGE_REFERENCE_REGEX.findall(text))

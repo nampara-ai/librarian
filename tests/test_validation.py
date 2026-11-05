@@ -349,3 +349,28 @@ def test_settings_reject_invalid_coherence_mode(monkeypatch: pytest.MonkeyPatch)
 
 def test_run_stage_order_matches_processing_pipeline() -> None:
     assert list(RunStage).index(RunStage.ASSEMBLE) < list(RunStage).index(RunStage.CLASSIFY)
+
+
+@pytest.mark.parametrize("marker", ["[17]", "[^17]", "<sup>17</sup>"])
+def test_citation_identity_survives_equivalent_marker_formatting(marker: str) -> None:
+    source = "A supported statement [17], and another [18]."
+    result = validate_cleaned_text(
+        f"A supported statement {marker}, and another [18].",
+        input_size=len(source),
+        source_text=source,
+    )
+    assert "missing-citation-marker" not in result.warnings
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        "A supported statement [17], and another.",
+        "A supported statement [17], and another [17].",
+        "A supported statement <sup>19</sup>, and another [18].",
+    ],
+)
+def test_citation_check_detects_partial_loss_and_changed_identities(candidate: str) -> None:
+    source = "A supported statement [17], and another [18]."
+    result = validate_cleaned_text(candidate, input_size=len(source), source_text=source)
+    assert "missing-citation-marker" in result.warnings

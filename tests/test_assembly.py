@@ -107,3 +107,12 @@ def _cleaned_chunk(ordinal: int, text: str) -> CleanedChunk:
         sha256=f"sha-{ordinal}",
     )
     return CleanedChunk(chunk=chunk, text=text, warnings=())
+
+
+def test_assembly_keeps_source_repetition_when_cleaner_supplies_missing_punctuation() -> None:
+    first = _cleaned_chunk(0, "We will finish the work.")
+    second = _cleaned_chunk(1, "We will finish the work. I promise.")
+    second = replace(second, chunk=replace(second.chunk, text="we will finish the work i promise"))
+    assert assemble_cleaned_document([first, second]) == (
+        "We will finish the work.\n\nWe will finish the work. I promise."
+    )

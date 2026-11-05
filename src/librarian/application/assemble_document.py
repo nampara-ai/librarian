@@ -29,7 +29,7 @@ def assemble_cleaned_document(chunks: Sequence[CleanedChunk]) -> str:
         protected = protected_spans(text)
         if (
             previous_sentence
-            and not source.strip().casefold().startswith(previous_sentence)
+            and not _source_starts_with_sentence(source, previous_sentence)
             and not (protected and protected[0][0] == 0)
         ):
             text = _drop_leading_duplicate_sentence(text, previous_sentence)
@@ -41,6 +41,14 @@ def assemble_cleaned_document(chunks: Sequence[CleanedChunk]) -> str:
             previous_sentence = _last_sentence(text)
     text = normalize_assembled_whitespace("\n\n".join(parts))
     return text.strip()
+
+
+def _source_starts_with_sentence(source: str, sentence: str) -> bool:
+    # ASR may have no punctuation, and OCR may use different quote glyphs.
+    # Those surface differences are not evidence that repetition was invented.
+    expected = re.findall(r"\w+", sentence.casefold())
+    observed = re.findall(r"\w+", source.casefold())
+    return bool(expected) and observed[: len(expected)] == expected
 
 
 def remove_context_markers(text: str) -> str:
