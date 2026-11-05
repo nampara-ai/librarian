@@ -83,6 +83,31 @@ async def test_source_and_edited_context_are_not_conflated_between_chunks() -> N
     assert reviewer.saw_following
 
 
+@pytest.mark.asyncio
+async def test_parallel_group_starts_receive_original_source_context() -> None:
+    class Editor:
+        name = "editor"
+        saw_context = False
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            payload = json.loads(user_prompt)
+            if payload["source"] == "The next group begins.":
+                self.saw_context = True
+                assert payload["context_before"] == "The first group ends."
+            return payload["source"]
+
+    chunks = [
+        Chunk(ChunkId(f"g{i}"), DocumentId("doc"), i, text, 0, len(text), "source")
+        for i, text in enumerate(["The first group ends.", "The next group begins."])
+    ]
+    editor = Editor()
+    cleaner = CleanChunks(
+        editor, PromptCatalog(), "cmos_v8", "test", balanced_group_size=1, verify_semantics=False
+    )
+    await cleaner.execute(chunks)
+    assert editor.saw_context
+
+
 def test_new_lowercase_paragraph_is_rejected_without_changing_source_voice() -> None:
     source = "This explains the rule. But another example follows."
     candidate = "This explains the rule.\n\nbut another example follows."

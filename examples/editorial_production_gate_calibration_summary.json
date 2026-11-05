@@ -1,0 +1,229 @@
+{
+  "purpose": "Source-only production reviewer calibration, not editor performance evidence. No oracle requirements or references were given to these reviewers.",
+  "model": "gpt-6-luna",
+  "reasoning_effort": "medium",
+  "runs": [
+    {
+      "prompt": "prose_review_v2",
+      "correct": 25,
+      "total": 26,
+      "cases": [
+        {
+          "id": "negation-faithful",
+          "correct": true
+        },
+        {
+          "id": "negation-damaged",
+          "correct": true
+        },
+        {
+          "id": "uncertainty-faithful",
+          "correct": true
+        },
+        {
+          "id": "uncertainty-damaged",
+          "correct": true
+        },
+        {
+          "id": "attribution-faithful",
+          "correct": true
+        },
+        {
+          "id": "attribution-damaged",
+          "correct": true
+        },
+        {
+          "id": "rhetoric-faithful",
+          "correct": false
+        },
+        {
+          "id": "rhetoric-damaged",
+          "correct": true
+        },
+        {
+          "id": "quotation-faithful",
+          "correct": true
+        },
+        {
+          "id": "quotation-damaged",
+          "correct": true
+        },
+        {
+          "id": "false-start-faithful",
+          "correct": true
+        },
+        {
+          "id": "false-start-damaged",
+          "correct": true
+        },
+        {
+          "id": "coverage-faithful",
+          "correct": true
+        },
+        {
+          "id": "coverage-damaged",
+          "correct": true
+        },
+        {
+          "id": "invention-faithful",
+          "correct": true
+        },
+        {
+          "id": "invention-damaged",
+          "correct": true
+        },
+        {
+          "id": "code-faithful",
+          "correct": true
+        },
+        {
+          "id": "code-damaged",
+          "correct": true
+        },
+        {
+          "id": "table-faithful",
+          "correct": true
+        },
+        {
+          "id": "table-damaged",
+          "correct": true
+        },
+        {
+          "id": "narrative-coordinator-faithful",
+          "correct": true
+        },
+        {
+          "id": "narrative-coordinator-damaged",
+          "correct": true
+        },
+        {
+          "id": "restrictive-clause-faithful",
+          "correct": true
+        },
+        {
+          "id": "restrictive-clause-damaged",
+          "correct": true
+        },
+        {
+          "id": "quoted-qualification-faithful",
+          "correct": true
+        },
+        {
+          "id": "quoted-qualification-damaged",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "prompt": "prose_review_v3",
+      "correct": 26,
+      "total": 26,
+      "cases": [
+        {
+          "id": "negation-faithful",
+          "correct": true
+        },
+        {
+          "id": "negation-damaged",
+          "correct": true
+        },
+        {
+          "id": "uncertainty-faithful",
+          "correct": true
+        },
+        {
+          "id": "uncertainty-damaged",
+          "correct": true
+        },
+        {
+          "id": "attribution-faithful",
+          "correct": true
+        },
+        {
+          "id": "attribution-damaged",
+          "correct": true
+        },
+        {
+          "id": "rhetoric-faithful",
+          "correct": true
+        },
+        {
+          "id": "rhetoric-damaged",
+          "correct": true
+        },
+        {
+          "id": "quotation-faithful",
+          "correct": true
+        },
+        {
+          "id": "quotation-damaged",
+          "correct": true
+        },
+        {
+          "id": "false-start-faithful",
+          "correct": true
+        },
+        {
+          "id": "false-start-damaged",
+          "correct": true
+        },
+        {
+          "id": "coverage-faithful",
+          "correct": true
+        },
+        {
+          "id": "coverage-damaged",
+          "correct": true
+        },
+        {
+          "id": "invention-faithful",
+          "correct": true
+        },
+        {
+          "id": "invention-damaged",
+          "correct": true
+        },
+        {
+          "id": "code-faithful",
+          "correct": true
+        },
+        {
+          "id": "code-damaged",
+          "correct": true
+        },
+        {
+          "id": "table-faithful",
+          "correct": true
+        },
+        {
+          "id": "table-damaged",
+          "correct": true
+        },
+        {
+          "id": "narrative-coordinator-faithful",
+          "correct": true
+        },
+        {
+          "id": "narrative-coordinator-damaged",
+          "correct": true
+        },
+        {
+          "id": "restrictive-clause-faithful",
+          "correct": true
+        },
+        {
+          "id": "restrictive-clause-damaged",
+          "correct": true
+        },
+        {
+          "id": "quoted-qualification-faithful",
+          "correct": true
+        },
+        {
+          "id": "quoted-qualification-damaged",
+          "correct": true
+        }
+      ]
+    }
+  ]
+}

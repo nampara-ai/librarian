@@ -158,3 +158,11 @@ V3 is frozen before evaluation in `examples/editorial_holdout_v3.json`, SHA-256
 Seed `2026110503` excludes V1 and V2 references; its scope remains new passages from the same
 five books. `examples/editorial_discourse_calibration.json` contains separate, authored
 source-role controls, not phrases from the evaluated corpus.
+
+The production reviewer is calibrated separately from the independent assessor. With only
+source and candidate (no oracle requirements or reference), Luna handled 25/26 meaning/discourse
+controls under `prose_review_v2`. The false positive demanded retention of a spoken question
+tag despite an equivalent question. `prose_review_v3` compares pragmatic force instead of
+requiring the tag verbatim; it handled all 26 controls once. Both results are retained in
+`examples/editorial_production_gate_calibration_summary.json`. The independent evaluation
+prompt remains `editorial_v3`; its gates have not been relaxed.

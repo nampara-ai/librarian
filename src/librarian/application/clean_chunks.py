@@ -233,7 +233,7 @@ class CleanChunks:
         if self.plain_edits:
             prompts["prose_fidelity_v1"] = self.prompt_catalog.get("repair", "prose_fidelity_v1")
             prompts["prose_patch_v1"] = self.prompt_catalog.get("repair", "prose_patch_v1")
-            for name in ("prose_review_v2", "confirm_prose_v2"):
+            for name in ("prose_review_v3", "confirm_prose_v3"):
                 prompts[name] = self.prompt_catalog.get("repair", name)
             if self.source_reading:
                 prompts["source_reading_v1"] = self.prompt_catalog.get(
@@ -345,7 +345,14 @@ class CleanChunks:
                     return
                 try:
                     group_results[group_index] = await self._clean_sequential(
-                        group, on_chunk_cleaned, reused
+                        group,
+                        on_chunk_cleaned,
+                        reused,
+                        initial_source_context=(
+                            chunks[group_index * group_size - 1].text[-self.context_chars :]
+                            if group_index
+                            else ""
+                        ),
                     )
                 finally:
                     queue.task_done()
@@ -362,11 +369,13 @@ class CleanChunks:
         chunks: list[Chunk],
         on_chunk_cleaned: ChunkCleanedCallback | None = None,
         reused: dict[ChunkId, CleanedChunk] | None = None,
+        *,
+        initial_source_context: str = "",
     ) -> list[CleanedChunk]:
         reused = reused or {}
         results: list[CleanedChunk] = []
         previous_context = ""
-        previous_source_context = ""
+        previous_source_context = initial_source_context
         for chunk in chunks:
             cached = reused.get(chunk.id)
             result = cached or await self._clean_one(
@@ -466,7 +475,9 @@ class CleanChunks:
                 if has_units:
                     operation = self._edit_units(
                         units,
-                        previous_context,
+                        (previous_source_context or previous_context)
+                        if self.plain_edits
+                        else previous_context,
                         prompt,
                         unit_edits,
                         unit_failures,
@@ -882,7 +893,7 @@ class CleanChunks:
                 warning, issues, response = await self._request_review(
                     system_prompt=(
                         self.prompt_catalog.get(
-                            "repair", "prose_review_v2" if self.plain_edits else "meaning_v1"
+                            "repair", "prose_review_v3" if self.plain_edits else "meaning_v1"
                         )
                         + (
                             ""
@@ -902,7 +913,7 @@ class CleanChunks:
                         system_prompt=(
                             self.prompt_catalog.get(
                                 "repair",
-                                "confirm_prose_v2" if self.plain_edits else "confirm_meaning_v1",
+                                "confirm_prose_v3" if self.plain_edits else "confirm_meaning_v1",
                             )
                             + (
                                 ""
