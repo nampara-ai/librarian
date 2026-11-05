@@ -92,6 +92,7 @@ class UnitCheckpoint:
     separator: str
     accepted_text: str | None
     advisory_reasons: tuple[str, ...] = ()
+    editorial_audit: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -101,6 +102,7 @@ class UnitCheckpoint:
             "separator": self.separator,
             "accepted_text": self.accepted_text,
             "advisory_reasons": list(self.advisory_reasons),
+            "editorial_audit": self.editorial_audit,
         }
 
 
@@ -127,6 +129,9 @@ def load_checkpoint(raw: str) -> tuple[UnitCheckpoint, ...]:
             isinstance(v, str) for v in cast("list[object]", reasons)
         ):
             return ()
+        audit = item.get("editorial_audit")
+        if audit is not None and not isinstance(audit, str):
+            return ()
         result.append(
             UnitCheckpoint(
                 cast("str", fields[0]),
@@ -135,6 +140,7 @@ def load_checkpoint(raw: str) -> tuple[UnitCheckpoint, ...]:
                 cast("str", fields[3]),
                 accepted,
                 tuple(cast("list[str]", reasons)),
+                audit,
             )
         )
     if len({item.unit_id for item in result}) != len(result):

@@ -46,6 +46,12 @@
   diagnostic warnings; use existing metadata fallback for truncated classification.
   Access and transport failures remain terminal and resumable.
 
+- Use the same source-aware comma joins for review and final assembly, preventing
+  an original word gap from appearing before a generated leading comma.
+- Require bounded, explicit editorial-risk decisions in strict prose review. Preserve
+  genuine alternatives, uncertainty, quotations, and examples; retain audit receipts
+  and upgrade only legacy units missing the new review facet.
+
 ## 1.9.0 - 2026-09-20
 
 PDF fidelity, reliable long-running processing, and an actionable final quality review.

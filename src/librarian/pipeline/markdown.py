@@ -57,3 +57,19 @@ def transform_prose(text: str, transform: Callable[[str], str]) -> str:
 def normalize_markdown_whitespace(text: str) -> str:
     """Preserve indentation and hard line breaks; normalize only excess prose blank lines."""
     return transform_prose(text, lambda prose: re.sub(r"\n{4,}", "\n\n\n", prose)).strip()
+
+
+def source_join_separator(separator: str, source_right: str, edited_right: str) -> str:
+    """Do not insert a source word gap before a model-generated leading comma.
+
+    Preserve source punctuation, paragraph boundaries, and every edited unit's
+    bytes. A comma introduced at the right edge attaches to the preceding word.
+    """
+    if (
+        separator
+        and not any(c in separator for c in "\r\n")
+        and edited_right.startswith(",")
+        and not source_right.lstrip().startswith(",")
+    ):
+        return ""
+    return separator

@@ -11,7 +11,7 @@ from typing import cast
 
 from librarian.domain.ids import DocumentId
 from librarian.pipeline.chunking import ChunkingPolicy, chunk_text
-from librarian.pipeline.markdown import protected_spans
+from librarian.pipeline.markdown import protected_spans, source_join_separator
 from librarian.pipeline.validation import (
     FIDELITY_WARNINGS,
     VERBATIM_NUMBER_REGEX,
@@ -189,6 +189,7 @@ def decode_edits(
             else _canonical_unit_text(edited, unit, parts[-1] if parts else "")
         )
         assert edited is not None
+        separator = source_join_separator(separator, unit.text, edited)
         parts.append((separator if parts else "") + edited)
     return "".join(parts), tuple(dict.fromkeys(all_warnings)), failures
 
@@ -241,11 +242,19 @@ def verification_pairs(
             "edited": rendered[index],
             "context_before": units[index - 1].text[-1200:] if index else "",
             "context_after": units[index + 1].text[:1200] if index + 1 < len(units) else "",
-            "edited_context_before": (rendered[index - 1] + unit.separator)[-1200:]
+            "edited_context_before": (
+                rendered[index - 1]
+                + source_join_separator(unit.separator, unit.text, rendered[index])
+            )[-1200:]
             if index
             else "",
             "edited_context_after": (
-                (units[index + 1].separator + rendered[index + 1])[:1200]
+                (
+                    source_join_separator(
+                        units[index + 1].separator, units[index + 1].text, rendered[index + 1]
+                    )
+                    + rendered[index + 1]
+                )[:1200]
                 if index + 1 < len(units)
                 else ""
             ),

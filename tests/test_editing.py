@@ -517,3 +517,23 @@ def test_coalescing_cannot_merge_a_frozen_unit_even_if_a_failure_is_misrouted() 
     )
     assert merged == units
     assert retained["a"] == "First accepted."
+
+
+def test_unit_review_and_rendering_share_the_generated_comma_join() -> None:
+    units = [
+        EditUnit("a", "The decision was final", "prose", ""),
+        EditUnit("b", "but the review continued.", "prose", " "),
+    ]
+    raw = json.dumps(
+        {
+            "edits": [
+                {"id": "a", "text": "The decision was final"},
+                {"id": "b", "text": ", but the review continued."},
+            ]
+        }
+    )
+    text, _, _ = decode_edits(raw, units)
+    pairs = verification_pairs(raw, units, include_unchanged_prose=True)
+    assert text == "The decision was final, but the review continued."
+    assert pairs[1]["edited_context_before"] == "The decision was final"
+    assert pairs[0]["edited_context_after"].startswith(", but")

@@ -281,3 +281,15 @@ classification uses the existing deterministic metadata fallback. Access, credit
 network, cancellation, and storage failures still stop the run and preserve
 completed approvals for recovery. Individual approval events have unique persisted
 keys so simultaneous approvals cannot overwrite each other’s audit records.
+
+Strict prose review also requires explicit decisions on a bounded set of candidate
+editorial risks, including apparent abandoned corrections and broken aside joins.
+These are proposals, not deterministic proof of errors. The reviewer must reject
+repairs that would remove genuine alternatives, meaningful uncertainty, humor,
+authored quotations, or linguistic examples. Audit receipts let later runs reuse
+those decisions; legacy cue-bearing units receive the missing audit without
+regenerating unrelated accepted text. No evaluation reference enters this path.
+
+Unit review and final assembly use the same source-aware comma join: a leading
+comma introduced by an editor attaches to the preceding word. Source punctuation
+and paragraph gaps are preserved, as are the bytes of the accepted units.

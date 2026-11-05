@@ -517,7 +517,7 @@ struct QualityDetailsView: View {
             }
             if let queries = processing.editorialQueries, !queries.isEmpty {
                 Divider()
-                Text("\(queries.count) transcription query/queries")
+                Text("Transcription queries (\(queries.count))")
                     .font(.subheadline.weight(.semibold))
                 Text("These source readings remain uncertain in the saved document.")
                     .foregroundStyle(.secondary)

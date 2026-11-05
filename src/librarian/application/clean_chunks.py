@@ -36,6 +36,12 @@ from librarian.pipeline.editing import (
     unit_source_context,
     verification_pairs,
 )
+from librarian.pipeline.editorial_risks import (
+    EDITORIAL_AUDIT,
+    EDITORIAL_AUDIT_MARKER,
+    editorial_checks,
+)
+from librarian.pipeline.markdown import source_join_separator
 from librarian.pipeline.prose_patches import apply_prose_patches, candidate_spans
 from librarian.pipeline.protected_text import protect_prose_data
 from librarian.pipeline.validation import (
@@ -112,8 +118,10 @@ class CleanedChunk:
 
     @property
     def fidelity_failed(self) -> bool:
-        return bool(FIDELITY_WARNINGS.intersection(self.warnings)) or (
-            "source-preserved-after-fidelity-check" in self.warnings
+        return (
+            "editorial-audit-required" in self.warnings
+            or bool(FIDELITY_WARNINGS.intersection(self.warnings))
+            or ("source-preserved-after-fidelity-check" in self.warnings)
         )
 
 
@@ -560,6 +568,21 @@ class CleanChunks:
         frozen_edits = dict(unit_edits)
         frozen_ids = set(frozen_edits)
         legacy_deferred: list[dict[str, str]] = []
+        editorially_audited = {
+            u.unit_id for u in saved_units if u.editorial_audit == EDITORIAL_AUDIT
+        }
+        if self.plain_edits and self.verify_semantics and self.review_mode == "strict":
+            for saved in saved_units:
+                if (
+                    saved.unit_id in frozen_ids
+                    and saved.unit_id not in editorially_audited
+                    and editorial_checks(frozen_edits[saved.unit_id], saved.source)
+                ):
+                    frozen_edits.pop(saved.unit_id)
+                    frozen_ids.remove(saved.unit_id)
+                    legacy_deferred.append(
+                        {"id": saved.unit_id, "reason": "editorial-risk-audit-required"}
+                    )
         for index, unit in enumerate(units):
             if (
                 index
@@ -662,6 +685,8 @@ class CleanChunks:
                         "A unit with unresolved structural violations cannot be accepted"
                     )
                 unit_failures.pop(uid, None)
+                if uid in verified_units and self.review_mode == "strict":
+                    editorially_audited.add(uid)
                 if unsettled_quotation(uid, text):
                     return
                 frozen_edits[uid] = text
@@ -675,6 +700,7 @@ class CleanChunks:
                         u.separator,
                         frozen_edits.get(u.id),
                         tuple(advisory_issues.get(u.id, [])),
+                        EDITORIAL_AUDIT if u.id in editorially_audited else None,
                     )
                     for u in units
                 )
@@ -926,7 +952,12 @@ class CleanChunks:
                                 else previous_context
                             )[-1200:]
                             pair["edited_context_before"] = (
-                                (previous_context + preceding_separator)[-1200:]
+                                (
+                                    previous_context
+                                    + source_join_separator(
+                                        preceding_separator, chunk.text, pair["edited"]
+                                    )
+                                )[-1200:]
                                 if previous_context
                                 else ""
                             )
@@ -1033,6 +1064,7 @@ class CleanChunks:
                                 unit.separator,
                                 edited,
                                 tuple(reasons),
+                                EDITORIAL_AUDIT if unit.id in editorially_audited else None,
                             )
                         )
                         text = (
@@ -1055,7 +1087,14 @@ class CleanChunks:
                     chunk=chunk,
                     text=validated.text,
                     warnings=(("repeated-context-stripped",) if stripped_context else ())
-                    + warnings,
+                    + warnings
+                    + (
+                        (EDITORIAL_AUDIT_MARKER,)
+                        if self.plain_edits
+                        and self.verify_semantics
+                        and self.review_mode == "strict"
+                        else ()
+                    ),
                 )
             if "invalid-fidelity-verification" in warnings:
                 # The reviewer has exhausted its own format budget. A new draft
@@ -1096,7 +1135,14 @@ class CleanChunks:
                     text = unit_edits[unit.id]
                 accepted_text = unit_edits.get(unit.id) if not reasons else None
                 checkpoint.append(
-                    UnitCheckpoint(unit.id, unit.text, unit.kind, unit.separator, accepted_text)
+                    UnitCheckpoint(
+                        unit.id,
+                        unit.text,
+                        unit.kind,
+                        unit.separator,
+                        accepted_text,
+                        editorial_audit=EDITORIAL_AUDIT if unit.id in editorially_audited else None,
+                    )
                 )
                 parts.append((unit.separator if parts else "") + text)
             return CleanedChunk(chunk, "".join(parts), ("unit-needs-review",), tuple(checkpoint))
@@ -1532,6 +1578,15 @@ class CleanChunks:
                 )
                 record = {"id": pair["id"], "response": response}
                 if (
+                    self.plain_edits
+                    and self.review_mode == "strict"
+                    and warning != "invalid-fidelity-verification"
+                ):
+                    focused = editorial_checks(pair["edited"], pair["source"])
+                    if focused:
+                        issues.setdefault(pair["id"], []).extend(focused)
+                        record["focused_checks"] = json.dumps(focused)
+                if (
                     issues
                     and warning != "invalid-fidelity-verification"
                     and self.review_mode == "strict"
@@ -1637,6 +1692,14 @@ class CleanChunks:
                 text=cleaned.chunk.text.strip(),
                 warnings=tuple(dict.fromkeys(warnings)),
             )
+        if (
+            self.plain_edits
+            and self.verify_semantics
+            and self.review_mode == "strict"
+            and EDITORIAL_AUDIT_MARKER not in warnings
+            and editorial_checks(validated.text, cleaned.chunk.text)
+        ):
+            warnings.append("editorial-audit-required")
         return CleanedChunk(
             chunk=cleaned.chunk,
             text=validated.text,

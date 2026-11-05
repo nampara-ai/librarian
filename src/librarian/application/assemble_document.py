@@ -12,6 +12,7 @@ from librarian.pipeline.chunking import chunk_separator_before
 from librarian.pipeline.markdown import (
     normalize_markdown_whitespace,
     protected_spans,
+    source_join_separator,
     transform_prose,
 )
 from librarian.pipeline.validation import filter_artifact_lines
@@ -49,6 +50,7 @@ def assemble_cleaned_document(
                 text = remove_empty_code_fences(text)
         if text.strip():
             separator = chunk_separator_before(chunk.chunk, source_text) if parts else ""
+            separator = source_join_separator(separator, chunk.chunk.text, text.strip())
             parts.append(separator + text.strip())
             previous_sentence = _last_sentence(text)
     joined = "".join(parts)

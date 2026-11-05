@@ -173,3 +173,24 @@ def test_source_backed_assembly_never_deletes_an_audited_repetition() -> None:
     assert assemble_cleaned_document([first, second], source_text=source) == (
         "Never again. Never again. We meant it."
     )
+
+
+def test_generated_leading_comma_joins_without_changing_accepted_chunk_bytes() -> None:
+    from librarian.application.clean_chunks import CleanedChunk
+    from librarian.domain.ids import ChunkId, DocumentId
+    from librarian.domain.models import Chunk
+
+    source = "The decision was final but the review continued."
+    split = source.index("but")
+    left = Chunk(ChunkId("a"), DocumentId("d"), 0, source[:split].rstrip(), 0, split - 1, "a")
+    right = Chunk(ChunkId("b"), DocumentId("d"), 1, source[split:], split, len(source), "b")
+    chunks = [
+        CleanedChunk(left, "The decision was final", ()),
+        CleanedChunk(right, ", but the review continued.", ()),
+    ]
+    assert (
+        assemble_cleaned_document(chunks, source_text=source)
+        == "The decision was final, but the review continued."
+    )
+    assert chunks[0].text == "The decision was final"
+    assert chunks[1].text == ", but the review continued."
