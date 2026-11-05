@@ -95,6 +95,7 @@ struct ProcessingQuality: Codable {
     let tocEntriesWithoutMatchingHeadingOrBody: Int?
     let tocUnmatchedEntries: [String]?
     let needsReview: [UnitReviewItem]?
+    let editorialQueries: [String]?
     let chunks: Int
     let cachedCleanedChunks: Int
     let verifiedSourceChunks: Int?

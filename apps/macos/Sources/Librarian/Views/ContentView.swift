@@ -515,6 +515,16 @@ struct QualityDetailsView: View {
                     }
                 }
             }
+            if let queries = processing.editorialQueries, !queries.isEmpty {
+                Divider()
+                Text("\(queries.count) transcription query/queries")
+                    .font(.subheadline.weight(.semibold))
+                Text("These source readings remain uncertain in the saved document.")
+                    .foregroundStyle(.secondary)
+                ForEach(queries.indices, id: \.self) { index in
+                    Text(queries[index]).textSelection(.enabled)
+                }
+            }
             ForEach(processing.warnings.filter { $0 != "toc-entries-unmatched" }, id: \.self) { warning in
                 Label(warning.replacingOccurrences(of: "-", with: " "), systemImage: "exclamationmark.triangle")
             }
