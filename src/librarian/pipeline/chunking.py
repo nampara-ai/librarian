@@ -151,3 +151,19 @@ def _skip_leading_space(text: str, offset: int) -> int:
     while offset < len(text) and text[offset].isspace():
         offset += 1
     return offset
+
+
+def chunk_separator_before(chunk: Chunk, source: str | None) -> str:
+    """Recover the original transport join from validated source offsets."""
+    if source is None:
+        return "\n\n"
+    source = source.strip()
+    if (
+        not 0 <= chunk.start_char <= chunk.end_char <= len(source)
+        or source[chunk.start_char : chunk.end_char] != chunk.text
+    ):
+        return "\n\n"
+    start = chunk.start_char
+    while start and source[start - 1].isspace():
+        start -= 1
+    return source[start : chunk.start_char]

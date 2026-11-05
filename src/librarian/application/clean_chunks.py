@@ -9,7 +9,7 @@ import re
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Literal, cast
 
@@ -25,6 +25,7 @@ from librarian.application.source_reading import read_source
 from librarian.domain.ids import ChunkId
 from librarian.domain.models import Chunk
 from librarian.observability import sanitize_error_message
+from librarian.pipeline.chunking import chunk_separator_before
 from librarian.pipeline.editing import (
     EditUnit,
     coalesce_adjacent_repairs,
@@ -202,6 +203,7 @@ class CleanChunks:
     preparation_provider: LLMProvider | None = None
     generation_signature: str = ""
     source_reading: bool = False
+    document_source: str | None = field(default=None, repr=False)
     # Trailing characters of the preceding chunk handed to the cleaner as
     # read-only continuity context. Chunks no longer overlap in the source, so
     # this replaces the (previously duplicated) overlap for boundary coherence.
@@ -240,7 +242,7 @@ class CleanChunks:
         if self.plain_edits:
             prompts["prose_fidelity_v1"] = self.prompt_catalog.get("repair", "prose_fidelity_v1")
             prompts["prose_patch_v1"] = self.prompt_catalog.get("repair", "prose_patch_v1")
-            for name in ("prose_review_v4", "confirm_prose_v4"):
+            for name in ("prose_review_v5", "confirm_prose_v5"):
                 prompts[name] = self.prompt_catalog.get("repair", name)
             if self.source_reading:
                 prompts["source_reading_v1"] = self.prompt_catalog.get(
@@ -248,7 +250,7 @@ class CleanChunks:
                 )
         policy = json.dumps(
             {
-                "policy": 6,
+                "policy": 8,
                 "source_reading": self.source_reading,
                 "source": hashlib.sha256(source.encode()).hexdigest(),
                 "prompts": prompts,
@@ -315,10 +317,23 @@ class CleanChunks:
                     previous_context = (
                         chunks[index - 1].text[-self.context_chars :] if index > 0 else ""
                     )
+                    known_previous = results[index - 1] if index else None
                     result = await self._clean_one(
                         chunk,
-                        previous_context="" if self.plain_edits else previous_context,
+                        previous_context=(
+                            known_previous.text[-self.context_chars :]
+                            if known_previous
+                            else ""
+                            if self.plain_edits
+                            else previous_context
+                        ),
                         previous_source_context=previous_context,
+                        following_source_context=(
+                            chunk_separator_before(chunks[index + 1], self.document_source)
+                            + chunks[index + 1].text[: self.context_chars]
+                            if index + 1 < len(chunks)
+                            else ""
+                        ),
                     )
                     results[index] = result
                     if on_chunk_cleaned is not None:
@@ -352,10 +367,22 @@ class CleanChunks:
                 except asyncio.QueueEmpty:
                     return
                 try:
+                    previous_group = group_results[group_index - 1] if group_index else None
                     group_results[group_index] = await self._clean_sequential(
                         group,
                         on_chunk_cleaned,
                         reused,
+                        initial_edited_context=(
+                            previous_group[-1].text[-self.context_chars :] if previous_group else ""
+                        ),
+                        following_source_context=(
+                            chunk_separator_before(
+                                chunks[(group_index + 1) * group_size], self.document_source
+                            )
+                            + chunks[(group_index + 1) * group_size].text[: self.context_chars]
+                            if (group_index + 1) * group_size < len(chunks)
+                            else ""
+                        ),
                         initial_source_context=(
                             chunks[group_index * group_size - 1].text[-self.context_chars :]
                             if group_index
@@ -379,17 +406,25 @@ class CleanChunks:
         reused: dict[ChunkId, CleanedChunk] | None = None,
         *,
         initial_source_context: str = "",
+        initial_edited_context: str = "",
+        following_source_context: str = "",
     ) -> list[CleanedChunk]:
         reused = reused or {}
         results: list[CleanedChunk] = []
-        previous_context = ""
+        previous_context = initial_edited_context
         previous_source_context = initial_source_context
-        for chunk in chunks:
+        for index, chunk in enumerate(chunks):
             cached = reused.get(chunk.id)
             result = cached or await self._clean_one(
                 chunk,
                 previous_context=previous_context,
                 previous_source_context=previous_source_context,
+                following_source_context=(
+                    chunk_separator_before(chunks[index + 1], self.document_source)
+                    + chunks[index + 1].text[: self.context_chars]
+                    if index + 1 < len(chunks)
+                    else following_source_context
+                ),
             )
             results.append(result)
             previous_context = result.text[-self.context_chars :]
@@ -444,7 +479,12 @@ class CleanChunks:
             )
 
     async def _clean_one(
-        self, chunk: Chunk, *, previous_context: str, previous_source_context: str | None = None
+        self,
+        chunk: Chunk,
+        *,
+        previous_context: str,
+        previous_source_context: str | None = None,
+        following_source_context: str = "",
     ) -> CleanedChunk:
         system_prompt = self.prompt_catalog.get("cleaning", self.prompt_version)
         if self.editorial_context:
@@ -454,6 +494,7 @@ class CleanChunks:
                 else "\n\nSource-grounded document spelling sheet:\n"
             ) + self.editorial_context
         units = list(self._source_units(chunk.text))
+        preceding_separator = chunk_separator_before(chunk, self.document_source)
         has_units = bool(units)
         user_prompt = chunk.text
         if has_units:
@@ -517,6 +558,8 @@ class CleanChunks:
                         ),
                         previous_edited_context=previous_context,
                         repair_review_traces=repair_review_traces,
+                        following_context=following_source_context,
+                        preceding_separator=preceding_separator,
                     )
                 else:
                     operation = self.provider.complete(
@@ -615,8 +658,13 @@ class CleanChunks:
                                 else previous_context
                             )[-1200:]
                             pair["edited_context_before"] = (
-                                (previous_context + "\n\n")[-1200:] if previous_context else ""
+                                (previous_context + preceding_separator)[-1200:]
+                                if previous_context
+                                else ""
                             )
+                for pair in pairs:
+                    if pair["id"] == units[-1].id:
+                        pair["context_after"] = following_source_context[:1200]
                 if self.on_attempt is not None:
                     await self.on_attempt(
                         CleaningAttempt(
@@ -696,6 +744,7 @@ class CleanChunks:
         patch_semantics: bool = False,
         previous_edited_context: str = "",
         repair_review_traces: list[str] | None = None,
+        preceding_separator: str = "\n\n",
     ) -> str:
         """Edit modest source spans independently and retry only rejected spans."""
         if self.plain_edits:
@@ -723,7 +772,7 @@ class CleanChunks:
                     edited_before = (
                         (edits.get(units[index - 1].id, "") + unit.separator)[-1200:]
                         if index
-                        else (previous_edited_context + "\n\n")[-1200:]
+                        else (previous_edited_context + preceding_separator)[-1200:]
                         if previous_edited_context
                         else ""
                     )
@@ -796,6 +845,7 @@ class CleanChunks:
                             child_failures,
                             following_context=after,
                             inherited_checks=(*inherited_checks, *failures.get(unit.id, [])),
+                            preceding_separator=unit.separator if index else preceding_separator,
                         )
                         child_text, child_warnings, _ = decode_edits(child_response, smaller)
                         edits[unit.id] = child_text
@@ -820,13 +870,21 @@ class CleanChunks:
                         "continuation_before": unit.separator == " "
                         or (index == 0 and bool(before)),
                         "continuation_after": (
-                            index + 1 < len(units) and units[index + 1].separator == " "
+                            (index + 1 < len(units) and units[index + 1].separator == " ")
+                            or (index + 1 == len(units) and bool(following_context))
                         ),
                         "previous_candidate": edits.get(unit.id),
                         "repair_checks": [*inherited_checks, *failures.get(unit.id, [])],
                     }
                     if self.plain_edits:
                         payload["source"] = protected.text
+                        payload["edited_context_before"] = (
+                            (edits[units[index - 1].id] + unit.separator)[-1200:]
+                            if index and units[index - 1].id in edits
+                            else (previous_edited_context + preceding_separator)[-1200:]
+                            if not index and previous_edited_context
+                            else ""
+                        )
                         payload["protected_values"] = dict(protected.values)
                         if self.source_reading:
                             reading = await read_source(
@@ -999,7 +1057,7 @@ class CleanChunks:
                 warning, issues, response = await self._request_review(
                     system_prompt=(
                         self.prompt_catalog.get(
-                            "repair", "prose_review_v4" if self.plain_edits else "meaning_v1"
+                            "repair", "prose_review_v5" if self.plain_edits else "meaning_v1"
                         )
                         + (
                             ""
@@ -1019,7 +1077,7 @@ class CleanChunks:
                         system_prompt=(
                             self.prompt_catalog.get(
                                 "repair",
-                                "confirm_prose_v4" if self.plain_edits else "confirm_meaning_v1",
+                                "confirm_prose_v5" if self.plain_edits else "confirm_meaning_v1",
                             )
                             + (
                                 ""

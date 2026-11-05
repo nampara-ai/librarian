@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from functools import partial
 
 from librarian.application.clean_chunks import CleanedChunk
+from librarian.pipeline.chunking import chunk_separator_before
 from librarian.pipeline.markdown import (
     normalize_markdown_whitespace,
     protected_spans,
@@ -15,31 +16,41 @@ from librarian.pipeline.markdown import (
 from librarian.pipeline.validation import filter_artifact_lines
 
 
-def assemble_cleaned_document(chunks: Sequence[CleanedChunk]) -> str:
-    """Assemble cleaned chunks and perform light boundary cleanup."""
+def assemble_cleaned_document(
+    chunks: Sequence[CleanedChunk], *, source_text: str | None = None
+) -> str:
+    """Assemble audited wording with source-backed joins.
+
+    Without source offsets, retain the legacy standalone cleanup behavior.
+    The processing pipeline supplies source and must not silently rewrite an
+    already reviewed candidate during composition.
+    """
     parts: list[str] = []
     previous_sentence = ""
     for chunk in chunks:
-        source = chunk.chunk.text
-        text = filter_artifact_lines(chunk.text, source_text=source)
-        if "[CONTEXT:" not in source and "[CONTINUING FROM:" not in source:
-            text = transform_prose(text, remove_context_markers)
-        # Only a generated duplicate at a known seam may be removed. Repetition
-        # present in the current source chunk remains intentional source content.
-        protected = protected_spans(text)
-        if (
-            previous_sentence
-            and not _source_starts_with_sentence(source, previous_sentence)
-            and not (protected and protected[0][0] == 0)
-        ):
-            text = _drop_leading_duplicate_sentence(text, previous_sentence)
-        text = transform_prose(text, partial(remove_duplicate_headers, source_text=source))
-        if "```" not in source and "~~~" not in source:
-            text = remove_empty_code_fences(text)
+        text = chunk.text
+        if source_text is None:
+            source = chunk.chunk.text
+            text = filter_artifact_lines(chunk.text, source_text=source)
+            if "[CONTEXT:" not in source and "[CONTINUING FROM:" not in source:
+                text = transform_prose(text, remove_context_markers)
+            # Only a generated duplicate at a known seam may be removed. Repetition
+            # present in the current source chunk remains intentional source content.
+            protected = protected_spans(text)
+            if (
+                previous_sentence
+                and not _source_starts_with_sentence(source, previous_sentence)
+                and not (protected and protected[0][0] == 0)
+            ):
+                text = _drop_leading_duplicate_sentence(text, previous_sentence)
+            text = transform_prose(text, partial(remove_duplicate_headers, source_text=source))
+            if "```" not in source and "~~~" not in source:
+                text = remove_empty_code_fences(text)
         if text.strip():
-            parts.append(text.strip())
+            separator = chunk_separator_before(chunk.chunk, source_text) if parts else ""
+            parts.append(separator + text.strip())
             previous_sentence = _last_sentence(text)
-    text = normalize_assembled_whitespace("\n\n".join(parts))
+    text = normalize_assembled_whitespace("".join(parts))
     return text.strip()
 
 

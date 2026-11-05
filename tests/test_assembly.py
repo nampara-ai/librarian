@@ -116,3 +116,60 @@ def test_assembly_keeps_source_repetition_when_cleaner_supplies_missing_punctuat
     assert assemble_cleaned_document([first, second]) == (
         "We will finish the work.\n\nWe will finish the work. I promise."
     )
+
+
+def test_assembly_preserves_source_joins_inside_sentences_and_between_paragraphs() -> None:
+    from librarian.pipeline.chunking import ChunkingPolicy, chunk_text
+
+    source = (
+        "The committee considered the evidence and carefully weighed each proposal before deciding "
+        "which members would speak next. The discussion continued while the clerk recorded it."
+        "\n\nThe next session began after lunch and ended promptly."
+    )
+    chunks = chunk_text(
+        DocumentId("joins"), source, ChunkingPolicy(target_chars=70, overlap_chars=10)
+    )
+    assert len(chunks) > 2
+    assert (
+        assemble_cleaned_document(
+            [CleanedChunk(chunk, chunk.text, ()) for chunk in chunks], source_text=source
+        )
+        == source
+    )
+
+
+def test_assembly_uses_source_offsets_even_when_the_words_were_copyedited() -> None:
+    source = "Teh first clause continues through the second."
+    left = _cleaned_chunk(0, "The first clause")
+    left = replace(
+        left, chunk=replace(left.chunk, text="Teh first clause", start_char=0, end_char=16)
+    )
+    right_text = "continues through the second."
+    right = _cleaned_chunk(1, right_text)
+    start = source.index(right_text)
+    right = replace(
+        right, chunk=replace(right.chunk, text=right_text, start_char=start, end_char=len(source))
+    )
+    assert assemble_cleaned_document([left, right], source_text=source) == (
+        "The first clause continues through the second."
+    )
+
+
+def test_source_backed_assembly_never_deletes_an_audited_repetition() -> None:
+    first_source = "Never again."
+    second_source = "and never again we meant it"
+    source = first_source + " " + second_source
+    first = _cleaned_chunk(0, first_source)
+    first = replace(
+        first,
+        chunk=replace(first.chunk, text=first_source, start_char=0, end_char=len(first_source)),
+    )
+    second = _cleaned_chunk(1, "Never again. We meant it.")
+    start = len(first_source) + 1
+    second = replace(
+        second,
+        chunk=replace(second.chunk, text=second_source, start_char=start, end_char=len(source)),
+    )
+    assert assemble_cleaned_document([first, second], source_text=source) == (
+        "Never again. Never again. We meant it."
+    )

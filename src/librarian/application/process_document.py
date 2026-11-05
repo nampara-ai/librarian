@@ -351,13 +351,16 @@ class ProcessDocument:
                     self.cleaner,
                     on_attempt=_note_attempt,
                     editorial_context=spelling_sheet,
+                    document_source=normalized_text,
                 )
                 cleaned_missing = await cleaner.execute(
-                    model_chunks, on_chunk_cleaned=_note_chunk_cleaned, cached_chunks=cached_chunks
+                    chunked,
+                    on_chunk_cleaned=_note_chunk_cleaned,
+                    cached_chunks=[*cached_chunks, *verified_chunks],
                 )
                 await self._raise_if_canceled(run_id)
                 cleaned_chunks = sorted(
-                    [*verified_chunks, *cleaned_missing],
+                    cleaned_missing,
                     key=lambda item: item.chunk.ordinal,
                 )
             async with self._timed_stage(RunStage.VALIDATE, run_id, document_id):
@@ -408,7 +411,7 @@ class ProcessDocument:
                     status=RunStatus.RUNNING,
                     stage=RunStage.ASSEMBLE,
                 )
-                assembled = assemble_cleaned_document(cleaned_chunks)
+                assembled = assemble_cleaned_document(cleaned_chunks, source_text=normalized_text)
             # Guard against publishing an empty document as a success: if every
             # chunk cleaned to nothing (truncation, refusal, provider outage),
             # fail loudly instead of silently shipping a blank output.

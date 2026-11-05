@@ -126,3 +126,95 @@ def test_new_lowercase_paragraph_is_rejected_without_changing_source_voice() -> 
                 original, input_size=len(original), source_text=original
             ).warnings
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["fast", "balanced", "max-coherence"])
+async def test_every_coherence_mode_receives_forward_source_context(mode: str) -> None:
+    from typing import cast
+
+    from librarian.application.clean_chunks import CoherenceMode
+
+    class Provider:
+        name = "forward-context"
+
+        def __init__(self) -> None:
+            self.edits: list[dict[str, object]] = []
+            self.pairs: list[dict[str, str]] = []
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            payload = json.loads(user_prompt)
+            if "pairs" in payload:
+                self.pairs.extend(payload["pairs"])
+                return '{"issues": []}'
+            self.edits.append(payload)
+            return payload["source"]
+
+    texts = ["The first clause", "continues through this clause", "and ends here."]
+    source = " ".join(texts)
+    chunks: list[Chunk] = []
+    offset = 0
+    for index, text in enumerate(texts):
+        chunks.append(
+            Chunk(
+                ChunkId(str(index)),
+                DocumentId("forward"),
+                index,
+                text,
+                offset,
+                offset + len(text),
+                "source",
+            )
+        )
+        offset += len(text) + 1
+    provider = Provider()
+    cleaner = CleanChunks(
+        provider,
+        PromptCatalog(),
+        "cmos_v8",
+        "test",
+        document_source=source,
+        coherence_mode=cast(CoherenceMode, mode),
+        balanced_group_size=1,
+    )
+    await cleaner.execute(chunks)
+    first = next(edit for edit in provider.edits if edit["source"] == texts[0])
+    assert first["context_after"] == " " + texts[1]
+    assert first["continuation_after"] is True
+    first_pair = next(pair for pair in provider.pairs if pair["source"] == texts[0])
+    assert first_pair["context_after"] == " " + texts[1]
+    assert first_pair["edited_context_after"] == ""
+
+
+@pytest.mark.asyncio
+async def test_cached_predecessor_is_available_as_actual_draft_context_in_fast_mode() -> None:
+    from librarian.application.clean_chunks import CleanedChunk
+
+    class Provider:
+        name = "cached-context"
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            payload = json.loads(user_prompt)
+            if "pairs" in payload:
+                pair = payload["pairs"][0]
+                assert pair["context_before"] == "Teh first clause"
+                assert pair["edited_context_before"] == "The first clause "
+                return '{"issues": []}'
+            assert payload["edited_context_before"] == "The first clause "
+            return payload["source"]
+
+    source = "Teh first clause continues here."
+    first = Chunk(ChunkId("c0"), DocumentId("doc"), 0, "Teh first clause", 0, 16, "first")
+    second = Chunk(ChunkId("c1"), DocumentId("doc"), 1, "continues here.", 17, len(source), "last")
+    cleaner = CleanChunks(
+        Provider(),
+        PromptCatalog(),
+        "cmos_v8",
+        "test",
+        document_source=source,
+        coherence_mode="fast",
+    )
+    results = await cleaner.execute(
+        [first, second], cached_chunks=[CleanedChunk(first, "The first clause", ())]
+    )
+    assert [result.text for result in results] == ["The first clause", "continues here."]
