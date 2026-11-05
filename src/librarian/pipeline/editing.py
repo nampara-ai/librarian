@@ -146,26 +146,25 @@ def decode_edits(
             failures[unit.id] = warnings
         separator = unit.separator
         edited = result.text
-        if unit.kind == "prose":
-            edited = edited.translate(str.maketrans({"\u00a0": " ", "\u202f": " ", "‑": "-"}))
-        if (
-            separator == " "
-            and parts
-            and unit.kind == "prose"
-            and re.search(r"[.!?][\"'”’)]?$", parts[-1].rstrip())
-        ):
-            opener = re.match(
-                r"(?:and|but|so|now|then|we|the|you|he|she|they|it|this|that|these|those|"
-                r"for|however|there|what|when|where|why|how|as|i)\b",
-                edited,
-            )
-            if opener:
-                edited = edited[0].upper() + edited[1:]
-            if edited[:1].isupper():
-                separator = "\n\n"
+        edited = _canonical_unit_text(edited, unit, parts[-1] if parts else "")
         parts.append((separator if parts else "") + edited)
     warnings = tuple(dict.fromkeys(warning for values in failures.values() for warning in values))
     return "".join(parts), warnings, failures
+
+
+def _canonical_unit_text(text: str, unit: EditUnit, previous: str) -> str:
+    """Normalize a unit once, without inventing paragraphs at transport boundaries."""
+    if unit.kind != "prose":
+        return text
+    text = text.translate(str.maketrans({"\u00a0": " ", "\u202f": " ", "‑": "-"}))
+    if unit.separator == " " and re.search(r"[.!?][\"'”’)]?$", previous.rstrip()):
+        if re.match(
+            r"(?:and|but|so|now|then|we|the|you|he|she|they|it|this|that|these|those|"
+            r"for|however|there|what|when|where|why|how|as|i)\b",
+            text,
+        ):
+            text = text[0].upper() + text[1:]
+    return text
 
 
 def verification_pairs(
@@ -177,18 +176,30 @@ def verification_pairs(
     if fenced:
         body = fenced.group(1)
     payload = cast("dict[str, list[dict[str, str]]]", json.loads(body))
+    rendered: list[str] = []
+    for unit, edit in zip(units, payload["edits"], strict=True):
+        validated = validate_cleaned_text(
+            edit["text"], input_size=len(unit.text), source_text=unit.text
+        )
+        rendered.append(
+            _canonical_unit_text(validated.text, unit, rendered[-1] if rendered else "")
+        )
     return [
         {
             "id": unit.id,
             "source": unit.text,
-            "edited": edit["text"],
+            "edited": rendered[index],
             "context_before": units[index - 1].text[-1200:] if index else "",
             "context_after": units[index + 1].text[:1200] if index + 1 < len(units) else "",
-            "edited_context_before": payload["edits"][index - 1]["text"][-1200:] if index else "",
+            "edited_context_before": (rendered[index - 1] + unit.separator)[-1200:]
+            if index
+            else "",
             "edited_context_after": (
-                payload["edits"][index + 1]["text"][:1200] if index + 1 < len(units) else ""
+                (units[index + 1].separator + rendered[index + 1])[:1200]
+                if index + 1 < len(units)
+                else ""
             ),
         }
-        for index, (unit, edit) in enumerate(zip(units, payload["edits"], strict=True))
-        if unit.text != edit["text"] or (include_unchanged_prose and unit.kind == "prose")
+        for index, unit in enumerate(units)
+        if unit.text != rendered[index] or (include_unchanged_prose and unit.kind == "prose")
     ]

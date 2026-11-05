@@ -233,7 +233,7 @@ class CleanChunks:
         if self.plain_edits:
             prompts["prose_fidelity_v1"] = self.prompt_catalog.get("repair", "prose_fidelity_v1")
             prompts["prose_patch_v1"] = self.prompt_catalog.get("repair", "prose_patch_v1")
-            for name in ("prose_review_v3", "confirm_prose_v3"):
+            for name in ("prose_review_v4", "confirm_prose_v4"):
                 prompts[name] = self.prompt_catalog.get("repair", name)
             if self.source_reading:
                 prompts["source_reading_v1"] = self.prompt_catalog.get(
@@ -241,7 +241,7 @@ class CleanChunks:
                 )
         policy = json.dumps(
             {
-                "policy": 4,
+                "policy": 5,
                 "source_reading": self.source_reading,
                 "source": hashlib.sha256(source.encode()).hexdigest(),
                 "prompts": prompts,
@@ -491,6 +491,7 @@ class CleanChunks:
                                 "new-lowercase-paragraph",
                             }.intersection(warnings)
                         ),
+                        previous_edited_context=previous_context,
                     )
                 else:
                     operation = self.provider.complete(
@@ -568,6 +569,8 @@ class CleanChunks:
                     provider_text, units, include_unchanged_prose=self.plain_edits
                 )
                 if self.plain_edits:
+                    # Repairs must patch the same canonical text the reviewer audited.
+                    unit_edits.update({pair["id"]: pair["edited"] for pair in pairs})
                     for pair in pairs:
                         if pair["id"] == units[0].id:
                             pair["context_before"] = (
@@ -653,6 +656,7 @@ class CleanChunks:
         following_context: str = "",
         inherited_checks: tuple[str, ...] = (),
         patch_semantics: bool = False,
+        previous_edited_context: str = "",
     ) -> str:
         """Edit modest source spans independently and retry only rejected spans."""
         if self.plain_edits:
@@ -677,7 +681,21 @@ class CleanChunks:
                 )
                 if patch_semantics and unit.id in edits and unit.id in failures:
                     repaired, problems = await self._repair_prose(
-                        unit, edits[unit.id], failures[unit.id], before, after
+                        unit,
+                        edits[unit.id],
+                        failures[unit.id],
+                        before,
+                        after,
+                        edited_before=(
+                            edits.get(units[index - 1].id, "")[-1200:]
+                            if index
+                            else previous_edited_context[-1200:]
+                        ),
+                        edited_after=(
+                            edits.get(units[index + 1].id, "")[:1200]
+                            if index + 1 < len(units)
+                            else ""
+                        ),
                     )
                     edits[unit.id] = repaired
                     if problems:
@@ -785,14 +803,25 @@ class CleanChunks:
                 queue.task_done()
 
         if pending:
-            await _run_workers(worker, min(len(pending), max(1, self.max_parallel_chunks)))
+            # Repairs depend on the evolving neighbouring draft. Commit them in
+            # source order so adjacent patches do not act on incompatible snapshots.
+            workers = 1 if patch_semantics else min(len(pending), max(1, self.max_parallel_chunks))
+            await _run_workers(worker, workers)
         return json.dumps(
             {"edits": [{"id": unit.id, "text": edits[unit.id]} for unit in units]},
             ensure_ascii=False,
         )
 
     async def _repair_prose(
-        self, unit: EditUnit, candidate: str, checks: list[str], before: str, after: str
+        self,
+        unit: EditUnit,
+        candidate: str,
+        checks: list[str],
+        before: str,
+        after: str,
+        *,
+        edited_before: str = "",
+        edited_after: str = "",
     ) -> tuple[str, tuple[str, ...]]:
         protected = protect_prose_data(candidate)
         payload: dict[str, object] = {
@@ -802,6 +831,8 @@ class CleanChunks:
             ],
             "context_before": before,
             "context_after": after,
+            "edited_context_before": edited_before,
+            "edited_context_after": edited_after,
             "checks": checks,
             "protected_values": dict(protected.values),
         }
@@ -893,7 +924,7 @@ class CleanChunks:
                 warning, issues, response = await self._request_review(
                     system_prompt=(
                         self.prompt_catalog.get(
-                            "repair", "prose_review_v3" if self.plain_edits else "meaning_v1"
+                            "repair", "prose_review_v4" if self.plain_edits else "meaning_v1"
                         )
                         + (
                             ""
@@ -913,7 +944,7 @@ class CleanChunks:
                         system_prompt=(
                             self.prompt_catalog.get(
                                 "repair",
-                                "confirm_prose_v3" if self.plain_edits else "confirm_meaning_v1",
+                                "confirm_prose_v4" if self.plain_edits else "confirm_meaning_v1",
                             )
                             + (
                                 ""

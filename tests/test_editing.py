@@ -5,7 +5,7 @@ import pytest
 from librarian.application.clean_chunks import CleanChunks, FidelityValidationError
 from librarian.domain.ids import ChunkId, DocumentId
 from librarian.domain.models import Chunk
-from librarian.pipeline.editing import EditUnit, decode_edits, editing_units
+from librarian.pipeline.editing import EditUnit, decode_edits, editing_units, verification_pairs
 from librarian.prompts import PromptCatalog
 
 
@@ -126,7 +126,11 @@ def test_reconstructed_sentence_seams_keep_readable_case_and_spacing() -> None:
         }
     )
     text, warnings, _ = decode_edits(raw, units)
-    assert text == "First complete thought.\n\nAnd the follow-up matters."
+    assert text == "First complete thought. And the follow-up matters."
+    pairs = verification_pairs(raw, units, include_unchanged_prose=True)
+    assert pairs[1]["edited"] == "And the follow-up matters."
+    assert pairs[0]["edited_context_after"] == " And the follow-up matters."
+    assert pairs[1]["edited_context_before"] == "First complete thought. "
     assert not warnings
 
 
@@ -196,3 +200,42 @@ async def test_source_aligned_cleaner_refuses_unparseable_model_output() -> None
     )
     with pytest.raises(FidelityValidationError, match="invalid-edit-structure"):
         await cleaner.execute([chunk])
+
+
+@pytest.mark.asyncio
+async def test_dependent_repairs_receive_preceding_committed_draft() -> None:
+    class Provider:
+        name = "dependent-repairs"
+
+        def __init__(self) -> None:
+            self.payloads: list[dict[str, object]] = []
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            payload = json.loads(user_prompt)
+            self.payloads.append(payload)
+            phrase = "First" if len(self.payloads) == 1 else "Second"
+            return json.dumps(
+                {"patches": [{"id": "p0", "find": phrase, "replace": phrase + " repaired"}]}
+            )
+
+    units = [
+        EditUnit("u0000", "First source.", "prose", ""),
+        EditUnit("u0001", "Second source.", "prose", " "),
+    ]
+    provider = Provider()
+    cleaner = CleanChunks(provider, PromptCatalog(), "cmos_v8", "test")
+    edits = {unit.id: unit.text for unit in units}
+    await cleaner._edit_units(  # pyright: ignore[reportPrivateUsage]
+        units,
+        "Raw previous.",
+        "",
+        edits,
+        {unit.id: ["editorial-quality-failed"] for unit in units},
+        {},
+        patch_semantics=True,
+        previous_edited_context="Edited previous.",
+    )
+    assert provider.payloads[0]["edited_context_before"] == "Edited previous."
+    assert provider.payloads[1]["edited_context_before"] == "First repaired source."
+    assert provider.payloads[1]["context_before"] == "First source."
+    assert edits["u0001"] == "Second repaired source."

@@ -1,6 +1,11 @@
 Copyedit the text in source into clear, fluent written prose using the Chicago Manual of Style,
 eighteenth edition. Return only the edited Markdown for source.
 
+Quotation fidelity takes priority over grammatical improvement. Preserve the wording of an
+intelligible direct quotation, including dialect, historical idiom, and awkward authored grammar.
+Inside quotations, repair only clear OCR/transcription corruption or accidental speech debris;
+do not insert implied actors or improve the quoted speaker's prose.
+
 Retain the author's vocabulary and clear expressions. Make the smallest word changes needed
 for intended meaning and fluent grammar. Rebuild broken syntax decisively, while keeping
 already-accurate content words instead of replacing them with more formal or looser synonyms.

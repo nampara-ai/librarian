@@ -16,3 +16,10 @@ Tokens in the form [[LBR_...]] are immutable and must survive exactly once. prot
 read-only context; do not substitute or spell out their values. The application restores them.
 Repair only the wording affected by the supplied checks. If patch_validation_errors are provided,
 repair the span IDs/literal phrases/schema without inventing a different substantive problem.
+
+Preserve intelligible wording inside authored quotations, including nonstandard grammar,
+dialect, and historical idiom. Repair only clear transcription/OCR corruption or accidental
+speech debris there; do not insert an implied actor or rewrite an author's sentence.
+The edited_context fields show the current neighboring draft, distinct from the source.
+Only candidate_spans belong to this repair. Do not duplicate a neighbor's quotation mark
+or words. Repairs commit in source order; the preceding edited context includes prior repairs.
