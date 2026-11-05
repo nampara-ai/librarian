@@ -217,3 +217,46 @@ once with source reading enabled and once with it explicitly disabled. These are
 five development cases repeated under two settings, not ten independent holdout cases.
 The frozen V5 corpus remains unevaluated. Private sources, candidates, and provider traces
 remain outside Git. Cerebras qualification has not resumed.
+
+### Follow-up failures and fixes
+
+A separate fresh-database transcript run at `37a1479` completed publication in about
+17 minutes 37 seconds, using 64 editing calls and 128 review/confirmation calls. It retained
+one 4,767-character source window. This is a processing success and an editorial failure,
+not another clean-output pass. Its independent assessment also returned invalid source
+evidence; that failed assessment is retained rather than rerun until favorable.
+
+The failed window exposed a 6,000-character minimum repair-merge size that defeated smaller
+unit profiles. `8d1080e` bounds merges by twice the configured unit target (at most 12,000
+characters), and splits only oversized unresolved legacy windows back into canonical source
+units. A real recovery reused three cached chunks and completed the fourth with eight editing
+calls and 21 review/confirmation calls, no source fallback, and three transcription queries.
+The independent assessment still failed fluency on an abandoned speech repair.
+
+That repair exposed a separate coverage bug: the editorial-risk checker inspected only its
+first four cues but could approve the entire unit. `e139f97` checks later cues in batches of
+four, with an explicit capacity failure above 32 proposals instead of silent approval. It
+upgrades old audit receipts explicitly. The subsequent real recovery used seven editing
+calls and 28 review/confirmation calls, with no source fallback and the same three queries.
+The unchanged Luna assessment passed fidelity, completeness, voice, style, and structure,
+but failed fluency on a disconnected utterance it regarded as transcript debris. It is not
+a full editorial pass. No phrase-specific deletion rule or changed assessor rubric was added.
+
+The acceptance audit during that upgrade found two previously accepted units reopened
+without an explicit invalidation. Checkpoint restore had reapplied a word-count heuristic
+to already reviewed filler removal. The failed audit is retained. `ae08fdd` restores those
+accepted bodies through the frozen-text validation path, while keeping numeric and structural
+checks and explicitly reporting any hard-guard invalidation. The regression now exercises an
+actual restart in both advisory and strict modes, as well as a corrupt numeric checkpoint.
+
+Final replay verification at `ae08fdd` used a private SQLite backup with every completed-chunk
+cache entry removed. All four chunks were reconstructed from unit checkpoints with zero
+editing calls, zero review calls, and byte-identical Markdown; only spelling preparation and
+classification called the provider. A separate complete-cache replay also returned identical
+Markdown with zero editing/review calls. These are recovery checks, not fresh editorial trials.
+
+The final local gate is 880 passing tests, 14 skipped, clean Ruff/Pyright, and successful wheel
+and source-distribution builds. Swift frontend parsing passed, but a full Mac build could not
+run with the local macOS 13 SDK, and GitHub's Mac jobs were canceled before receiving a runner.
+The broader 100% editorial-quality target remains unqualified; the draft PR makes that limit
+explicit. Cerebras and the untouched V5 qualification remain pending.
