@@ -182,8 +182,8 @@ def repairable_number_spans(
     Each recognized digit has exactly one canonical reading. Read-only neighbors
     keep the decision independent of transport boundaries; queries can retain raw spelling.
     """
-    prefix = context.before[-600:] if context else ""
-    suffix = context.after[:600] if context else ""
+    prefix = context.before if context else ""
+    suffix = context.after if context else ""
     combined = prefix + text + suffix
     offset = len(prefix)
     supported: set[str] = (
@@ -202,6 +202,7 @@ def repairable_number_spans(
     )
     protected = [*protected_spans(text), *(m.span() for m in re.finditer(r"`[^`\n]+`", text))]
     readings: dict[tuple[int, int], str] = {}
+    boundaries = list(re.finditer(r"\n[ \t]*\n", combined))
     for match in pattern.finditer(combined):
         start, end = match.start(1) - offset, match.end(1) - offset
         if not 0 <= start < end <= len(text):
@@ -211,7 +212,14 @@ def repairable_number_spans(
         if duration.match(combined[match.end() :]):
             continue
         canonical = match.group(1) + "0"
-        local = combined[max(0, match.start() - 600) : match.end() + 600]
+        # A character-radius cutoff makes the same lexical reading alternate
+        # between repairable and immutable as transport windows move. Use the
+        # source paragraph evidence already supplied by the caller instead.
+        left = max((b.end() for b in boundaries if b.end() <= match.start()), default=0)
+        right = min(
+            (b.start() for b in boundaries if b.start() >= match.end()), default=len(combined)
+        )
+        local = combined[left:right]
         if (
             canonical in supported
             or re.search(r"\bdecades?\b", local, re.I)

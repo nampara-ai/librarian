@@ -28,6 +28,10 @@
 - Improve provider compatibility and failure handling, including reasoning/token dialects,
   bounded JSON recovery, access/credit failures, response limits, and cancellation of sibling work.
 
+- Keep numeric reading evidence consistent across transport units. Recognized missing-zero
+  decade spelling uses the available source paragraph rather than an arbitrary character
+  radius; quantities, versions, durations, quoted labels, and paragraph boundaries remain guarded.
+
 ## 1.9.0 - 2026-09-20
 
 PDF fidelity, reliable long-running processing, and an actionable final quality review.

@@ -110,6 +110,23 @@ def editing_units(
     return packed
 
 
+def unit_source_context(
+    units: Sequence[EditUnit], index: int, outer: SourceContext | None = None
+) -> SourceContext:
+    """Retain available source evidence across transport units, including paragraph joins.
+
+    This context is for source-only protection rules. Model prompts keep their
+    bounded neighboring excerpts rather than receiving the entire chunk again.
+    """
+    before = "".join((u.separator if i else "") + u.text for i, u in enumerate(units[:index]))
+    if index:
+        before += units[index].separator
+    after = "".join(u.separator + u.text for u in units[index + 1 :])
+    return SourceContext(
+        (outer.before if outer else "") + before, after + (outer.after if outer else "")
+    )
+
+
 def decode_edits(
     raw: str,
     units: Sequence[EditUnit],
@@ -141,18 +158,7 @@ def decode_edits(
         text = entry.get("text")
         if set(entry) != {"id", "text"} or entry.get("id") != unit.id or not isinstance(text, str):
             return "", ("invalid-edit-structure",), {}
-        neighbors = SourceContext(
-            (units[index - 1].text + unit.separator)[-600:]
-            if index
-            else context.before
-            if context
-            else "",
-            (units[index + 1].separator + units[index + 1].text)[:600]
-            if index + 1 < len(units)
-            else context.after
-            if context
-            else "",
-        )
+        neighbors = unit_source_context(units, index, context)
         result = validate_cleaned_text(
             text, input_size=len(unit.text), source_text=unit.text, context=neighbors
         )

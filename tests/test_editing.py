@@ -461,3 +461,26 @@ async def test_editor_and_reviewer_share_the_same_contextual_numeric_contract() 
     assert not result.fidelity_failed
     assert "repaired-decade-shorthand" in result.warnings
     assert provider.reviewed
+
+
+def test_numeric_protection_and_validation_share_full_available_source_context() -> None:
+    from librarian.pipeline.editing import EditUnit, unit_source_context
+    from librarian.pipeline.protected_text import protect_prose_data
+
+    left = "It happened in the '9s."
+    middle = " ".join(f"Archive record {i} describes this period." for i in range(80))
+    right = "Records from the '80s remain."
+    units = [
+        EditUnit("a", left, "prose", ""),
+        EditUnit("b", middle, "prose", " "),
+        EditUnit("c", right, "prose", " "),
+    ]
+    protected = protect_prose_data(left, context=unit_source_context(units, 0))
+    assert [reading.reading for reading in protected.numeric_readings] == ["90"]
+    raw = json.dumps(
+        {"edits": [{"id": u.id, "text": u.text.replace("'9s", "'90s")} for u in units]}
+    )
+    _, warnings, failures = decode_edits(raw, units)
+    assert not failures
+    assert "missing-verbatim-number" not in warnings
+    assert "added-verbatim-number" not in warnings

@@ -10,7 +10,7 @@ from librarian.application.clean_chunks import (
 from librarian.config import Settings
 from librarian.domain.ids import ChunkId, DocumentId
 from librarian.domain.models import Chunk, RunStage
-from librarian.pipeline.validation import validate_cleaned_text
+from librarian.pipeline.validation import FIDELITY_WARNINGS, validate_cleaned_text
 from librarian.prompts import PromptCatalog
 
 
@@ -493,3 +493,26 @@ def test_explicit_footnote_label_stays_protected_even_if_it_names_an_audio_marke
         "The statement has support.", input_size=len(source), source_text=source
     )
     assert "missing-citation-marker" in result.warnings
+
+
+@pytest.mark.parametrize("distance", [0, 200, 1000, 4000])
+def test_decade_reading_uses_available_paragraph_evidence_not_character_radius(
+    distance: int,
+) -> None:
+    source = (
+        "It happened in the '9s. "
+        + ("Archive details. " * distance)
+        + " Records from the '80s remain."
+    )
+    candidate = source.replace("'9s", "'90s")
+    result = validate_cleaned_text(candidate, input_size=len(source), source_text=source)
+    assert not FIDELITY_WARNINGS.intersection(result.warnings)
+    assert "repaired-decade-shorthand" in result.warnings
+
+
+def test_decade_evidence_does_not_cross_a_source_paragraph_boundary() -> None:
+    source = "It happened in the '9s.\n\nRecords from the '80s remain."
+    candidate = source.replace("'9s", "'90s")
+    result = validate_cleaned_text(candidate, input_size=len(source), source_text=source)
+    assert "missing-verbatim-number" in result.warnings
+    assert "added-verbatim-number" in result.warnings

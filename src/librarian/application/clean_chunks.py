@@ -32,6 +32,7 @@ from librarian.pipeline.editing import (
     coalesce_adjacent_repairs,
     decode_edits,
     editing_units,
+    unit_source_context,
     verification_pairs,
 )
 from librarian.pipeline.prose_patches import apply_prose_patches, candidate_spans
@@ -819,6 +820,10 @@ class CleanChunks:
                     verify_units(
                         pairs,
                         verified_units,
+                        source_contexts={
+                            u.id: unit_source_context(units, i, source_context)
+                            for i, u in enumerate(units)
+                        },
                     ),
                     note_wait,
                     interval_seconds=progress_interval,
@@ -1062,6 +1067,15 @@ class CleanChunks:
                                 }
                             ],
                             {},
+                            source_contexts={
+                                unit.id: unit_source_context(
+                                    units,
+                                    index,
+                                    SourceContext(
+                                        previous_context + preceding_separator, following_context
+                                    ),
+                                )
+                            },
                         )
                         if repair_review_traces is not None:
                             repair_review_traces.append(trace)
@@ -1083,6 +1097,13 @@ class CleanChunks:
                         after,
                         edited_before=edited_before,
                         edited_after=edited_after,
+                        source_context=unit_source_context(
+                            units,
+                            index,
+                            SourceContext(
+                                previous_context + preceding_separator, following_context
+                            ),
+                        ),
                     )
                     edits[unit.id] = repaired
                     if problems:
@@ -1126,9 +1147,12 @@ class CleanChunks:
                         continue
                 try:
                     protection_warnings: tuple[str, ...] = ()
-                    protected = protect_prose_data(
-                        unit.text, context=SourceContext(before + " ", " " + after)
+                    protection_context = unit_source_context(
+                        units,
+                        index,
+                        SourceContext(previous_context + preceding_separator, following_context),
                     )
+                    protected = protect_prose_data(unit.text, context=protection_context)
                     payload: dict[str, object] = {
                         "context_before": before,
                         "context_after": after,
@@ -1227,9 +1251,12 @@ class CleanChunks:
         *,
         edited_before: str = "",
         edited_after: str = "",
+        source_context: SourceContext | None = None,
     ) -> tuple[str, tuple[str, ...]]:
         protected = protect_prose_data(
-            candidate, source_context=unit.text, context=SourceContext(before + " ", " " + after)
+            candidate,
+            source_context=unit.text,
+            context=source_context or SourceContext(before + " ", " " + after),
         )
         payload: dict[str, object] = {
             "source": unit.text,
@@ -1325,6 +1352,8 @@ class CleanChunks:
         self,
         pairs: list[dict[str, str]],
         verified: dict[str, str],
+        *,
+        source_contexts: dict[str, SourceContext] | None = None,
     ) -> tuple[str | None, dict[str, list[str]], str]:
         queue: asyncio.Queue[dict[str, str]] = asyncio.Queue()
         for original_pair in pairs:
@@ -1332,9 +1361,12 @@ class CleanChunks:
             if self.plain_edits:
                 data = protect_prose_data(
                     pair["source"],
-                    context=SourceContext(
-                        pair.get("context_before", "") + " ",
-                        " " + pair.get("context_after", ""),
+                    context=(source_contexts or {}).get(
+                        pair["id"],
+                        SourceContext(
+                            pair.get("context_before", "") + " ",
+                            " " + pair.get("context_after", ""),
+                        ),
                     ),
                 )
                 if data.numeric_readings:
