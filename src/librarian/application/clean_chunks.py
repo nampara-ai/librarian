@@ -265,7 +265,7 @@ class CleanChunks:
                 )
         policy = json.dumps(
             {
-                "policy": 14,
+                "policy": 15,
                 "unit_max_retries": self.unit_max_retries,
                 "review_mode": self.review_mode,
                 "publish_partial": self.publish_partial,
