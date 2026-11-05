@@ -303,3 +303,98 @@ async def test_merged_failures_preserve_but_cannot_inflate_unspent_unit_budgets(
     else:
         assert result.text == "The first result stood.\n\nThe second result stood."
         assert not review_items(result.text)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_checkpoint", [False, True])
+async def test_small_unit_profile_bounds_failed_windows_and_preserves_accepted_neighbor(
+    legacy_checkpoint: bool,
+) -> None:
+    from dataclasses import replace
+
+    from librarian.application.review_items import UnitCheckpoint, review_items
+    from librarian.pipeline.editing import editing_units
+
+    class Editor:
+        name = "editor"
+        sources: list[str] = []
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            payload = json.loads(user_prompt)
+            if "candidate_spans" not in payload:
+                self.sources.append(payload["source"])
+                return payload["source"].replace("teh", "The").replace("stood", "stayed")
+            span = payload["candidate_spans"][0]
+            old = "stayed" if "stayed" in span["text"] else "remained"
+            return json.dumps(
+                {
+                    "patches": [
+                        {
+                            "id": span["id"],
+                            "find": old,
+                            "replace": "remained" if old == "stayed" else "stayed",
+                        }
+                    ]
+                }
+            )
+
+    class Reviewer:
+        name = "reviewer"
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            payload = json.loads(user_prompt)
+            if "checks" in payload:
+                return json.dumps(
+                    {
+                        "checks": [
+                            {"id": c["id"], "confirmed": True, "reason": c["problem"]}
+                            for c in payload["checks"]
+                        ]
+                    }
+                )
+            pair = payload["pairs"][0]
+            return json.dumps(
+                {
+                    "issues": [
+                        {"id": pair["id"], "problem": "Restore stood, not stayed or remained."}
+                    ]
+                    if "stayed" in pair["edited"] or "remained" in pair["edited"]
+                    else []
+                }
+            )
+
+    source = (
+        "teh first result stood.\n\nteh second result stood.\n\n"
+        "teh third result stood.\n\nThe final note is sound."
+    )
+    chunk = Chunk(ChunkId("c"), DocumentId("d"), 0, source, 0, len(source), "sha")
+    editor = Editor()
+    cleaner = CleanChunks(
+        editor,
+        PromptCatalog(),
+        "cmos_v8",
+        "test",
+        verification_provider=Reviewer(),
+        review_mode="strict",
+        unit_target_chars=26,
+        unit_max_retries=1,
+        publish_partial=True,
+    )
+    units = editing_units(source, target_chars=26, pack_prose_blocks=True)
+    assert len(units) == 4
+    if legacy_checkpoint:
+        merged = "".join((u.separator if i else "") + u.text for i, u in enumerate(units[:3]))
+        saved = (
+            UnitCheckpoint(units[0].id, merged, "prose", units[0].separator, None),
+            UnitCheckpoint(units[3].id, units[3].text, "prose", units[3].separator, units[3].text),
+        )
+        cleaner = replace(cleaner, resume_units={chunk.id: saved})
+    result = (await cleaner.execute([chunk]))[0]
+    flagged = review_items(result.text)
+    assert flagged
+    for item in flagged:
+        size = item["source_chars"]
+        assert isinstance(size, int) and size <= 52
+    assert "The final note is sound." in result.text
+    assert editor.sources.count("The final note is sound.") == (0 if legacy_checkpoint else 1)
+    assert all(len(s) <= 52 for s in editor.sources)

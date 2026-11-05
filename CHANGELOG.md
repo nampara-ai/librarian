@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Bound adjacent repair merges by the configured unit size. Split oversized unresolved
+  legacy checkpoint windows back into source units without reopening accepted neighbors.
+
 - Retry failed chunk fidelity checks with source-grounded repair instructions and a bounded
   budget. Publish exhausted content as explicitly marked source passages requiring review,
   with a strict failure option. Resume accepted units from separate partial checkpoints;

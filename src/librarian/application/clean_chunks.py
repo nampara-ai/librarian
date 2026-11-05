@@ -527,12 +527,43 @@ class CleanChunks:
             ) + self.editorial_context
         units = list(self._source_units(chunk.text))
         canonical_units = tuple(units)
+        coalesce_limit = max(1, min(12_000, self.unit_target_chars * 2))
         saved_units = self.resume_units.get(chunk.id, ())
         # Only source-identical checkpoints can be reused, including the original
         # separators and any failed windows coalesced during the earlier run.
         original = "".join((u.separator if i else "") + u.text for i, u in enumerate(units))
         restored = "".join((u.separator if i else "") + u.source for i, u in enumerate(saved_units))
         if saved_units and original == restored:
+            # Older runs could merge small transport units into a much larger
+            # failing job. Repartition only unresolved source windows; accepted
+            # bodies keep their identity and bytes, even when they are large.
+            positions = {u.id: i for i, u in enumerate(canonical_units)}
+            bounded_saved: list[UnitCheckpoint] = []
+            for index, saved in enumerate(saved_units):
+                start = positions.get(saved.unit_id)
+                end = (
+                    positions.get(saved_units[index + 1].unit_id)
+                    if index + 1 < len(saved_units)
+                    else len(canonical_units)
+                )
+                members = (
+                    canonical_units[start:end] if start is not None and end is not None else ()
+                )
+                member_source = "".join(
+                    (u.separator if i else "") + u.text for i, u in enumerate(members)
+                )
+                if (
+                    saved.accepted_text is None
+                    and len(saved.source) > coalesce_limit
+                    and len(members) > 1
+                    and member_source == saved.source
+                ):
+                    bounded_saved.extend(
+                        UnitCheckpoint(u.id, u.text, u.kind, u.separator, None) for u in members
+                    )
+                else:
+                    bounded_saved.append(saved)
+            saved_units = tuple(bounded_saved)
             units = [EditUnit(u.unit_id, u.source, u.kind, u.separator) for u in saved_units]
         else:
             saved_units = ()
@@ -641,7 +672,6 @@ class CleanChunks:
         prepare_attempt_prompt = partial(self._attempt_prompt, system_prompt, chunk)
         verify_units = self._verify_units
         progress_interval = self.progress_interval_seconds
-        coalesce_limit = max(6000, min(12_000, self.unit_target_chars * 2))
         source_context = SourceContext(
             (previous_source_context or previous_context) + preceding_separator,
             following_source_context,
