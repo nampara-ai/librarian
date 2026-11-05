@@ -94,3 +94,46 @@ def test_review_context_uses_visible_prose_without_metadata() -> None:
         attempts=1,
     )
     assert review_body("Before. " + marked + " After.") == "Before. " + candidate + " After."
+
+
+@pytest.mark.asyncio
+async def test_unavailable_review_can_resume_without_reediting_accepted_text() -> None:
+    from dataclasses import replace
+
+    class Editor:
+        name = "editor"
+        calls = 0
+
+        async def complete(self, **_: object) -> str:
+            self.calls += 1
+            return "The patient did not improve."
+
+    class Reviewer:
+        name = "reviewer"
+        unavailable = True
+        calls = 0
+
+        async def complete(self, **_: object) -> str:
+            self.calls += 1
+            return "bad JSON" if self.unavailable else json.dumps({"issues": []})
+
+    source = "the patient did not improve"
+    chunk = Chunk(ChunkId("c"), DocumentId("d"), 0, source, 0, len(source), "sha")
+    editor, reviewer = Editor(), Reviewer()
+    cleaner = CleanChunks(
+        editor,
+        PromptCatalog(),
+        "cmos_v8",
+        "test",
+        review_mode="advisory",
+        verification_provider=reviewer,
+    )
+    incomplete = (await cleaner.execute([chunk]))[0]
+    assert review_items(incomplete.text)[0]["reasons"] == ["review-unavailable"]
+    reviewer.unavailable = False
+    resumed = replace(cleaner, resume_units={chunk.id: incomplete.checkpoint})
+    completed = (await resumed.execute([chunk]))[0]
+    assert completed.text == "The patient did not improve."
+    assert not review_items(completed.text)
+    assert editor.calls == 1
+    assert reviewer.calls == 3

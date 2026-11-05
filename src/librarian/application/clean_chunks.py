@@ -561,6 +561,11 @@ class CleanChunks:
             for u in saved_units
             if u.advisory_reasons and u.unit_id in frozen_ids
         }
+        pending_reviews = {
+            u.unit_id
+            for u in saved_units
+            if "review-unavailable" in u.advisory_reasons and u.unit_id in frozen_ids
+        }
         generation_failures: dict[str, list[str]] = {}
         verified_units: dict[str, str] = {}
         attempts_used = 0
@@ -866,7 +871,7 @@ class CleanChunks:
                 pairs = [
                     pair
                     for pair in pairs
-                    if pair["id"] not in frozen_ids
+                    if (pair["id"] not in frozen_ids or pair["id"] in pending_reviews)
                     and not (set(unit_failures.get(pair["id"], [])) - {"substantial-content-loss"})
                     and (
                         self.review_mode == "strict"
@@ -874,6 +879,11 @@ class CleanChunks:
                     )
                 ]
                 for pair in pairs:
+                    if pair["id"] in pending_reviews:
+                        # Complete a previously unavailable review without reopening
+                        # the accepted edit or retrying a substantive advisory verdict.
+                        advisory_issues.pop(pair["id"], None)
+                        pending_reviews.remove(pair["id"])
                     if pair["id"] == units[-1].id:
                         pair["context_after"] = following_source_context[:1200]
                 if self.on_attempt is not None:
