@@ -16,9 +16,9 @@
 	<!-- Kept in sync with src/librarian/version.py at build time by the
 	     `app` target in the Makefile (which stamps the built app's plist).
 	     This static value is a fallback for plain `swift run`/manual builds. -->
-	<string>1.10.0</string>
+	<string>1.10.1</string>
 	<key>CFBundleVersion</key>
-	<string>11000</string>
+	<string>11001</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>LSMinimumSystemVersion</key>

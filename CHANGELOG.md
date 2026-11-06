@@ -2,10 +2,14 @@
 
 ## Unreleased
 
-## 1.10.0 - 2026-11-06
+## 1.10.1 - 2026-11-06
 
-Complete PDF extraction, content-loss guards that no reviewer can clear, and resumable, explicit long-document cleaning for small and unreliable models.
+Complete PDF extraction, content-loss guards that no reviewer can clear, and resumable, explicit long-document cleaning for small and unreliable models. (1.10.0 was tagged but not published: its release run stopped at the dependency vulnerability gate.)
 
+- Refresh locked dependencies with fixes for published advisories in certifi (compromised root
+  CAs), Pillow (image decoding and encoding memory-safety issues), urllib3 (HTTPS proxy TLS
+  override and chunk-parser denial of service), filelock, msgpack, and the OpenTelemetry
+  packages; the macOS bundle and Docker image use these exact locked versions.
 - Read PDF text layers with PDFium by default (`LIBRARIAN_PDF_ENGINE=auto|pdfium`): every word
   of the file's own text, OCR only for pages without a usable text layer. The liteparse layout
   engine (which dropped most of a clean page's prose on a real document) runs only when selected,
