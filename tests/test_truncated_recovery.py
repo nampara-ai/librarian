@@ -2,6 +2,7 @@ import json
 from collections import Counter
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -46,10 +47,10 @@ async def test_truncation_retries_smaller_spans_and_retains_successful_units() -
 async def test_repeated_truncation_exhausts_budget_without_publishing_partial_text() -> None:
     class Provider:
         name = "truncated"
-        calls = 0
+        budgets: list[int] = []
 
-        async def complete(self, **_: object) -> str:
-            self.calls += 1
+        async def complete(self, *, max_tokens: int, **_: object) -> str:
+            self.budgets.append(max_tokens)
             raise LLMResponseTruncatedError("Token limit", partial_text="Incomplete candidate")
 
     source = "The test did not establish that the treatment was effective."
@@ -58,7 +59,66 @@ async def test_repeated_truncation_exhausts_budget_without_publishing_partial_te
     cleaner = CleanChunks(provider, PromptCatalog(), "cmos_v6", "test", max_fidelity_retries=1)
     with pytest.raises(FidelityValidationError, match="truncated-model-output"):
         await cleaner.execute([chunk])
-    assert provider.calls == 2
+    # The budget doubles up to the ceiling within an attempt and is remembered
+    # for the next one; only then does the truncation count against the chunk.
+    assert provider.budgets == [8192, 16384, 32768, 65536, 65536]
+
+
+@pytest.mark.asyncio
+async def test_plain_cleaning_raises_the_budget_when_a_reasoning_model_is_cut_off() -> None:
+    """A whole-chunk reply (cmos_v5) that hits the token limit is retried larger, not failed."""
+
+    class Provider:
+        name = "reasoning"
+        budgets: list[int] = []
+
+        async def complete(self, *, user_prompt: str, max_tokens: int, **_: object) -> str:
+            self.budgets.append(max_tokens)
+            if max_tokens < 32768:
+                raise LLMResponseTruncatedError("Token limit", partial_text=user_prompt[:40])
+            return user_prompt
+
+    source = "First page.\n\n<!-- page-break -->\n\nSecond page keeps every word it had."
+    chunk = Chunk(ChunkId("c"), DocumentId("d"), 0, source, 0, len(source), "sha")
+    provider = Provider()
+    cleaner = CleanChunks(provider, PromptCatalog(), "cmos_v5", "test", max_tokens=16384)
+
+    result = (await cleaner.execute([chunk]))[0]
+
+    assert not result.fidelity_failed
+    assert "truncated-model-output" not in result.warnings
+    assert provider.budgets == [16384, 32768]
+
+
+@pytest.mark.asyncio
+async def test_plain_cleaning_publishes_source_when_truncated_at_the_ceiling() -> None:
+    from librarian.application.review_items import review_items
+
+    class Provider:
+        name = "always-truncated"
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            raise LLMResponseTruncatedError("Token limit", partial_text=user_prompt[:20])
+
+    source = "The complete source sentence survives when the model cannot finish its reply."
+    chunk = Chunk(ChunkId("c"), DocumentId("d"), 0, source, 0, len(source), "sha")
+    cleaner = CleanChunks(
+        Provider(),
+        PromptCatalog(),
+        "cmos_v5",
+        "test",
+        max_fidelity_retries=1,
+        max_tokens_ceiling=16384,
+        publish_partial=True,
+    )
+
+    result = (await cleaner.execute([chunk]))[0]
+
+    items = review_items(result.text)
+    assert len(items) == 1
+    assert items[0]["source"] == source
+    assert "truncated-model-output" in cast(list[str], items[0]["reasons"])
+    assert "unit-needs-review" in result.warnings
 
 
 @pytest.mark.asyncio

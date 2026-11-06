@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 import time
 from collections import Counter
@@ -55,6 +56,8 @@ from librarian.pipeline.validation import (
 from librarian.prompts.loader import PromptCatalog
 
 CoherenceMode = Literal["fast", "balanced", "max-coherence"]
+
+_LOGGER = logging.getLogger("librarian.application.clean_chunks")
 
 
 def _route_document_failures(
@@ -235,6 +238,15 @@ class CleanChunks:
     # read-only continuity context. Chunks no longer overlap in the source, so
     # this replaces the (previously duplicated) overlap for boundary coherence.
     context_chars: int = 800
+    # When a reply is cut off at the output token limit (reasoning models spend
+    # the same budget on their hidden reasoning), the request is repeated with
+    # a doubled budget up to this ceiling before the attempt counts as failed.
+    max_tokens_ceiling: int = 65_536
+    # Escalated budget, remembered across attempts and chunks of this cleaner so
+    # a model that needs the larger budget is not re-truncated every time.
+    budget_state: dict[str, int] = field(
+        default_factory=lambda: dict[str, int](), repr=False, compare=False
+    )
 
     @property
     def source_aligned(self) -> bool:
@@ -800,22 +812,31 @@ class CleanChunks:
                     advisory_warnings=auxiliary_warnings,
                 )
             else:
-                operation = self.provider.complete(
+                operation = self._complete_with_escalation(
                     system_prompt=prompt,
                     user_prompt=user_prompt,
                     model=self.model,
-                    max_tokens=self.max_tokens,
                     temperature=self.temperature,
+                    label=f"chunk {chunk.ordinal + 1}",
                 )
 
             note_wait = partial(self._report_wait, chunk, attempt + 1, limit)
 
-            return await await_with_progress(
-                operation,
+            if has_units:
+                return await await_with_progress(
+                    cast("Awaitable[str]", operation),
+                    note_wait,
+                    interval_seconds=self.progress_interval_seconds,
+                )
+            text, truncated = await await_with_progress(
+                cast("Awaitable[tuple[str, bool]]", operation),
                 note_wait,
                 interval_seconds=self.progress_interval_seconds,
             )
+            attempt_state["truncated"] = truncated
+            return text
 
+        attempt_state: dict[str, bool] = {}
         for attempt in range(chunk_limit):
             attempt_warnings = cast("tuple[str, ...]", warnings)
             limit = chunk_limit
@@ -951,6 +972,11 @@ class CleanChunks:
                 )
             else:
                 raw, stripped_context = strip_repeated_context(raw, previous_context)
+                if attempt_state.pop("truncated", False):
+                    # The reply never finished, even at the largest budget. It is
+                    # a rejected draft, never a published one; the retry budget
+                    # and partial publication decide what happens next.
+                    unit_warnings = ("truncated-model-output",)
             validated = validate_cleaned_text(
                 raw,
                 input_size=len(chunk.text),
@@ -1186,6 +1212,48 @@ class CleanChunks:
             return CleanedChunk(chunk, "".join(parts), ("unit-needs-review",), tuple(checkpoint))
         raise FidelityValidationError(chunk, attempts_used, final_warnings)
 
+    async def _complete_with_escalation(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        model: str,
+        temperature: float,
+        label: str,
+    ) -> tuple[str, bool]:
+        """Complete a request, doubling the output budget when the reply is cut off.
+
+        Returns the text and whether it is still truncated at the ceiling. The
+        enlarged budget is remembered on this cleaner so later requests start
+        from it instead of paying for the truncated call again.
+        """
+        budget = max(self.max_tokens, self.budget_state.get("max_tokens", 0))
+        while True:
+            try:
+                text = await self.provider.complete(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    model=model,
+                    max_tokens=budget,
+                    temperature=temperature,
+                )
+            except LLMResponseTruncatedError as exc:
+                larger = min(budget * 2, self.max_tokens_ceiling)
+                if larger <= budget:
+                    _LOGGER.warning(
+                        "model-output-truncated",
+                        extra={"label": label, "max_tokens": budget},
+                    )
+                    return exc.partial_text, True
+                _LOGGER.info(
+                    "model-output-budget-raised",
+                    extra={"label": label, "from": budget, "to": larger},
+                )
+                budget = larger
+                self.budget_state["max_tokens"] = budget
+                continue
+            return text, False
+
     async def _edit_units(
         self,
         units: Sequence[EditUnit],
@@ -1399,15 +1467,20 @@ class CleanChunks:
                                 payload["source_reading"] = reading.model_dump()
                     else:
                         payload["units"] = [unit.as_dict()]
-                    response = await self.provider.complete(
+                    response, truncated = await self._complete_with_escalation(
                         system_prompt=system_prompt,
                         user_prompt=json.dumps(payload, ensure_ascii=False),
                         model=self.model,
-                        max_tokens=self.max_tokens,
                         temperature=self.temperature,
+                        label=f"unit {unit.id}",
                     )
-                except LLMResponseTruncatedError as exc:
+                except LLMResponseTruncatedError as exc:  # pragma: no cover - defensive
                     edits[unit.id] = exc.partial_text[: self.max_response_chars]
+                    generation_failures[unit.id] = ["truncated-model-output"]
+                    queue.task_done()
+                    continue
+                if truncated:
+                    edits[unit.id] = response[: self.max_response_chars]
                     generation_failures[unit.id] = ["truncated-model-output"]
                     queue.task_done()
                     continue

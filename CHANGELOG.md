@@ -12,6 +12,12 @@ stale extractions after a failure.
   attempt, so 40% of the book was published as unedited source. Each source break is now put
   back by aligning the words on either side of it (`page-breaks-restored`); only a break that
   cannot be placed still rejects the chunk.
+- Keep going when a reasoning model's reply is cut off at the output token limit. gpt-oss-120b
+  spends its hidden reasoning from the same budget as its answer, so a whole-chunk reply could
+  end with "LLM response was truncated" and fail the document outright. The request is now
+  repeated with a doubled budget (up to 65,536 tokens, remembered for later chunks); a reply
+  still truncated at the ceiling is a rejected attempt that ends as marked source for review,
+  never a failed run.
 - Never cache or reuse an extraction with unreadable pages. A PDF whose OCR failed was cached by
   content hash and served again on every retry and reinstall, so a repaired OCR tool changed
   nothing until the library database was deleted. Such extractions are now retried on the next

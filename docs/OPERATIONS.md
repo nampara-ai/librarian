@@ -264,6 +264,12 @@ extraction and cleaned-chunk caches, the `.env` settings, and `backend.log`.
 Removing the app or the export folder leaves it in place. An extraction whose
 pages could not all be read is never cached or reused, so a retry re-extracts.
 
+A reply cut off at the output token limit is retried with a doubled budget up
+to 65,536 tokens before it counts as a failed attempt. Reasoning models
+(gpt-oss, o-series) spend their hidden reasoning from that same budget; set
+`LIBRARIAN_CLEANING_REASONING_EFFORT=low` for them to keep replies short and
+cleaning fast.
+
 For constrained models, this explicit profile reduces each editing job and
 avoids source-reading and unchanged-prose review calls:
 
