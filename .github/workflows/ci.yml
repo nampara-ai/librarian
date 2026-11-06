@@ -58,7 +58,7 @@ jobs:
   # (with the OCR system tools from Homebrew). Kept required; flip to
   # `continue-on-error: true` if it proves flaky on GitHub's macOS runners.
   test-macos:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
