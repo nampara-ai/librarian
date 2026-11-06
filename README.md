@@ -143,7 +143,7 @@ layout enhancer whose Markdown is kept only for pages that retain ≥ 95% of the
 | **OCR failure policy** | `LIBRARIAN_OCR_FAIL_ON_PAGE_ERROR=false` (default) | A page that cannot be OCR'd is flagged and the document completes; `true` aborts the document instead. |
 | **Offline OCR data** | `LIBRARIAN_LITEPARSE_TESSDATA_PATH=/path/to/tessdata` | Point liteparse's OCR at local language data (the Mac app does this for you). |
 | **Higher-accuracy OCR** | `LIBRARIAN_LITEPARSE_OCR_SERVER_URL=...` | Offload OCR to a Surya/EasyOCR/PaddleOCR server. |
-| **Figure → data (vision)** | `LIBRARIAN_FIGURE_VISION_ENABLED=true` | A vision model describes figures and may render chart values as Markdown tables; verify important values against the source. |
+| **Figures, tables, equations (vision)** | `LIBRARIAN_FIGURE_VISION_ENABLED=true` | Pages with images, charts, ruled tables, math, or no text layer go to your vision-capable model, which returns figure descriptions, Markdown tables, and LaTeX; accepted per page only when the PDF's own words are retained. Verify important values against the source. |
 | **Extraction cache** | on by default | Text-only files reuse the complete extraction; image-bearing PDFs resume from cached text and asset pages (keyed by content hash + engine/OCR config). |
 | **Parallel imports** | `LIBRARIAN_IMPORT_CONCURRENCY=N` (default 2) | Convert/ingest several files at once; order, resume, and per-file failure isolation preserved. |
 | **Extraction timeout** | `LIBRARIAN_EXTRACTION_TIMEOUT_SECONDS=N` | Bound a single document's extraction so one pathological file can't hang a batch. |
@@ -266,7 +266,9 @@ The essentials:
 | `LIBRARIAN_FINAL_REFINEMENT_ENABLED` | `true` | Source-grounded final pass on reported issues, capped by `LIBRARIAN_FINAL_REFINEMENT_MAX_ACTIONS` (default `32`). |
 | `LIBRARIAN_PDF_ENGINE` | `auto` | PDF engine: PDFium text layer by default (see [the engine](#-the-extraction-engine)). |
 | `LIBRARIAN_PDF_LAYOUT_ENHANCER` | `off` | `liteparse` keeps the layout engine's Markdown for pages that retain the text layer. |
-| `LIBRARIAN_FIGURE_VISION_ENABLED` | `false` | Vision pass that turns charts into data tables. |
+| `LIBRARIAN_FIGURE_VISION_ENABLED` | `false` | Vision pass over pages with figures, tables, math, or scans (needs a vision-capable model). |
+| `LIBRARIAN_FIGURE_VISION_MODEL` / `_BASE_URL` / `_API_KEY_ENV` | cleaning model | Vision model, and optionally a different OpenAI-compatible endpoint and key for it (Cerebras has no vision models; point this at OpenAI, Ollama, LM Studio, ...). |
+| `LIBRARIAN_LLM_RATE_LIMIT_WAIT_SECONDS` | `900` | How long a throttled (429) request is waited out before the run gives up on it. |
 | `LIBRARIAN_IMPORT_CONCURRENCY` | `2` | Files converted/ingested in parallel. |
 | `LIBRARIAN_API_KEY` / `LIBRARIAN_API_KEYS` | – | Require an API key for protected endpoints. |
 

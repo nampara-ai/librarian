@@ -12,6 +12,20 @@ stale extractions after a failure.
   attempt, so 40% of the book was published as unedited source. Each source break is now put
   back by aligning the words on either side of it (`page-breaks-restored`); only a break that
   cannot be placed still rejects the chunk.
+- Read figures, tables, and equations with AI vision. With "Read figures, tables and equations
+  with AI vision" on (`LIBRARIAN_FIGURE_VISION_ENABLED=true` and a vision-capable model), PDF
+  pages that carry raster images, vector charts or ruled tables, typeset mathematics, or no text
+  layer are rendered with PDFium and sent to the model, which returns Markdown with `**Figure:**`
+  descriptions (chart values as tables), real Markdown tables, and LaTeX equations in `$$` blocks.
+  The reply replaces the page only when it retains the PDF's own words; otherwise its figure,
+  table, and equation blocks are appended to the text layer. A scanned page takes the vision
+  transcription instead of Tesseract. Reported as `page_vision` in the extraction report. This
+  no longer needs the liteparse engine. `LIBRARIAN_FIGURE_VISION_BASE_URL` and
+  `LIBRARIAN_FIGURE_VISION_API_KEY_ENV` let the vision model live on a different endpoint from
+  the cleaning model.
+- Wait out rate limits instead of failing the run: an HTTP 429 now honours Retry-After (or backs
+  off up to a minute) for up to `LIBRARIAN_LLM_RATE_LIMIT_WAIT_SECONDS` (default 15 minutes) per
+  request without spending the transient-retry budget.
 - Keep going when a reasoning model's reply is cut off at the output token limit. gpt-oss-120b
   spends its hidden reasoning from the same budget as its answer, so a whole-chunk reply could
   end with "LLM response was truncated" and fail the document outright. The request is now

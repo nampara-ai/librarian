@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from collections import Counter, defaultdict
@@ -1239,6 +1240,11 @@ def pdfium_available() -> bool:
     return importlib.util.find_spec("pypdfium2") is not None
 
 
+# PDFium is not thread-safe, even across separate documents: concurrent page
+# renders from worker threads segfault. Every pypdfium2 call takes this lock.
+_PDFIUM_LOCK = threading.Lock()
+
+
 def pdfium_page_texts(path: Path) -> list[str]:
     """Return every page's raw text layer as PDFium reads it.
 
@@ -1248,43 +1254,195 @@ def pdfium_page_texts(path: Path) -> list[str]:
     other engine against. Line endings are normalized to ``\\n``.
     """
     pdfium = importlib.import_module("pypdfium2")
-    document = pdfium.PdfDocument(str(path))
     texts: list[str] = []
-    try:
-        for index in range(len(document)):
-            page = document[index]
-            try:
-                textpage = page.get_textpage()
+    with _PDFIUM_LOCK:
+        document = pdfium.PdfDocument(str(path))
+        try:
+            for index in range(len(document)):
+                page = document[index]
                 try:
-                    text = cast(str, textpage.get_text_range() or "")
+                    textpage = page.get_textpage()
+                    try:
+                        text = cast(str, textpage.get_text_range() or "")
+                    finally:
+                        textpage.close()
                 finally:
-                    textpage.close()
-            finally:
-                page.close()
-            texts.append(text.replace("\r\n", "\n").replace("\r", "\n"))
-    finally:
-        document.close()
+                    page.close()
+                texts.append(text.replace("\r\n", "\n").replace("\r", "\n"))
+        finally:
+            document.close()
     return texts
+
+
+@dataclass(frozen=True, slots=True)
+class PageObjects:
+    """Counts of the drawing objects on one PDF page."""
+
+    images: int = 0
+    paths: int = 0
+
+
+def _pdfium_page_objects(path: Path) -> dict[int, PageObjects]:
+    """Per-page raster image and vector path counts, keyed by 1-based page number."""
+    pdfium = importlib.import_module("pypdfium2")
+    raw = importlib.import_module("pypdfium2.raw")
+    image_type = int(raw.FPDF_PAGEOBJ_IMAGE)
+    path_type = int(raw.FPDF_PAGEOBJ_PATH)
+    profile: dict[int, PageObjects] = {}
+    with _PDFIUM_LOCK:
+        document = pdfium.PdfDocument(str(path))
+        try:
+            for index in range(len(document)):
+                page = document[index]
+                try:
+                    images = paths = 0
+                    for obj in page.get_objects(max_depth=1):
+                        kind = int(obj.type)
+                        if kind == image_type:
+                            images += 1
+                        elif kind == path_type:
+                            paths += 1
+                    profile[index + 1] = PageObjects(images=images, paths=paths)
+                finally:
+                    page.close()
+        finally:
+            document.close()
+    return profile
 
 
 def _pdfium_pages_with_images(path: Path) -> set[int]:
     """1-based numbers of pages that draw at least one raster image."""
+    return {number for number, objects in _pdfium_page_objects(path).items() if objects.images}
+
+
+def render_pdf_page_png(path: Path, page_number: int, *, scale: float = 2.0) -> bytes:
+    """Rasterize one page with PDFium to PNG bytes (``scale`` 1.0 is 72 dpi)."""
     pdfium = importlib.import_module("pypdfium2")
-    raw = importlib.import_module("pypdfium2.raw")
-    image_type = int(raw.FPDF_PAGEOBJ_IMAGE)
-    document = pdfium.PdfDocument(str(path))
-    numbers: set[int] = set()
-    try:
-        for index in range(len(document)):
-            page = document[index]
+    with _PDFIUM_LOCK:
+        document = pdfium.PdfDocument(str(path))
+        try:
+            page = document[page_number - 1]
             try:
-                if any(int(obj.type) == image_type for obj in page.get_objects(max_depth=1)):
-                    numbers.add(index + 1)
+                image = page.render(scale=scale).to_pil()
             finally:
                 page.close()
-    finally:
-        document.close()
-    return numbers
+        finally:
+            document.close()
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG", optimize=True)
+    return buffer.getvalue()
+
+
+# Pages whose drawing is mostly vector paths (charts, diagrams, ruled tables)
+# are sent to the vision model from this many path objects upward.
+_VISION_MIN_PATH_OBJECTS = 30
+# Operators, relations, and Greek letters that mark typeset mathematics.
+_MATH_GLYPH_RE = re.compile(
+    r"[\u2211\u222b\u221a\u2264\u2265\u2260\u00b1\u00d7\u00f7\u221e\u2202\u2207\u220f"
+    r"\u2208\u2209\u2282\u2286\u222a\u2229\u03b1-\u03c9\u0393\u0394\u0398\u039b\u039e"
+    r"\u03a0\u03a3\u03a6\u03a8\u03a9]"
+)
+_VISION_FIGURE_LINE_RE = re.compile(
+    r"^\s*\*\*(?:Figure|Chart|Diagram|Photo|Image)\b", re.IGNORECASE
+)
+_VISION_TABLE_LINE_RE = re.compile(r"^\s*\|.*\|\s*$")
+
+PAGE_VISION_SYSTEM_PROMPT = """You convert one page of a document into faithful Markdown. \
+Transcribe every word of the page's text exactly as printed, in reading order. Render tables as \
+Markdown tables with the same cells. Render every mathematical expression as LaTeX: display \
+equations in $$ ... $$ blocks, inline expressions in $...$. For every figure, chart, diagram, \
+photo, or illustration, write a paragraph starting with **Figure:** that describes it precisely, \
+including axis labels, series names, and the values you can read (as a Markdown table when it is \
+a chart). Do not summarize, omit, reorder, or comment on the task. Output only the Markdown."""
+PAGE_VISION_USER_PROMPT = "Convert this page to Markdown following the rules."
+
+
+@dataclass(frozen=True, slots=True)
+class PageVision:
+    """A vision-capable model applied to pages the text layer cannot represent.
+
+    Pages with raster images, heavy vector drawing (charts, ruled tables), math
+    glyphs, or no usable text layer are rendered with PDFium and sent to the
+    model, which returns Markdown with real tables, figure descriptions, and
+    LaTeX. The reply replaces the page only when it retains the text layer's
+    words; otherwise only its figure, table, and equation blocks are appended.
+    A page without a text layer takes the reply in place of Tesseract OCR.
+    """
+
+    provider: FigureVisionProvider
+    model: str
+    max_pages: int = 20
+    max_concurrency: int = 2
+    max_response_chars: int = 16 * 1024
+    scale: float = 2.0
+    max_image_bytes: int = 8 * 1024 * 1024
+    min_retention: float = 0.9
+    temperature: float = 0.0
+
+
+def vision_page_candidates(
+    pages: Sequence[PdfPageExtraction],
+    objects: Mapping[int, PageObjects],
+    *,
+    max_pages: int,
+) -> list[int]:
+    """Pages worth a vision pass, most valuable first, capped at ``max_pages``."""
+    scored: list[tuple[int, int]] = []
+    for page in pages:
+        profile = objects.get(page.page_number, PageObjects())
+        score = 0
+        if page.source in _OCR_CANDIDATE_SOURCES:
+            score = 4
+        elif profile.images:
+            score = 3
+        elif profile.paths >= _VISION_MIN_PATH_OBJECTS:
+            score = 2
+        elif len(_MATH_GLYPH_RE.findall(page.text)) >= 3:
+            score = 1
+        if score:
+            scored.append((-score, page.page_number))
+    scored.sort()
+    return [number for _score, number in scored[:max_pages]]
+
+
+def visual_blocks(markdown: str) -> str:
+    """The figure descriptions, tables, and display equations in a vision reply."""
+    blocks: list[str] = []
+    lines = markdown.splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if _VISION_FIGURE_LINE_RE.match(line):
+            paragraph = [line]
+            index += 1
+            while index < len(lines) and lines[index].strip():
+                paragraph.append(lines[index])
+                index += 1
+            blocks.append("\n".join(paragraph))
+            continue
+        if _VISION_TABLE_LINE_RE.match(line):
+            table = [line]
+            index += 1
+            while index < len(lines) and _VISION_TABLE_LINE_RE.match(lines[index]):
+                table.append(lines[index])
+                index += 1
+            if len(table) >= 2:
+                blocks.append("\n".join(table))
+            continue
+        if line.strip().startswith("$$"):
+            equation = [line]
+            index += 1
+            while index < len(lines) and not lines[index].strip().endswith("$$"):
+                equation.append(lines[index])
+                index += 1
+            if index < len(lines) and len(equation) > 1 or line.strip().endswith("$$"):
+                if index < len(lines) and len(equation) > 1:
+                    equation.append(lines[index])
+                    index += 1
+                blocks.append("\n".join(equation))
+                continue
+        index += 1
+    return "\n\n".join(block.strip() for block in blocks if block.strip())
 
 
 def text_retention(candidate: str, reference: str) -> float:
@@ -1465,7 +1623,11 @@ class PdfExtractor:
         metrics: ExtractionMetrics | None = None,
         text_layer_engine: PdfTextLayerEngine = "pdfplumber",
         page_markup: PdfPageMarkup = "headings",
+        page_vision: PageVision | None = None,
     ) -> None:
+        self.page_vision = page_vision
+        self._page_objects: dict[int, PageObjects] = {}
+        self._vision_report: dict[str, object] | None = None
         self.text_layer_engine: PdfTextLayerEngine = text_layer_engine
         self.page_markup: PdfPageMarkup = page_markup
         self.ocr_language = ocr_language
@@ -1511,6 +1673,9 @@ class PdfExtractor:
             raise ValueError(
                 f"PDF has {page_count} pages, exceeding configured limit {self.max_pages}: {path}"
             )
+        self._vision_report = None
+        if self.page_vision is not None:
+            pages, self._vision_report = await self._apply_page_vision(path, pages)
 
         empty_pages = [page.page_number for page in pages if page.source in _OCR_CANDIDATE_SOURCES]
         if len(empty_pages) > self.ocr_pdf_max_pages:
@@ -1704,9 +1869,94 @@ class PdfExtractor:
             "summary": _pdf_page_manifest_summary(page_records),
             "quality_summary": _pdf_quality_summary(final_pages),
             "page_numerals_removed": numerals_removed,
+            "page_vision": self._vision_report,
             "pages": page_records,
         }
         return self._render_pages(path, final_pages)
+
+    async def _apply_page_vision(
+        self, path: Path, pages: list[PdfPageExtraction]
+    ) -> tuple[list[PdfPageExtraction], dict[str, object]]:
+        vision = self.page_vision
+        assert vision is not None
+        candidates = vision_page_candidates(pages, self._page_objects, max_pages=vision.max_pages)
+        report: dict[str, object] = {
+            "model": vision.model,
+            "pages_sent": len(candidates),
+            "pages_replaced": 0,
+            "pages_augmented": 0,
+            "pages_failed": 0,
+            "error": None,
+            "pages": [],
+        }
+        if not candidates:
+            return pages, report
+        by_number = {page.page_number: page for page in pages}
+        semaphore = asyncio.Semaphore(max(1, vision.max_concurrency))
+        page_reports = cast("list[dict[str, object]]", report["pages"])
+
+        async def describe(number: int) -> tuple[int, str | None, str | None]:
+            async with semaphore:
+                try:
+                    png = await asyncio.to_thread(
+                        render_pdf_page_png, path, number, scale=vision.scale
+                    )
+                    if len(png) > vision.max_image_bytes:
+                        png = await asyncio.to_thread(
+                            render_pdf_page_png, path, number, scale=max(1.0, vision.scale / 2)
+                        )
+                    markdown = await vision.provider.describe_image(
+                        image_base64=base64.b64encode(png).decode("ascii"),
+                        media_type="image/png",
+                        system_prompt=PAGE_VISION_SYSTEM_PROMPT,
+                        user_prompt=PAGE_VISION_USER_PROMPT,
+                        model=vision.model,
+                        max_tokens=min(
+                            _MAX_FIGURE_VISION_TOKENS,
+                            max(1024, math.ceil(vision.max_response_chars / 3)),
+                        ),
+                        temperature=vision.temperature,
+                    )
+                except Exception as exc:  # noqa: BLE001 - one page must not fail the document
+                    return number, None, sanitize_error_message(exc)
+            return number, markdown.strip()[: vision.max_response_chars] or None, None
+
+        results = await asyncio.gather(*(describe(number) for number in candidates))
+        for number, markdown, error in results:
+            page = by_number[number]
+            entry: dict[str, object] = {"page_number": number, "outcome": "unchanged"}
+            if error is not None or not markdown:
+                report["pages_failed"] = cast(int, report["pages_failed"]) + 1
+                if error and report["error"] is None:
+                    report["error"] = error
+                entry["outcome"] = "failed"
+                entry["error"] = error
+                page_reports.append(entry)
+                continue
+            if page.source in _OCR_CANDIDATE_SOURCES:
+                # No usable text layer: the vision transcription is the page.
+                by_number[number] = replace(page, text=markdown, source="vision")
+                report["pages_replaced"] = cast(int, report["pages_replaced"]) + 1
+                entry["outcome"] = "replaced"
+            else:
+                retention = text_retention(markdown, page.text)
+                entry["retention"] = round(retention, 4)
+                if retention >= vision.min_retention:
+                    by_number[number] = replace(page, text=markdown, source="vision")
+                    report["pages_replaced"] = cast(int, report["pages_replaced"]) + 1
+                    entry["outcome"] = "replaced"
+                else:
+                    extra = visual_blocks(markdown)
+                    if extra:
+                        by_number[number] = replace(
+                            page,
+                            text=page.text.rstrip() + "\n\n" + extra,
+                            source="embedded+vision",
+                        )
+                        report["pages_augmented"] = cast(int, report["pages_augmented"]) + 1
+                        entry["outcome"] = "augmented"
+            page_reports.append(entry)
+        return [by_number[page.page_number] for page in pages], report
 
     def _strip_furniture(
         self, pages: Sequence[PdfPageExtraction]
@@ -1862,15 +2112,18 @@ class PdfExtractor:
         candidates; a sparse page keeps its text layer as the fallback.
         """
         self._resolved_text_layer_engine = self.text_layer_engine
+        self._page_objects = {}
         if self.text_layer_engine == "pdfium":
             try:
                 texts = pdfium_page_texts(path)
-                image_pages = _pdfium_pages_with_images(path)
+                self._page_objects = _pdfium_page_objects(path)
+                image_pages = {n for n, objects in self._page_objects.items() if objects.images}
             except ImportError:
                 self._resolved_text_layer_engine = "pdfplumber"
                 texts, image_pages = self._pdfplumber_page_texts(path)
         else:
             texts, image_pages = self._pdfplumber_page_texts(path)
+            self._page_objects = {number: PageObjects(images=1) for number in image_pages}
         pages: list[PdfPageExtraction] = []
         for page_number, page_text in enumerate(texts, start=1):
             if text_layer_is_usable(page_text):
@@ -2825,7 +3078,7 @@ def _snapshot_vector_diagrams(
         return markdown, []
     snapshots: list[FigureImage] = []
     furniture = _page_furniture_quotas(result.pages)
-    with pdfplumber.open(source) as source_pdf:
+    with _PDFIUM_LOCK, pdfplumber.open(source) as source_pdf:
         rendered_pdf = pdfium.PdfDocument(str(source))
         for index in candidates:
             page = result.pages[index]
@@ -3584,9 +3837,22 @@ class CompositeExtractor:
             "pdfplumber" if pdf_engine == "legacy" or not pdfium_available() else "pdfium"
         )
         page_markup: PdfPageMarkup = "headings" if pdf_engine == "legacy" else "breaks"
+        page_vision = (
+            PageVision(
+                provider=figure_vision_provider,
+                model=figure_vision_model,
+                max_pages=figure_vision_max_figures,
+                max_concurrency=figure_vision_max_concurrency,
+                max_response_chars=figure_vision_max_response_chars,
+                max_image_bytes=figure_vision_max_bytes,
+            )
+            if figure_vision_provider is not None and text_layer_engine == "pdfium"
+            else None
+        )
         pdf_extractor = PdfExtractor(
             text_layer_engine=text_layer_engine,
             page_markup=page_markup,
+            page_vision=page_vision,
             ocr_language=ocr_language,
             ocr_timeout_seconds=ocr_timeout_seconds,
             ocr_pdf_dpi=ocr_pdf_dpi,
@@ -3637,11 +3903,7 @@ class CompositeExtractor:
         # extractor is the reference and the fallback. It reconstructs tables,
         # headings, and figures, but has been observed to drop most of a clean
         # page's text, so it is never trusted unguarded.
-        # Figure descriptions need the engine's embedded figure images, so a
-        # vision provider turns the enhancer on (still guarded) under ``auto``.
-        enhancer_mode = pdf_engine == "auto" and (
-            pdf_layout_enhancer == "liteparse" or figure_vision_provider is not None
-        )
+        enhancer_mode = pdf_engine == "auto" and pdf_layout_enhancer == "liteparse"
         self.liteparse_active = liteparse_available() and (
             pdf_engine == "liteparse" or enhancer_mode
         )
@@ -3660,9 +3922,14 @@ class CompositeExtractor:
             self.resolved_pdf_engine = text_layer_engine
         retention_threshold = pdf_enhancer_min_retention if enhancer_mode else pdf_min_retention
         self.pdf_retention_threshold = retention_threshold if self.liteparse_active else None
-        # Vision enrichment only applies to the liteparse engine (it needs the
-        # engine's embedded figure images); it is off unless a provider is given.
-        self.figure_vision_active = self.liteparse_active and figure_vision_provider is not None
+        # With a vision provider, PDFium pages carrying images, vector drawing,
+        # math, or no text layer go through the page-vision pass (tables,
+        # figure descriptions, LaTeX); the liteparse engine enriches its own
+        # embedded figures instead. Off unless a provider is given.
+        self.figure_vision_active = figure_vision_provider is not None and (
+            self.liteparse_active or page_vision is not None
+        )
+        self.page_vision_active = page_vision is not None and not self.liteparse_active
         if self.liteparse_active:
             liteparse_extractor = LiteParseExtractor(
                 ocr_language=ocr_language,
@@ -4774,6 +5041,10 @@ def _pdf_page_record(page: PdfPageExtraction) -> dict[str, object]:
         action = "ocr-failed"
     elif page.source == "ocr":
         action = "ocr-corrected" if page.corrected else "ocr"
+    elif page.source == "vision":
+        action = "vision"
+    elif page.source == "embedded+vision":
+        action = "vision-augmented"
     elif "ocr-shorter-than-text-layer" in page.warnings:
         action = "text-layer-kept"
     else:
@@ -4816,6 +5087,7 @@ def _pdf_quality_summary(pages: Sequence[PdfPageExtraction]) -> dict[str, object
         "native_body_lines_restored": 0,
         "ocr_pages": sum(1 for page in pages if page.source == "ocr"),
         "ocr_failed_pages": sum(1 for page in pages if page.error),
+        "vision_pages": sum(1 for page in pages if page.source in {"vision", "embedded+vision"}),
     }
 
 

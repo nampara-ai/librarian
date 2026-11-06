@@ -193,6 +193,7 @@ def build_provider(settings: Settings, *, metrics: ApplicationMetrics | None = N
             max_retries=settings.llm_max_retries,
             retry_base_delay_seconds=settings.llm_retry_base_delay_seconds,
             retry_max_delay_seconds=settings.llm_retry_max_delay_seconds,
+            rate_limit_wait_seconds=settings.llm_rate_limit_wait_seconds,
             metrics=metrics,
             prompt_cost_per_1k_tokens_usd=settings.llm_prompt_cost_per_1k_tokens_usd,
             completion_cost_per_1k_tokens_usd=settings.llm_completion_cost_per_1k_tokens_usd,

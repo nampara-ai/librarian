@@ -444,6 +444,7 @@ class ConfigResponse(BaseModel):
     llm_max_retries: int
     llm_retry_base_delay_seconds: float
     llm_retry_max_delay_seconds: float
+    llm_rate_limit_wait_seconds: float
     llm_prompt_cost_per_1k_tokens_usd: float
     llm_completion_cost_per_1k_tokens_usd: float
     llm_max_prompt_chars: int
@@ -509,6 +510,7 @@ class ConfigResponse(BaseModel):
     # Figure vision.
     figure_vision_enabled: bool
     figure_vision_model: str | None
+    figure_vision_base_url: str | None
     figure_vision_max_figures: int
     figure_vision_min_bytes: int
     figure_vision_max_bytes: int
@@ -1866,6 +1868,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             llm_max_retries=settings.llm_max_retries,
             llm_retry_base_delay_seconds=settings.llm_retry_base_delay_seconds,
             llm_retry_max_delay_seconds=settings.llm_retry_max_delay_seconds,
+            llm_rate_limit_wait_seconds=settings.llm_rate_limit_wait_seconds,
             llm_prompt_cost_per_1k_tokens_usd=settings.llm_prompt_cost_per_1k_tokens_usd,
             llm_completion_cost_per_1k_tokens_usd=(settings.llm_completion_cost_per_1k_tokens_usd),
             llm_max_prompt_chars=settings.llm_max_prompt_chars,
@@ -1928,6 +1931,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             classification_max_output_tokens=settings.classification_max_output_tokens,
             figure_vision_enabled=settings.figure_vision_enabled,
             figure_vision_model=settings.figure_vision_model,
+            figure_vision_base_url=settings.figure_vision_base_url,
             figure_vision_max_figures=settings.figure_vision_max_figures,
             figure_vision_min_bytes=settings.figure_vision_min_bytes,
             figure_vision_max_bytes=settings.figure_vision_max_bytes,
@@ -2613,7 +2617,9 @@ def _build_extractor(
         liteparse_dpi=settings.liteparse_dpi,
         liteparse_image_mode=settings.liteparse_image_mode,
         figure_vision_provider=(
-            LazyLLMProvider(settings, metrics=metrics) if settings.figure_vision_enabled else None
+            LazyLLMProvider(settings.for_figure_vision(), metrics=metrics)
+            if settings.figure_vision_enabled
+            else None
         ),
         figure_vision_model=settings.figure_vision_model or settings.llm_model,
         figure_vision_max_figures=settings.figure_vision_max_figures,

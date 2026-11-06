@@ -2651,7 +2651,9 @@ def _build_extractor(settings: Settings) -> CompositeExtractor:
         liteparse_dpi=settings.liteparse_dpi,
         liteparse_image_mode=settings.liteparse_image_mode,
         figure_vision_provider=(
-            LazyLLMProvider(settings) if settings.figure_vision_enabled else None
+            LazyLLMProvider(settings.for_figure_vision())
+            if settings.figure_vision_enabled
+            else None
         ),
         figure_vision_model=settings.figure_vision_model or settings.llm_model,
         figure_vision_max_figures=settings.figure_vision_max_figures,

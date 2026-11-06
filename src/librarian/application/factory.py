@@ -89,7 +89,7 @@ async def build_ingest_container(
             else None
         ),
         figure_vision_provider=(
-            LazyLLMProvider(resolved_settings, metrics=metrics)
+            LazyLLMProvider(resolved_settings.for_figure_vision(), metrics=metrics)
             if resolved_settings.figure_vision_enabled
             else None
         ),

@@ -241,16 +241,18 @@ struct SettingsView: View {
                                     + "of the text. Slower; off by default."
                             )
                     }
-                    Toggle("Describe charts and figures with AI", isOn: $figureVisionEnabled)
+                    Toggle("Read figures, tables and equations with AI vision", isOn: $figureVisionEnabled)
                         .onChange(of: figureVisionEnabled) {
                             guard engineOptionsLoaded else { return }
                             Task { await applyEngineOptions() }
                         }
                         .help(
-                            "Adds a written description under each chart or figure "
-                                + "found in PDFs, using your AI provider. Costs extra "
-                                + "tokens per figure and runs the layout engine (guarded "
-                                + "by the text layer) to find the figures."
+                            "Sends PDF pages that carry images, charts, diagrams, "
+                                + "tables, math, or no text layer to your AI provider's "
+                                + "vision model, which returns figure descriptions, "
+                                + "Markdown tables, and LaTeX equations. The page text is "
+                                + "replaced only when the reply keeps the PDF's own words. "
+                                + "Needs a vision-capable model; costs extra tokens per page."
                         )
                     if figureVisionEnabled {
                         TextField(

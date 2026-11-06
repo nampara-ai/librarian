@@ -265,10 +265,9 @@ async def test_openai_provider_redacts_retry_exhaustion(
         )
 
     message = str(exc_info.value)
-    assert (
-        message
-        == "LLM provider request failed after retries: rate limited token=[REDACTED] [REDACTED]"
-    )
+    # A 429 is waited out for the whole rate-limit budget before giving up.
+    assert message.startswith("LLM provider kept rate-limiting requests for 900s: ")
+    assert message.endswith("rate limited token=[REDACTED] [REDACTED]")
     assert "abc123" not in message
     assert "sk-testSECRET123" not in message
     assert exc_info.value.__cause__ is None
@@ -682,3 +681,121 @@ async def test_openai_provider_param_adaptation_is_per_model(
     last = sent[-1]
     assert last["model"] == "gpt-4.1-mini"
     assert "max_tokens" in last and "max_completion_tokens" not in last
+
+
+@pytest.mark.asyncio
+async def test_rate_limits_are_waited_out_without_spending_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _fake_request()
+    calls = 0
+    delays: list[float] = []
+
+    class FakeChoice:
+        class Message:
+            content = "ok"
+
+        message = Message()
+
+    class FakeCompletion:
+        choices = [FakeChoice()]
+        usage = None
+
+    class FakeCompletions:
+        async def create(self, **kwargs: object) -> FakeCompletion:
+            del kwargs
+            nonlocal calls
+            calls += 1
+            if calls <= 6:
+                headers = {"retry-after": "20"} if calls % 2 else {}
+                raise openai.RateLimitError(
+                    "rate limited",
+                    response=_fake_response(429, request, headers=headers),
+                    body=None,
+                )
+            return FakeCompletion()
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeClient:
+        chat = FakeChat()
+
+    async def record_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setenv("LIBRARIAN_TEST_API_KEY", "test")
+    def fake_async_openai(**kwargs: object) -> FakeClient:
+        del kwargs
+        return FakeClient()
+
+    monkeypatch.setattr("librarian.llm.openai_compatible.AsyncOpenAI", fake_async_openai)
+    monkeypatch.setattr("librarian.llm.openai_compatible.asyncio.sleep", record_sleep)
+
+    provider = OpenAICompatibleProvider(
+        api_key_env="LIBRARIAN_TEST_API_KEY",
+        base_url=None,
+        timeout_seconds=1,
+        max_concurrency=1,
+        max_retries=1,  # one transient retry would never survive six 429s
+        retry_base_delay_seconds=1.0,
+    )
+
+    result = await provider.complete(
+        system_prompt="s", user_prompt="u", model="m", max_tokens=8, temperature=0
+    )
+
+    assert result == "ok"
+    assert calls == 7
+    assert len(delays) == 6
+    assert delays[0] == 20.0  # Retry-After honoured
+    assert all(0.5 <= delay <= 60.0 * 1.1 for delay in delays)
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_wait_budget_is_the_only_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    request = _fake_request()
+    calls = 0
+
+    class FakeCompletions:
+        async def create(self, **kwargs: object) -> object:
+            del kwargs
+            nonlocal calls
+            calls += 1
+            raise openai.RateLimitError(
+                "rate limited",
+                response=_fake_response(429, request, headers={"retry-after": "30"}),
+                body=None,
+            )
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeClient:
+        chat = FakeChat()
+
+    async def no_sleep(delay: float) -> None:
+        del delay
+
+    monkeypatch.setenv("LIBRARIAN_TEST_API_KEY", "test")
+    def fake_async_openai(**kwargs: object) -> FakeClient:
+        del kwargs
+        return FakeClient()
+
+    monkeypatch.setattr("librarian.llm.openai_compatible.AsyncOpenAI", fake_async_openai)
+    monkeypatch.setattr("librarian.llm.openai_compatible.asyncio.sleep", no_sleep)
+
+    provider = OpenAICompatibleProvider(
+        api_key_env="LIBRARIAN_TEST_API_KEY",
+        base_url=None,
+        timeout_seconds=1,
+        max_concurrency=1,
+        max_retries=0,
+        rate_limit_wait_seconds=90.0,
+    )
+
+    with pytest.raises(RuntimeError, match="kept rate-limiting"):
+        await provider.complete(
+            system_prompt="s", user_prompt="u", model="m", max_tokens=8, temperature=0
+        )
+    assert calls == 4  # 30 s + 30 s + 30 s of waiting, then the budget is spent

@@ -126,3 +126,22 @@ def test_data_dir_env_moves_database_path(monkeypatch: pytest.MonkeyPatch) -> No
     settings = Settings()
 
     assert settings.database_path == Path("/var/lib/librarian/librarian.sqlite")
+
+
+def test_figure_vision_can_use_its_own_endpoint() -> None:
+    same = Settings(llm_provider="openai-compatible", llm_base_url="https://api.cerebras.ai/v1")
+    assert same.for_figure_vision() is same
+
+    split = Settings(
+        llm_provider="openai-compatible",
+        llm_base_url="https://api.cerebras.ai/v1",
+        llm_api_key_env="CEREBRAS_API_KEY",
+        figure_vision_base_url="http://127.0.0.1:11434/v1",
+        figure_vision_api_key_env="OLLAMA_KEY",
+        figure_vision_model="qwen2.5vl",
+    )
+    vision = split.for_figure_vision()
+    assert vision.llm_base_url == "http://127.0.0.1:11434/v1"
+    assert vision.llm_api_key_env == "OLLAMA_KEY"
+    assert vision.figure_vision_model == "qwen2.5vl"
+    assert split.llm_base_url == "https://api.cerebras.ai/v1"  # cleaning untouched

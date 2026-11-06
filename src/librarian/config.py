@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     llm_max_retries: int = Field(default=5, ge=0)
     llm_retry_base_delay_seconds: float = Field(default=0.5, ge=0)
     llm_retry_max_delay_seconds: float = Field(default=10.0, ge=0)
+    # A provider that throttles (HTTP 429) is waited out, honouring Retry-After,
+    # for up to this long per request before the run gives up on it.
+    llm_rate_limit_wait_seconds: float = Field(default=900.0, ge=0)
     llm_prompt_cost_per_1k_tokens_usd: float = Field(default=0.0, ge=0)
     llm_completion_cost_per_1k_tokens_usd: float = Field(default=0.0, ge=0)
     llm_max_prompt_chars: int = Field(default=2 * 1024 * 1024, gt=0)
@@ -138,6 +141,11 @@ class Settings(BaseSettings):
     # because it requires a vision model and adds per-figure cost/latency.
     figure_vision_enabled: bool = Field(default=False)
     figure_vision_model: str | None = Field(default=None)
+    # The vision pass can use a different OpenAI-compatible endpoint from the
+    # cleaning model (a text-only provider such as Cerebras has no vision
+    # models). Unset means the cleaning provider's endpoint and key.
+    figure_vision_base_url: str | None = Field(default=None)
+    figure_vision_api_key_env: str | None = Field(default=None)
     figure_vision_max_figures: int = Field(default=20, gt=0)
     figure_vision_min_bytes: int = Field(default=2048, ge=0)
     figure_vision_max_bytes: int = Field(default=8 * 1024 * 1024, gt=0)
@@ -239,6 +247,16 @@ class Settings(BaseSettings):
                 "figure_vision_min_bytes must be less than or equal to figure_vision_max_bytes"
             )
         return self
+
+    def for_figure_vision(self) -> Self:
+        """Settings for the vision model: the cleaning provider unless overridden."""
+        updates: dict[str, object] = {}
+        if self.figure_vision_base_url:
+            updates["llm_base_url"] = self.figure_vision_base_url
+            updates["llm_provider"] = "openai-compatible"
+        if self.figure_vision_api_key_env:
+            updates["llm_api_key_env"] = self.figure_vision_api_key_env
+        return self.model_copy(update=updates) if updates else self
 
     def redacted_config(self) -> dict[str, object]:
         """Return the effective configuration with secret values redacted.

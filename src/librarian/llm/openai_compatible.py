@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import os
 import random
@@ -24,6 +25,8 @@ from openai.types.chat import ChatCompletion
 
 from librarian.application.errors import LLMAccessError, LLMResponseTruncatedError
 from librarian.observability import sanitize_error_message
+
+_LOGGER = logging.getLogger("librarian.llm.openai_compatible")
 
 
 def _content_or_raise(response: ChatCompletion) -> str:
@@ -60,6 +63,9 @@ _UNSUPPORTED_HINT = re.compile(r"unsupported|not supported|does not support", re
 _MAX_TOKENS_HINT = re.compile(r"max_completion_tokens|max_tokens", re.I)
 _TEMPERATURE_HINT = re.compile(r"\btemperature\b", re.I)
 _MAX_SERVER_RETRY_AFTER_SECONDS = 120.0
+# Longest self-chosen pause between throttled attempts when the server sends
+# no Retry-After; the total wait is bounded by rate_limit_wait_seconds.
+_MAX_RATE_LIMIT_BACKOFF_SECONDS = 60.0
 
 
 def unsupported_parameter(exc: Exception) -> str | None:
@@ -152,6 +158,7 @@ class OpenAICompatibleProvider:
         max_retries: int = 5,
         retry_base_delay_seconds: float = 0.5,
         retry_max_delay_seconds: float = 10.0,
+        rate_limit_wait_seconds: float = 900.0,
         metrics: LLMUsageMetrics | None = None,
         prompt_cost_per_1k_tokens_usd: float = 0.0,
         completion_cost_per_1k_tokens_usd: float = 0.0,
@@ -171,6 +178,7 @@ class OpenAICompatibleProvider:
         self._max_retries = max_retries
         self._retry_base_delay_seconds = retry_base_delay_seconds
         self._retry_max_delay_seconds = retry_max_delay_seconds
+        self._rate_limit_wait_seconds = rate_limit_wait_seconds
         self._metrics = metrics
         self._prompt_cost_per_1k_tokens_usd = prompt_cost_per_1k_tokens_usd
         self._completion_cost_per_1k_tokens_usd = completion_cost_per_1k_tokens_usd
@@ -313,6 +321,8 @@ class OpenAICompatibleProvider:
         max_adaptations = 2
         adaptations = 0
         attempt = 0
+        throttled = 0
+        throttled_seconds = 0.0
         while True:
             kwargs = self._request_kwargs(
                 prefs=prefs,
@@ -357,6 +367,38 @@ class OpenAICompatibleProvider:
                     raise RuntimeError(
                         f"LLM provider request failed: {sanitize_error_message(exc)}"
                     ) from None
+                server_delay = retry_after_seconds(exc)
+                if is_rate_limit_error(exc):
+                    # Throttling is not a failure of the request: wait as long as
+                    # the server asks (or back off to a minute) and try again,
+                    # for up to rate_limit_wait_seconds in total, without
+                    # spending the transient-retry budget.
+                    if throttled_seconds >= self._rate_limit_wait_seconds:
+                        raise RuntimeError(
+                            "LLM provider kept rate-limiting requests for "
+                            f"{int(throttled_seconds)}s: {sanitize_error_message(exc)}"
+                        ) from None
+                    if server_delay is None:
+                        delay = min(
+                            max(self._retry_base_delay_seconds, 1.0) * (2**throttled),
+                            _MAX_RATE_LIMIT_BACKOFF_SECONDS,
+                        )
+                        delay += random.uniform(0, delay * 0.1)  # noqa: S311
+                    else:
+                        delay = max(server_delay, 0.5)
+                    delay = min(delay, self._rate_limit_wait_seconds - throttled_seconds)
+                    _LOGGER.warning(
+                        "llm-rate-limited",
+                        extra={
+                            "model": model,
+                            "wait_seconds": round(delay, 1),
+                            "waited_seconds": round(throttled_seconds, 1),
+                        },
+                    )
+                    await asyncio.sleep(delay)
+                    throttled += 1
+                    throttled_seconds += delay
+                    continue
                 if attempt >= self._max_retries:
                     detail = (
                         "request deadline exceeded"
@@ -366,7 +408,6 @@ class OpenAICompatibleProvider:
                     raise RuntimeError(
                         f"LLM provider request failed after retries: {detail}"
                     ) from None
-                server_delay = retry_after_seconds(exc)
                 if server_delay is None:
                     delay = min(
                         self._retry_base_delay_seconds * (2**attempt),
@@ -417,6 +458,13 @@ def provider_access_failure(exc: Exception) -> str | None:
                 }:
                     return "credit-exhausted"
     return None
+
+
+def is_rate_limit_error(exc: Exception) -> bool:
+    """Whether the provider throttled the request (HTTP 429)."""
+    if isinstance(exc, RateLimitError):
+        return True
+    return isinstance(exc, APIStatusError) and int(exc.status_code) == 429
 
 
 def is_retriable_openai_error(exc: Exception) -> bool:
