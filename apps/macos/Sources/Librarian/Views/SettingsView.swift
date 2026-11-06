@@ -99,6 +99,8 @@ struct SettingsView: View {
     @State private var coherenceMode = "balanced"
     @State private var figureVisionEnabled = false
     @State private var figureVisionModel = ""
+    @State private var pdfEngine = "auto"
+    @State private var layoutEnhancer = false
     @State private var engineOptionsLoaded = false
 
     @AppStorage(AppModel.keepOriginalsKey) private var keepOriginals = false
@@ -211,6 +213,34 @@ struct SettingsView: View {
                             + "gets while cleaning. Most careful reads strictly in "
                             + "order; Fastest cleans parts in parallel."
                     )
+                    Picker("PDF reading", selection: $pdfEngine) {
+                        Text("Text layer (recommended)").tag("auto")
+                        Text("Layout engine (liteparse)").tag("liteparse")
+                        Text("Legacy text layer").tag("legacy")
+                    }
+                    .onChange(of: pdfEngine) {
+                        guard engineOptionsLoaded else { return }
+                        Task { await applyEngineOptions() }
+                    }
+                    .help(
+                        "How PDF pages are read. The text layer keeps every word "
+                            + "of a PDF's own text and uses OCR only on scanned pages. "
+                            + "The layout engine rebuilds tables and headings as "
+                            + "Markdown; any page where it drops words is taken from "
+                            + "the text layer instead."
+                    )
+                    if pdfEngine == "auto" {
+                        Toggle("Rebuild tables and headings with the layout engine", isOn: $layoutEnhancer)
+                            .onChange(of: layoutEnhancer) {
+                                guard engineOptionsLoaded else { return }
+                                Task { await applyEngineOptions() }
+                            }
+                            .help(
+                                "Runs the layout engine on top of the text layer and keeps "
+                                    + "its Markdown only for pages that retain at least 95% "
+                                    + "of the text. Slower; off by default."
+                            )
+                    }
                     Toggle("Describe charts and figures with AI", isOn: $figureVisionEnabled)
                         .onChange(of: figureVisionEnabled) {
                             guard engineOptionsLoaded else { return }
@@ -219,7 +249,8 @@ struct SettingsView: View {
                         .help(
                             "Adds a written description under each chart or figure "
                                 + "found in PDFs, using your AI provider. Costs extra "
-                                + "tokens per figure."
+                                + "tokens per figure and runs the layout engine (guarded "
+                                + "by the text layer) to find the figures."
                         )
                     if figureVisionEnabled {
                         TextField(
@@ -348,6 +379,10 @@ struct SettingsView: View {
         coherenceMode = values["LIBRARIAN_COHERENCE_MODE"] ?? "balanced"
         figureVisionEnabled = values["LIBRARIAN_FIGURE_VISION_ENABLED"] == "true"
         figureVisionModel = values["LIBRARIAN_FIGURE_VISION_MODEL"] ?? ""
+        let engine = values["LIBRARIAN_PDF_ENGINE"] ?? "auto"
+        // "pdfium" is the explicit spelling of the default; the picker shows one entry.
+        pdfEngine = ["auto", "liteparse", "legacy"].contains(engine) ? engine : "auto"
+        layoutEnhancer = values["LIBRARIAN_PDF_LAYOUT_ENHANCER"] == "liteparse"
         engineOptionsLoaded = true
         guard values["LIBRARIAN_LLM_PROVIDER"] == "openai-compatible" else {
             resetForPresetChange()
@@ -389,6 +424,9 @@ struct SettingsView: View {
         let visionModel = figureVisionModel.trimmingCharacters(in: .whitespacesAndNewlines)
         let updates: [String: String?] = [
             "LIBRARIAN_COHERENCE_MODE": coherenceMode == "balanced" ? nil : coherenceMode,
+            "LIBRARIAN_PDF_ENGINE": pdfEngine == "auto" ? nil : pdfEngine,
+            "LIBRARIAN_PDF_LAYOUT_ENHANCER":
+                (pdfEngine == "auto" && layoutEnhancer) ? "liteparse" : nil,
             "LIBRARIAN_FIGURE_VISION_ENABLED": figureVisionEnabled ? "true" : nil,
             "LIBRARIAN_FIGURE_VISION_MODEL":
                 (figureVisionEnabled && !visionModel.isEmpty) ? visionModel : nil,

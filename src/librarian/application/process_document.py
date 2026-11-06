@@ -58,7 +58,12 @@ from librarian.domain.models import (
 )
 from librarian.observability import NoOpMetricsRecorder, sanitize_error_message, start_span
 from librarian.pipeline.chunking import ChunkingPolicy, chunk_text
-from librarian.pipeline.validation import PAGE_BREAK_REGEX, UNCLEAR_TRANSCRIPTION_REGEX
+from librarian.pipeline.validation import (
+    MIN_CONTENT_RETENTION,
+    PAGE_BREAK_REGEX,
+    UNCLEAR_TRANSCRIPTION_REGEX,
+    content_retention,
+)
 
 logger = logging.getLogger("librarian.application.process_document")
 
@@ -476,6 +481,23 @@ class ProcessDocument:
                     "source-preserved-after-fidelity-check" in chunk.warnings
                     for chunk in cleaned_chunks
                 )
+                # Content words that reached the published text, per chunk. This
+                # is the deterministic view a reader needs when a model has been
+                # quietly abbreviating; it counts preserved source passages, so a
+                # unit shipped for review scores as retained, not as cleaned.
+                chunk_retention = {
+                    chunk.chunk.ordinal + 1: content_retention(
+                        chunk.chunk.text, review_body(chunk.text)
+                    )
+                    for chunk in cleaned_chunks
+                }
+                words_retained: dict[str, object] = {
+                    "chunks": [
+                        {"chunk": ordinal, "retention": round(retained, 4)}
+                        for ordinal, retained in chunk_retention.items()
+                        if retained is not None
+                    ],
+                }
             await self._raise_if_canceled(run_id)
             await self.runs.update_run_progress(
                 run_id,
@@ -582,6 +604,12 @@ class ProcessDocument:
                 queries = UNCLEAR_TRANSCRIPTION_REGEX.findall(assembled)
                 if queries:
                     cast("list[str]", final_quality["warnings"]).append("uncertain-transcription")
+                document_retention = content_retention(normalized_text, review_body(assembled))
+                words_retained["document"] = (
+                    round(document_retention, 4) if document_retention is not None else None
+                )
+                if document_retention is not None and document_retention < MIN_CONTENT_RETENTION:
+                    cast("list[str]", final_quality["warnings"]).append("low-content-retention")
                 await self.content.put_text(
                     run_quality_key(run_id),
                     json.dumps(
@@ -598,6 +626,7 @@ class ProcessDocument:
                             )
                             + fidelity_fallbacks,
                             "refinement": refinement_report,
+                            "words_retained": words_retained,
                             "cleaning_attempts": cleaning_attempts,
                             "review_mode": self.cleaner.review_mode,
                             "cleaning_status": "needs-review"

@@ -49,7 +49,9 @@ Local conversion and import enforce configurable input limits before expensive p
 - `LIBRARIAN_PDF_MAX_PAGES`
 - `LIBRARIAN_API_MAX_UPLOAD_BYTES`
 
-PDF extraction is page-aware. Embedded-text pages use embedded extraction; empty or scanned pages are OCRed. Long OCR jobs write `<output>.pages.json` manifests when conversion sidecars are enabled. These manifests record page status, source, OCR confidence, retry attempts, correction state, warning codes, and optional preserved page image paths.
+PDF extraction is page-aware. The text layer is read with PDFium (`LIBRARIAN_PDF_ENGINE=auto`, the default); pages with a usable text layer are never OCR'd, while empty pages and image pages with only stray characters are OCR'd. A page whose OCR fails keeps its text layer (or an explicit failed-page marker), is flagged `ocr-page-failed`, and the document completes; set `LIBRARIAN_OCR_FAIL_ON_PAGE_ERROR=true` to abort instead. OCR output never replaces a text layer that holds more of the page, and a rejected LLM OCR correction keeps the raw OCR text (`ocr-correction-failed`). Long OCR jobs write `<output>.pages.json` manifests when conversion sidecars are enabled. These manifests record page status, source, OCR confidence, retry attempts, correction state, warning codes, and optional preserved page image paths.
+
+`LIBRARIAN_PDF_ENGINE=liteparse` (or `LIBRARIAN_PDF_LAYOUT_ENHANCER=liteparse` with `auto`) runs the liteparse layout engine behind a retention guard: each page of its Markdown is measured against the PDFium text layer (word recall), pages below the threshold (80% as the engine, 95% as the enhancer) are replaced by the text layer, and a document with more than a third of its pages failing is re-extracted with the built-in extractor. The extraction report records `extraction_retention` (document and per-page scores, replaced pages, fallback) and `fallback_reason`; the Mac quality view shows them. `legacy` keeps the historical pdfplumber text layer and per-page headings.
 
 Inspect page manifests without dumping raw page text:
 
@@ -242,7 +244,15 @@ combine strict review with `LIBRARIAN_CLEANING_PUBLISH_PARTIAL=false`.
 The deprecated `LIBRARIAN_CLEANING_SEMANTIC_VERIFICATION` alias maps explicit
 `true` to strict and `false` to off; remove it when using the new setting.
 Deterministic checks detect defined failures; passing them does not prove
-semantic correctness.
+semantic correctness. Two of them guard against a model that abbreviates:
+`substantial-content-loss` fires when fewer than 90% of a unit's content words
+(four or more letters, conversational filler such as "um" or "you know"
+excluded; spelling repairs and the odd word substitution are credited) survive
+in the candidate, and `model-elided-text` fires when the candidate contains an
+ellipsis the source did not. No review mode or reviewer verdict clears either;
+a unit that fails them after its retry budget is published as its complete
+source inside a review marker. The run quality report records `words_retained`
+per chunk and for the document, and warns `low-content-retention` below 90%.
 
 For constrained models, this explicit profile reduces each editing job and
 avoids source-reading and unchanged-prose review calls:

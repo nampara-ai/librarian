@@ -150,7 +150,7 @@ def test_composite_config_signature_tracks_engine_change() -> None:
 
 def test_composite_config_signature_tracks_output_affecting_ocr_options() -> None:
     base = CompositeExtractor(pdf_engine="legacy")
-    fail_changed = CompositeExtractor(pdf_engine="legacy", ocr_fail_on_page_error=False)
+    fail_changed = CompositeExtractor(pdf_engine="legacy", ocr_fail_on_page_error=True)
     resp_changed = CompositeExtractor(
         pdf_engine="legacy", ocr_max_correction_response_chars=4096
     )

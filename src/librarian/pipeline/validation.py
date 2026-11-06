@@ -45,6 +45,7 @@ FIDELITY_WARNINGS = frozenset(
         "editorial-quality-failed",
         "changed-literal-link",
         "invalid-fidelity-verification",
+        "model-elided-text",
     }
 )
 
@@ -103,6 +104,112 @@ def literal_links(text: str) -> list[str]:
 REPEATED_TAIL_MIN_PATTERN_CHARS = 12
 REPEATED_TAIL_MAX_PATTERN_CHARS = 240
 REPEATED_TAIL_MIN_REPEATS = 8
+
+# Content retention is measured over "content words": alphabetic tokens of at
+# least four letters that are not conversational filler. Removing filler,
+# stutters, and false starts is legitimate copyediting of a transcript and must
+# never read as lost content, while dropping a sentence always does.
+CONTENT_WORD_REGEX = re.compile(r"[^\W\d_]{4,}")
+FILLER_WORDS = frozenset(
+    {
+        "actually",
+        "alright",
+        "anyway",
+        "anyways",
+        "basically",
+        "gonna",
+        "gotta",
+        "hmmm",
+        "just",
+        "kind",
+        "kinda",
+        "know",
+        "like",
+        "literally",
+        "mean",
+        "okay",
+        "really",
+        "right",
+        "sort",
+        "sorta",
+        "umm",
+        "ummm",
+        "wanna",
+        "well",
+        "yeah",
+        "yknow",
+    }
+)
+# Below this share of surviving source content words a candidate has lost
+# meaning, whatever a reviewer says about it. Ten percent covers spelling and
+# inflection repairs; a dropped sentence in a short unit costs far more.
+MIN_CONTENT_RETENTION = 0.9
+# Units with fewer content words than this are too short for the ratio to be
+# meaningful; the other guards (empty output, numbers, links) still apply.
+MIN_CONTENT_WORDS_FOR_RETENTION = 10
+# At most this share of a unit's content words may be explained as word
+# substitutions (``utilize`` -> ``use``); beyond it, new words are padding.
+MAX_SUBSTITUTION_SHARE = 0.2
+_STEM_CHARS = 5
+ELLIPSIS_REGEX = re.compile(r"…|(?<!\.)\.(?:\s?\.){2}(?!\.)")
+
+
+def content_words(text: str) -> Counter[str]:
+    """Case-folded multiset of the text's content words (filler excluded)."""
+    return Counter(
+        word
+        for word in (match.group().casefold() for match in CONTENT_WORD_REGEX.finditer(text))
+        if word not in FILLER_WORDS
+    )
+
+
+def content_retention(source: str, candidate: str) -> float | None:
+    """Share of the source's content words that survive in the candidate.
+
+    A word survives when it appears verbatim, when the candidate holds a word
+    sharing its first five letters (``transitions`` -> ``transition``), or
+    when the candidate has a word the source lacked in its place (a
+    substitution such as ``utilize`` -> ``use``). Dropped words with nothing in
+    their place are losses; a model that pads cannot buy back more words than
+    it added. Returns ``None`` when the source is too short to measure.
+    """
+    source_words = content_words(source)
+    total = sum(source_words.values())
+    if total < MIN_CONTENT_WORDS_FOR_RETENTION:
+        return None
+    candidate_words = content_words(candidate)
+    matched = sum((source_words & candidate_words).values())
+    missing = source_words - candidate_words
+    if not missing:
+        return 1.0
+    novel = candidate_words - source_words
+    stems: Counter[str] = Counter()
+    for word, count in novel.items():
+        if len(word) > _STEM_CHARS:
+            stems[word[:_STEM_CHARS]] += count
+    repaired = 0
+    for word, count in missing.items():
+        if len(word) <= _STEM_CHARS:
+            continue
+        available = stems.get(word[:_STEM_CHARS], 0)
+        if available:
+            used = min(count, available)
+            stems[word[:_STEM_CHARS]] = available - used
+            repaired += used
+    unexplained = sum(missing.values()) - repaired
+    # Substitution credit is capped: a copyedit swaps the odd word, while a
+    # model that rewrites half a passage in its own words has lost the half.
+    substitutions = min(
+        unexplained,
+        sum(novel.values()) - repaired,
+        int(total * MAX_SUBSTITUTION_SHARE),
+    )
+    return (matched + repaired + substitutions) / total
+
+
+def ellipsis_count(text: str) -> int:
+    """Number of ellipses (``…``, ``...``, ``. . .``) in the text."""
+    return len(ELLIPSIS_REGEX.findall(text))
 
 
 @dataclass(frozen=True, slots=True)
@@ -359,10 +466,13 @@ def _markdown_quality_warnings(
         VERBATIM_NUMBER_REGEX.findall(source_text)
     ) != Counter(VERBATIM_NUMBER_REGEX.findall(text)):
         warnings.append("repaired-decade-shorthand")
-    source_words = re.findall(r"\b\w+\b", source_text)
-    output_words = re.findall(r"\b\w+\b", text)
-    if len(source_words) >= 200 and len(output_words) < len(source_words) * 0.8:
+    retention = content_retention(source_text, text)
+    if retention is not None and retention < MIN_CONTENT_RETENTION:
         warnings.append("substantial-content-loss")
+    if ellipsis_count(text) > ellipsis_count(source_text):
+        # A model that abbreviates ("I own a list that I...") leaves ellipses
+        # the source never had. Copyediting never introduces one.
+        warnings.append("model-elided-text")
     return warnings
 
 

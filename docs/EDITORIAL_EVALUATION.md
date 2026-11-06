@@ -175,9 +175,12 @@ prompt remains `editorial_v3`; its gates have not been relaxed.
 The outside diagnosis at `c24c391` correctly identified blocking reviewer feedback, fragile
 acceptance, and document-wide publication failures. Two qualifications matter: completed
 chunks already had caches, so their work was withheld rather than deleted; and deterministic
-guards are fallible heuristics, not a proof of semantic fidelity. In particular, a word-count
-threshold can reject legitimate removal of transcript filler. A reviewer-approved reduction
-must retain that approval without weakening numeric or structural checks.
+guards are fallible heuristics, not a proof of semantic fidelity. In particular, a raw
+word-count threshold can reject legitimate removal of transcript filler; the content-loss guard
+therefore measures filler-aware content-word retention (with credit for spelling repairs and a
+bounded share of word substitutions), which accepts filler removal and rejects abbreviation,
+and it is never cleared by a reviewer verdict. A reviewer-approved reduction retains that
+approval without weakening numeric or structural checks.
 
 The current application defaults to advisory review and explicit partial publication.
 Strict review remains available. A source fallback is never described as cleaned: its exact

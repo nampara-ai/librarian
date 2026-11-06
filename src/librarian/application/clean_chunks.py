@@ -718,10 +718,7 @@ class CleanChunks:
                     if frozen_edits[uid] != text:
                         raise RuntimeError("Accepted unit text cannot be replaced")
                     return
-                remaining = [
-                    w for w in unit_failures.get(uid, []) if w != "substantial-content-loss"
-                ]
-                if remaining:
+                if unit_failures.get(uid):
                     raise RuntimeError(
                         "A unit with unresolved structural violations cannot be accepted"
                     )
@@ -964,7 +961,7 @@ class CleanChunks:
                 dict.fromkeys((*unit_warnings, *validated.warnings, *sorted(auxiliary_warnings)))
             )
             structural_failures = FIDELITY_WARNINGS.intersection(warnings)
-            unassigned = structural_failures.difference(unit_warnings, {"substantial-content-loss"})
+            unassigned = structural_failures.difference(unit_warnings)
             # Global failures can occur at a join even when isolated units passed.
             # Retrying must perform real work rather than reconstruct the same draft.
             _route_document_failures(
@@ -1006,7 +1003,7 @@ class CleanChunks:
                     pair
                     for pair in pairs
                     if (pair["id"] not in frozen_ids or pair["id"] in pending_reviews)
-                    and not (set(unit_failures.get(pair["id"], [])) - {"substantial-content-loss"})
+                    and not unit_failures.get(pair["id"])
                     and (
                         self.review_mode == "strict"
                         or " ".join(pair["source"].split()) != " ".join(pair["edited"].split())
@@ -1053,10 +1050,10 @@ class CleanChunks:
                     else:
                         warnings = (*warnings, semantic_warning)
                         unit_failures.update(issues)
-                elif not unit_failures:
-                    # A word-count reduction alone is not proof of lost meaning. It is
-                    # cleared only after complete unit coverage and an independent audit.
-                    warnings = tuple(w for w in warnings if w != "substantial-content-loss")
+                # Content retention is a deterministic measurement (filler-aware
+                # content-word recall). No reviewer verdict clears it: a weak
+                # reviewer shrugging at a gutted paragraph was how abbreviated
+                # output used to be published as clean.
                 if self.on_attempt is not None:
                     await self.on_attempt(
                         CleaningAttempt(
@@ -1744,13 +1741,9 @@ class CleanChunks:
             if self.document_source is not None
             else None,
         )
-        validation_warnings = validated.warnings
-        if self.source_aligned and self.verify_semantics:
-            # Only current policy-namespaced, audited edits reach this cache path.
-            validation_warnings = tuple(
-                w for w in validation_warnings if w != "substantial-content-loss"
-            )
-        warnings = list(dict.fromkeys((*cleaned.warnings, *validation_warnings)))
+        # Cached output is held to the current deterministic rules in full; a
+        # content-loss finding is never waived for having been accepted before.
+        warnings = list(dict.fromkeys((*cleaned.warnings, *validated.warnings)))
         if FIDELITY_WARNINGS.intersection(warnings):
             warnings.append("source-preserved-after-fidelity-check")
             return CleanedChunk(

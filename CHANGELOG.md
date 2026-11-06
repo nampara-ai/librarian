@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Read PDF text layers with PDFium by default (`LIBRARIAN_PDF_ENGINE=auto|pdfium`): every word
+  of the file's own text, OCR only for pages without a usable text layer. The liteparse layout
+  engine (which dropped most of a clean page's prose on a real document) runs only when selected,
+  or as an opt-in layout enhancer, and always behind a retention guard that measures each page
+  against the text layer, replaces failing pages, and falls back to the built-in extractor when
+  most pages fail. `extraction_retention` and the engine used appear in the quality report and
+  the Mac quality view; the Mac settings expose the engine choice.
+- Never lose a document to one unreadable page: a failed OCR page keeps its text layer or an
+  explicit marker and is flagged (`LIBRARIAN_OCR_FAIL_ON_PAGE_ERROR` now defaults to `false`),
+  OCR never replaces a longer text layer, and a rejected LLM OCR correction keeps the raw OCR text.
+- Make content loss a deterministic, unclearable cleaning guard: filler-aware content-word
+  retention replaces the 200-word floor, a new `model-elided-text` check rejects ellipses the
+  source never had, reviewers can no longer clear either, and cached output is re-checked under
+  the current rules. The quality report records `words_retained` per chunk and document.
+
 - Retain reviewer-approved filler reductions when restoring unit checkpoints. Continue
   enforcing numeric/structural guards and explicitly log invalidated checkpoint approvals.
 

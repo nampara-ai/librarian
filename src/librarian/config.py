@@ -23,7 +23,8 @@ _SECRET_SETTING_FIELDS = frozenset(
 CoherenceModeSetting = Literal["fast", "balanced", "max-coherence"]
 OcrLlmCorrectionMode = Literal["always", "never", "low-confidence"]
 OcrPreprocessMode = Literal["none", "grayscale", "threshold", "deskew"]
-PdfEngineSetting = Literal["auto", "liteparse", "legacy"]
+PdfEngineSetting = Literal["auto", "pdfium", "liteparse", "legacy"]
+PdfLayoutEnhancerSetting = Literal["off", "liteparse"]
 LiteParseImageMode = Literal["off", "placeholder", "embed"]
 LogFormatSetting = Literal["json", "text"]
 LogLevelSetting = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -102,12 +103,19 @@ class Settings(BaseSettings):
     docx_max_input_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
     pdf_max_input_bytes: int = Field(default=200 * 1024 * 1024, gt=0)
     pdf_max_pages: int = Field(default=1_000, gt=0)
-    # PDF/image extraction engine. "auto" uses the liteparse engine (richer
-    # Markdown: tables, headings, figures, selective OCR) when the optional
-    # liteparse package is installed, and otherwise falls back to the built-in
-    # pdfplumber + Tesseract path. "liteparse" forces it (still falls back if
-    # the package is absent); "legacy" always uses the built-in path.
+    # PDF extraction engine. "auto" and "pdfium" read each page's text layer
+    # with PDFium (complete, tens of milliseconds a page) and OCR only pages
+    # that have no usable text. "liteparse" uses the optional liteparse engine
+    # (Markdown tables/headings/figures) behind a retention guard that falls
+    # back to the text layer whenever it drops a page's words. "legacy" is the
+    # historical pdfplumber text layer with per-page headings.
     pdf_engine: PdfEngineSetting = Field(default="auto")
+    # Optional layout enhancer for "auto": "liteparse" runs liteparse on top of
+    # the PDFium text and keeps its richer Markdown for a page only when that
+    # page retains at least 95% of the text layer's words. Off by default; the
+    # enhancer has been observed to lose most of a clean page's prose. Figure
+    # vision (below) needs the enhancer's figure images and turns it on itself.
+    pdf_layout_enhancer: PdfLayoutEnhancerSetting = Field(default="off")
     liteparse_ocr_server_url: str | None = Field(default=None)
     liteparse_dpi: int = Field(default=150, gt=0)
     liteparse_image_mode: LiteParseImageMode = Field(default="placeholder")
@@ -158,7 +166,10 @@ class Settings(BaseSettings):
     ocr_llm_model: str | None = Field(default=None)
     ocr_low_confidence_threshold: float = Field(default=85.0, ge=0, le=100)
     ocr_page_concurrency: int = Field(default=2, gt=0)
-    ocr_fail_on_page_error: bool = Field(default=True)
+    # One page that cannot be OCR'd keeps its text layer (or an explicit failed
+    # page marker) and is flagged for review; the rest of the document completes.
+    # Set true to abort the whole document on the first OCR failure instead.
+    ocr_fail_on_page_error: bool = Field(default=False)
     universal_max_input_bytes: int = Field(default=50 * 1024 * 1024, gt=0)
     universal_timeout_seconds: int = Field(default=120, gt=0)
 

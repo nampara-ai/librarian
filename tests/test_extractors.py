@@ -582,7 +582,7 @@ async def test_pdf_extractor_page_manifest_tracks_pending_failed_and_retry_attem
 
     monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
     monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", flaky_ocr_pdf_page)
-    first = PdfExtractor(ocr_correction_mode="never")
+    first = PdfExtractor(ocr_correction_mode="never", ocr_fail_on_page_error=True)
     first.set_page_manifest_path(manifest)
 
     with pytest.raises(RuntimeError, match="Unable to OCR scanned PDF page 2") as exc_info:
@@ -760,7 +760,22 @@ async def test_pdf_extractor_fails_when_mixed_page_ocr_fails(
     monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", fake_ocr_pdf_page)
 
     with pytest.raises(RuntimeError, match="Unable to OCR scanned PDF page 2"):
-        await PdfExtractor(ocr_correction_mode="never").extract(path)
+        await PdfExtractor(ocr_correction_mode="never", ocr_fail_on_page_error=True).extract(
+            path
+        )
+
+    # Default: one unreadable page is flagged, the document still completes.
+    extractor = PdfExtractor(ocr_correction_mode="never")
+    text = await extractor.extract(path)
+
+    assert "Text page" in text
+    assert "status: failed" in text
+    assert "missing tesseract" in text
+    assert extractor.last_metadata is not None
+    pages = cast(list[dict[str, object]], extractor.last_metadata["pages"])
+    assert pages[1]["warnings"] == ["ocr-page-failed"]
+    assert pages[1]["status"] == "failed"
+    assert pages[0]["status"] == "succeeded"
 
 
 @pytest.mark.asyncio
@@ -1014,7 +1029,7 @@ async def test_pdf_page_manifest_rejects_unsafe_ocr_correction(
 
     monkeypatch.setattr(extractors.importlib, "import_module", fake_import_module)
     monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", fake_ocr_pdf_page)
-    extractor = PdfExtractor(ocr_correction_provider=FakeProvider())
+    extractor = PdfExtractor(ocr_correction_provider=FakeProvider(), ocr_fail_on_page_error=True)
     extractor.set_page_manifest_path(manifest)
 
     with pytest.raises(RuntimeError, match="failed fidelity checks"):
@@ -1025,6 +1040,20 @@ async def test_pdf_page_manifest_rejects_unsafe_ocr_correction(
     assert "ocr-page-failed" in page["warnings"]
     assert "repeated-tail" in page["error"]
     assert page["corrected"] is False
+
+    # Default: a rejected correction never costs the page; the raw OCR stays.
+    manifest.unlink()
+    lenient = PdfExtractor(ocr_correction_provider=FakeProvider())
+    lenient.set_page_manifest_path(manifest)
+
+    text = await lenient.extract(path)
+
+    assert "OCR raw" in text
+    assert repeated_tail.strip() not in text
+    page = json.loads(manifest.read_text(encoding="utf-8"))["pages"][0]
+    assert page["status"] == "succeeded"
+    assert page["corrected"] is False
+    assert "ocr-correction-failed" in page["warnings"]
 
 
 @pytest.mark.asyncio
@@ -1137,6 +1166,7 @@ async def test_pdf_extractor_rejects_oversized_ocr_correction(
     extractor = PdfExtractor(
         ocr_correction_provider=FakeProvider(),
         ocr_max_correction_response_chars=10,
+        ocr_fail_on_page_error=True,
     )
 
     with pytest.raises(RuntimeError, match="exceeding configured limit 10"):
@@ -1520,7 +1550,9 @@ async def test_pdf_extractor_passes_ocr_preprocessing_options(
     assert seen["threshold"] == 155
     assert extractor.last_metadata is not None
     assert extractor.last_metadata["extraction_config"] == {
-        "ocr_fidelity_policy": 1,
+        "ocr_fidelity_policy": 2,
+        "text_layer_engine": "pdfplumber",
+        "page_markup": "headings",
         "ocr_language": "eng",
         "ocr_timeout_seconds": 120,
         "ocr_pdf_dpi": 200,

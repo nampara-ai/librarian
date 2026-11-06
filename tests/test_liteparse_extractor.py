@@ -5,6 +5,7 @@ import io
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -760,41 +761,93 @@ def test_composite_forwards_liteparse_tessdata_path(
     monkeypatch.setattr(liteparse, "LiteParse", _RecordingParser)
     source = tmp_path / "doc.pdf"
     source.write_bytes(_table_pdf_bytes())
-    composite = CompositeExtractor(liteparse_tessdata_path="/bundle/tessdata")
+    composite = CompositeExtractor(
+        pdf_engine="liteparse", liteparse_tessdata_path="/bundle/tessdata"
+    )
 
     asyncio.run(composite.extract(source))
 
     assert captured["tessdata_path"] == "/bundle/tessdata"
 
 
-@requires_liteparse
-def test_composite_routes_pdf_through_liteparse_by_default(tmp_path: Path) -> None:
+def test_composite_routes_pdf_through_pdfium_by_default(tmp_path: Path) -> None:
     source = tmp_path / "report.pdf"
     source.write_bytes(_table_pdf_bytes())
 
     composite = CompositeExtractor()  # pdf_engine="auto"
-    assert composite.liteparse_active is True
+    assert composite.liteparse_active is False
+    assert composite.resolved_pdf_engine == "pdfium"
+    assert composite.pdf_layout_enhancer == "off"
     assert ".pdf" in composite.supported_extensions
     assert IMAGE_EXTENSIONS <= composite.supported_extensions
+
+    markdown = asyncio.run(composite.extract(source))
+
+    assert "Quarterly Report" in markdown
+    assert "Houston" in markdown and "512" in markdown
+    assert composite.last_metadata is not None
+    assert composite.last_metadata["engine"] == "pdfium"
+
+
+@requires_liteparse
+def test_composite_routes_pdf_through_liteparse_when_selected(tmp_path: Path) -> None:
+    source = tmp_path / "report.pdf"
+    source.write_bytes(_table_pdf_bytes())
+
+    composite = CompositeExtractor(pdf_engine="liteparse")
+    assert composite.liteparse_active is True
+    assert composite.resolved_pdf_engine == "liteparse"
+    assert composite.pdf_retention_threshold == 0.8
 
     markdown = asyncio.run(composite.extract(source))
 
     assert "| Region | Q1 | Q2 |" in markdown
     assert composite.last_metadata is not None
     assert composite.last_metadata["engine"] == "liteparse"
+    # The guard measured the output against the PDFium text layer.
+    retention = composite.last_metadata.get("extraction_retention")
+    if retention is not None:
+        assert cast(dict[str, object], retention)["fallback"] is False
+
+
+@requires_liteparse
+def test_auto_engine_uses_liteparse_only_as_guarded_enhancer() -> None:
+    plain = CompositeExtractor(pdf_engine="auto")
+    enhanced = CompositeExtractor(pdf_engine="auto", pdf_layout_enhancer="liteparse")
+    forced = CompositeExtractor(pdf_engine="pdfium", pdf_layout_enhancer="liteparse")
+
+    assert plain.liteparse_active is False
+    assert enhanced.liteparse_active is True
+    assert enhanced.pdf_layout_enhancer == "liteparse"
+    assert enhanced.resolved_pdf_engine == "pdfium+liteparse-enhancer"
+    assert enhanced.pdf_retention_threshold == 0.95
+    # "pdfium" is the plain text-layer engine; the enhancer does not apply.
+    assert forced.liteparse_active is False
+    assert forced.pdf_layout_enhancer == "off"
+    assert plain.config_signature != enhanced.config_signature
 
 
 def test_legacy_engine_does_not_activate_liteparse() -> None:
     composite = CompositeExtractor(pdf_engine="legacy")
     assert composite.liteparse_active is False
+    assert composite.resolved_pdf_engine == "legacy"
+    assert composite.pdf_text_layer_engine == "pdfplumber"
 
 
-def test_auto_engine_falls_back_to_legacy_when_liteparse_absent(
+def test_liteparse_engine_falls_back_to_pdfium_when_liteparse_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("librarian.ingest.extractors.liteparse_available", lambda: False)
-    composite = CompositeExtractor(pdf_engine="auto")
+    composite = CompositeExtractor(pdf_engine="liteparse")
     assert composite.liteparse_active is False
+    assert composite.resolved_pdf_engine == "pdfium"
+
+
+def test_unknown_pdf_engine_is_rejected() -> None:
+    with pytest.raises(ValueError, match="pdf_engine"):
+        CompositeExtractor(pdf_engine="docling")
+    with pytest.raises(ValueError, match="pdf_layout_enhancer"):
+        CompositeExtractor(pdf_layout_enhancer="magic")
 
 
 def test_fallback_extractor_uses_legacy_on_primary_failure(tmp_path: Path) -> None:
@@ -886,7 +939,7 @@ def test_composite_routes_image_through_liteparse(tmp_path: Path) -> None:
     pytest.importorskip("PIL.Image")
     source = _text_image_png(tmp_path)
 
-    composite = CompositeExtractor()
+    composite = CompositeExtractor(pdf_engine="liteparse")
     markdown = asyncio.run(composite.extract(source))
 
     assert "revenue" in markdown.lower()
