@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from pathlib import Path
 from typing import cast
 
@@ -18,6 +19,7 @@ from librarian.ingest.extractors import (
     measure_retention,
     pdfium_page_texts,
     render_pdf_pages_with_breaks,
+    strip_recurring_page_numerals,
     text_layer_is_usable,
     text_retention,
 )
@@ -514,3 +516,133 @@ def test_engine_and_enhancer_changes_invalidate_the_extraction_cache() -> None:
         == CompositeExtractor(pdf_engine="pdfium").pdf_text_layer_engine
         == "pdfium"
     )
+
+
+# --- tesseract invocation and page furniture -------------------------------
+
+
+def test_tesseract_outputs_are_requested_with_parameters_not_config_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ``txt``/``tsv`` config names need files under TESSDATA_PREFIX/configs.
+
+    The Mac bundle ships only the language models, so tesseract silently
+    dropped the tsv output and the page failed with a missing-file error.
+    """
+    seen: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        seen.append(cmd)
+        base = Path(cmd[2])
+        # Behave like tesseract without configs: honour -c parameters only.
+        for fmt in ("txt", "tsv"):
+            if f"tessedit_create_{fmt}=1" in cmd:
+                base.with_suffix(f".{fmt}").write_text(f"{fmt} output", encoding="utf-8")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(extractors.subprocess, "run", fake_run)
+
+    outputs = extractors._run_tesseract_to_files(  # pyright: ignore[reportPrivateUsage]
+        tmp_path / "page.png",
+        tesseract_path="/usr/bin/tesseract",
+        language="eng",
+        timeout_seconds=5,
+        output_dir=tmp_path,
+        formats=("txt", "tsv"),
+    )
+
+    assert outputs == {"txt": "txt output", "tsv": "tsv output"}
+    command = seen[0]
+    assert "txt" not in command and "tsv" not in command
+    assert command.count("-c") == 2
+
+
+def test_missing_tesseract_output_is_reported_with_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        Path(cmd[2]).with_suffix(".txt").write_text("words", encoding="utf-8")
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=0, stdout="", stderr="read_params_file: Can't open tsv\n"
+        )
+
+    monkeypatch.setattr(extractors.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match=r"no \.tsv output.*Can't open tsv"):
+        extractors._run_tesseract_to_files(  # pyright: ignore[reportPrivateUsage]
+            tmp_path / "page.png",
+            tesseract_path="/usr/bin/tesseract",
+            language="eng",
+            timeout_seconds=5,
+            output_dir=tmp_path,
+            formats=("txt", "tsv"),
+        )
+
+
+def _page(number: int, text: str) -> PdfPageExtraction:
+    return PdfPageExtraction(page_number=number, text=text, source="embedded")
+
+
+def test_recurring_page_numerals_are_stripped_from_page_edges() -> None:
+    pages = [
+        _page(1, "Make it Rain\nChris Orzechowski"),
+        _page(2, "1  \nIntroduction  \nIn my work as a copywriter I learned things."),
+        _page(3, "2  \nA while back I was doing launches."),
+        _page(4, "3  \nIs Email Taking its Last Gasping Breath?"),
+        _page(5, "Some prose that ends with a folio.\n\n4"),
+        _page(
+            6,
+            "",
+        ),
+    ]
+
+    stripped, removed = strip_recurring_page_numerals(pages)
+
+    assert removed == 3
+    assert stripped[0].text == "Make it Rain\nChris Orzechowski"
+    assert stripped[1].text == "Introduction  \nIn my work as a copywriter I learned things."
+    assert stripped[2].text == "A while back I was doing launches."
+    assert stripped[3].text == "Is Email Taking its Last Gasping Breath?"
+    # Only one page carries a trailing numeral: not recurring, so it stays.
+    assert stripped[4].text == pages[4].text
+    assert stripped[5].text == ""
+
+
+def test_isolated_leading_numbers_are_not_page_furniture() -> None:
+    pages = [
+        _page(1, "7\nSeven habits open this chapter."),
+        _page(2, "Plain prose page two."),
+        _page(3, "Plain prose page three."),
+        _page(4, "Plain prose page four."),
+    ]
+
+    stripped, removed = strip_recurring_page_numerals(pages)
+
+    assert removed == 0
+    assert [page.text for page in stripped] == [page.text for page in pages]
+
+
+@pytest.mark.asyncio
+async def test_pdfium_extractor_removes_printed_folios(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "folios.pdf"
+    path.write_bytes(_pdf_bytes([([str(n), PROSE, PROSE], False) for n in range(1, 5)]))
+
+    def no_ocr(*args: object, **kwargs: object) -> OcrTextResult:
+        del args, kwargs
+        raise AssertionError("text pages must not be sent to OCR")
+
+    monkeypatch.setattr("librarian.ingest.extractors._ocr_pdf_page", no_ocr)
+    extractor = PdfExtractor(
+        ocr_correction_mode="never", text_layer_engine="pdfium", page_markup="breaks"
+    )
+
+    text = await extractor.extract(path)
+
+    blocks = text.strip().split(PAGE_BREAK)
+    assert all(block.startswith(PROSE) for block in blocks)
+    assert extractor.last_metadata is not None
+    assert extractor.last_metadata["page_numerals_removed"] == 4

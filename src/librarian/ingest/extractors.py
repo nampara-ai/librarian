@@ -23,7 +23,7 @@ import uuid
 from collections import Counter, defaultdict
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal, Protocol, cast
@@ -1692,6 +1692,7 @@ class PdfExtractor:
             raise ValueError(f"No extractable content found in PDF: {path}")
 
         page_records = [_pdf_page_record(page) for page in final_pages]
+        final_pages, numerals_removed = self._strip_furniture(final_pages)
         self.last_metadata = {
             "artifact_type": "pdf-page-extraction",
             "engine": self._resolved_text_layer_engine,
@@ -1702,9 +1703,19 @@ class PdfExtractor:
             "page_count": page_count,
             "summary": _pdf_page_manifest_summary(page_records),
             "quality_summary": _pdf_quality_summary(final_pages),
+            "page_numerals_removed": numerals_removed,
             "pages": page_records,
         }
         return self._render_pages(path, final_pages)
+
+    def _strip_furniture(
+        self, pages: Sequence[PdfPageExtraction]
+    ) -> tuple[list[PdfPageExtraction], int]:
+        # The legacy heading layout is kept byte-for-byte; the page-break layout
+        # is what the cleaner reads, so printed folios are removed there.
+        if self.page_markup != "breaks":
+            return list(pages), 0
+        return strip_recurring_page_numerals(pages)
 
     def _render_pages(self, path: Path, pages: Sequence[PdfPageExtraction]) -> str:
         if self.page_markup == "breaks":
@@ -1822,13 +1833,16 @@ class PdfExtractor:
             )
         if not any(page.text.strip() for page in page_outputs):
             raise ValueError(f"No extractable content found in PDF: {path}")
+        page_records = [_pdf_page_record(page) for page in page_outputs]
+        page_outputs, numerals_removed = self._strip_furniture(page_outputs)
         self.last_metadata = {
             "artifact_type": "pdf-page-extraction",
             "engine": self._resolved_text_layer_engine,
             "text_layer_engine": self._resolved_text_layer_engine,
             "page_count": page_count,
             "quality_summary": _pdf_quality_summary(page_outputs),
-            "pages": [_pdf_page_record(page) for page in page_outputs],
+            "page_numerals_removed": numerals_removed,
+            "pages": page_records,
         }
         return self._render_pages(path, page_outputs)
 
@@ -3896,15 +3910,32 @@ def _run_tesseract_to_files(
     spawning the process once per format.
     """
     output_base = output_dir / "tesseract_output"
-    command = [tesseract_path, str(path), str(output_base), "-l", language, *formats]
-    subprocess.run(  # noqa: S603
+    # Request each output with an explicit parameter rather than the ``txt`` /
+    # ``tsv`` config names: those names are files tesseract looks up under
+    # ``$TESSDATA_PREFIX/configs``, and a tessdata directory that ships only the
+    # language models (the Mac bundle did) makes tesseract skip the format
+    # silently, exit 0, and leave the caller reading a file that never existed.
+    command = [tesseract_path, str(path), str(output_base), "-l", language]
+    for fmt in formats:
+        command.extend(["-c", f"tessedit_create_{fmt}=1"])
+    completed = subprocess.run(  # noqa: S603
         command,
         check=True,
         capture_output=True,
         text=True,
         timeout=timeout_seconds,
     )
-    return {fmt: output_base.with_suffix(f".{fmt}").read_text(encoding="utf-8") for fmt in formats}
+    outputs: dict[str, str] = {}
+    for fmt in formats:
+        output_path = output_base.with_suffix(f".{fmt}")
+        if not output_path.exists():
+            detail = (completed.stderr or "").strip().splitlines()
+            raise RuntimeError(
+                f"tesseract produced no .{fmt} output for {path.name}"
+                + (f": {detail[-1]}" if detail else "")
+            )
+        outputs[fmt] = output_path.read_text(encoding="utf-8")
+    return outputs
 
 
 _OSD_ROTATE_RE = re.compile(r"^Rotate:\s*(\d+)", re.MULTILINE)
@@ -4753,6 +4784,76 @@ def _pdf_quality_summary(pages: Sequence[PdfPageExtraction]) -> dict[str, object
         "ocr_pages": sum(1 for page in pages if page.source == "ocr"),
         "ocr_failed_pages": sum(1 for page in pages if page.error),
     }
+
+
+_PAGE_NUMERAL_RE = re.compile(
+    r"^(?:\d{1,4}|(?=[ivxlc])m{0,3}(?:cm|cd|d?c{0,3})(?:xc|xl|l?x{0,3})(?:ix|iv|v?i{0,3}))$"
+)
+# A numeral line is page furniture only when it recurs in the same position on
+# at least this share of the text pages (and on at least three pages).
+_PAGE_NUMERAL_MIN_SHARE = 0.5
+
+
+def _edge_numeral(lines: Sequence[str], *, first: bool) -> int | None:
+    """Index of the first/last non-blank line when it is a bare page numeral."""
+    indices = range(len(lines)) if first else range(len(lines) - 1, -1, -1)
+    for index in indices:
+        stripped = lines[index].strip()
+        if not stripped:
+            continue
+        return index if _PAGE_NUMERAL_RE.match(stripped) else None
+    return None
+
+
+def strip_recurring_page_numerals(
+    pages: Sequence[PdfPageExtraction],
+) -> tuple[list[PdfPageExtraction], int]:
+    """Drop printed page numbers that sit alone on the first or last line.
+
+    A text layer reproduces the folio printed in the margin ("4" above the
+    prose of page 4). Left in, every page of the cleaned document opens or
+    closes with a stray number. A numeral is removed only when numerals recur
+    in that position on most text pages, so a chapter that happens to start
+    with a number on one page keeps it.
+    """
+    text_pages = [page for page in pages if page.text.strip()]
+    if len(text_pages) < 3:
+        return list(pages), 0
+    split = {page.page_number: page.text.splitlines() for page in text_pages}
+    top = {
+        page.page_number: index
+        for page in text_pages
+        if (index := _edge_numeral(split[page.page_number], first=True)) is not None
+    }
+    bottom = {
+        page.page_number: index
+        for page in text_pages
+        if (index := _edge_numeral(split[page.page_number], first=False)) is not None
+    }
+    threshold = max(3, math.ceil(len(text_pages) * _PAGE_NUMERAL_MIN_SHARE))
+    strip_top = len(top) >= threshold
+    strip_bottom = len(bottom) >= threshold
+    if not strip_top and not strip_bottom:
+        return list(pages), 0
+    result: list[PdfPageExtraction] = []
+    removed = 0
+    for page in pages:
+        lines = split.get(page.page_number)
+        if lines is None:
+            result.append(page)
+            continue
+        drop: set[int] = set()
+        if strip_top and page.page_number in top:
+            drop.add(top[page.page_number])
+        if strip_bottom and page.page_number in bottom:
+            drop.add(bottom[page.page_number])
+        if not drop:
+            result.append(page)
+            continue
+        kept = "\n".join(line for index, line in enumerate(lines) if index not in drop)
+        result.append(replace(page, text=kept.strip("\n")))
+        removed += len(drop)
+    return result, removed
 
 
 def render_pdf_pages_with_breaks(pages: Sequence[PdfPageExtraction]) -> str:

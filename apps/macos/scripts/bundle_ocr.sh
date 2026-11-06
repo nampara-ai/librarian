@@ -89,6 +89,15 @@ for data in eng.traineddata osd.traineddata; do
   fi
 done
 
+# Tesseract's named output configs (``txt``, ``tsv``, ``hocr``, ...) live beside
+# the language data. Ship them so any invocation that names a config resolves
+# it instead of silently dropping that output format.
+for config_dir in configs tessconfigs; do
+  if [[ -d "$BREW_PREFIX/share/tessdata/$config_dir" ]]; then
+    cp -R "$BREW_PREFIX/share/tessdata/$config_dir" "$TESSDATA_DIR/$config_dir"
+  fi
+done
+
 echo "Relocating dependent dylibs into the bundle"
 DYLIB_ARGS=()
 for exe in "${EXES[@]}"; do

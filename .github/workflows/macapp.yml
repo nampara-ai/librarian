@@ -134,13 +134,19 @@ jobs:
           with open("ocrcheck.pdf", "wb") as handle:
               handle.write(pdf)
 
-          import pdf2image
-          import pytesseract
+          # Call the extractor's own page-OCR function (pdf2image render ->
+          # tesseract with the txt+tsv outputs -> confidence parse), not a
+          # simplified stand-in: v1.10.1 shipped with a tesseract invocation
+          # that worked in a stand-in check and failed in the app.
+          from pathlib import Path
 
-          pages = pdf2image.convert_from_path("ocrcheck.pdf", dpi=200)
-          text = pytesseract.image_to_string(pages[0]).upper()
+          from librarian.ingest.extractors import _ocr_pdf_page
+
+          result = _ocr_pdf_page(Path("ocrcheck.pdf"), page_number=1, auto_orient=False)
+          text = result.text.upper()
           assert "LIBRARIAN" in text, f"OCR did not read the test PDF: {text!r}"
-          print("bundled OCR OK:", text.strip())
+          assert result.confidence is not None, "OCR confidence (tsv output) missing"
+          print("bundled OCR OK:", text.strip(), "confidence", result.confidence)
           CHECK
 
       - name: Verify bundled runtime can reach AI providers
