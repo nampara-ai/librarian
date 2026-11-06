@@ -143,6 +143,17 @@ def test_validation_preserves_invisible_pdf_page_boundaries() -> None:
         "First page. Second page.", input_size=len(source), source_text=source
     )
 
+    # A dropped boundary is put back from the words around it rather than
+    # rejecting the whole chunk; the boundary itself is never lost.
+    assert result.text == source
+    assert "page-breaks-restored" in result.warnings
+    assert "changed-page-breaks" not in result.warnings
+
+
+def test_validation_still_rejects_unrestorable_page_boundaries() -> None:
+    source = "First page.\n\n<!-- page-break -->\n\nSecond page."
+    result = validate_cleaned_text("Something else.", input_size=len(source), source_text=source)
+
     assert "changed-page-breaks" in result.warnings
 
 

@@ -24,6 +24,7 @@ from librarian.domain.models import (
     ExtractionPayload,
     SourceFile,
 )
+from librarian.ingest.extractors import extraction_is_incomplete
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,7 +125,17 @@ class IngestDocument:
             stored = await self.content.get_text(extraction_signature_key(document_id))
         except KeyError:
             return False
-        return stored == signature
+        if stored != signature:
+            return False
+        # A stored extraction with unreadable pages is retried, not reused:
+        # the OCR tool may have been fixed since, and the user asked again.
+        try:
+            report = json.loads(await self.content.get_text(extraction_report_key(document_id)))
+        except (KeyError, ValueError):
+            return True
+        if not isinstance(report, dict):
+            return True
+        return not extraction_is_incomplete(cast("dict[str, object]", report))
 
     async def _refresh_extraction(self, document_id: DocumentId, source_path: Path) -> str:
         extracted = await _extract_payload(self.extractor, source_path)

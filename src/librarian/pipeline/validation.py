@@ -212,6 +212,92 @@ def ellipsis_count(text: str) -> int:
     return len(ELLIPSIS_REGEX.findall(text))
 
 
+PAGE_BREAK_MARKER = "<!-- page-break -->"
+_WORD_RE = re.compile(r"\w+")
+# Words taken on each side of a source page break to locate it in the candidate.
+_PAGE_BREAK_ANCHOR_WORDS = 6
+# Share of anchor words that must match, in order, for a placement to count.
+_PAGE_BREAK_MIN_MATCH = 0.6
+
+
+def _words(text: str) -> list[tuple[str, int, int]]:
+    return [(m.group().casefold(), m.start(), m.end()) for m in _WORD_RE.finditer(text)]
+
+
+def _ordered_matches(anchor: list[str], window: list[str]) -> int:
+    """Count anchor words found in order inside the window (subsequence match)."""
+    matched = 0
+    position = 0
+    for word in anchor:
+        try:
+            position = window.index(word, position) + 1
+        except ValueError:
+            continue
+        matched += 1
+    return matched
+
+
+def restore_page_breaks(source: str, candidate: str) -> tuple[str, bool]:
+    """Put the source's page-break markers back where the model lost them.
+
+    Small models drop a few ``<!-- page-break -->`` markers from a long chunk
+    (and occasionally invent one), which used to reject the whole chunk on
+    every attempt. Each source break is located in the candidate by the words
+    on either side of it, and the candidate's markers are rebuilt from those
+    positions. Returns the candidate unchanged when any break cannot be placed
+    with confidence, so the structural check still fails rather than guess.
+    """
+    segments = PAGE_BREAK_REGEX.split(source)
+    breaks = len(segments) - 1
+    stripped = PAGE_BREAK_REGEX.sub("", candidate)
+    if breaks == 0:
+        text = normalize_markdown_whitespace(stripped) if stripped != candidate else candidate
+        return text, stripped != candidate
+    words = _words(stripped)
+    tokens = [word for word, _start, _end in words]
+    positions: list[int] = []
+    cursor = 0
+    for index in range(1, len(segments)):
+        before = [m.group().casefold() for m in _WORD_RE.finditer(segments[index - 1])]
+        after = [m.group().casefold() for m in _WORD_RE.finditer(segments[index])]
+        before = before[-_PAGE_BREAK_ANCHOR_WORDS:]
+        after = after[:_PAGE_BREAK_ANCHOR_WORDS]
+        if not before and not after:
+            return candidate, False
+        best_score = 0
+        best_index = -1
+        needed = max(1, round((len(before) + len(after)) * _PAGE_BREAK_MIN_MATCH))
+        for split in range(cursor, len(tokens) + 1):
+            left = tokens[max(cursor, split - len(before) - 2) : split]
+            right = tokens[split : split + len(after) + 2]
+            score = _ordered_matches(before, left) + _ordered_matches(after, right)
+            if score > best_score:
+                best_score, best_index = score, split
+                if score == len(before) + len(after):
+                    break
+        if best_index < 0 or best_score < needed:
+            return candidate, False
+        positions.append(best_index)
+        cursor = best_index
+    pieces: list[str] = []
+    char_cursor = 0
+    for split in positions:
+        if split >= len(words):
+            boundary = len(stripped)
+        elif split == 0:
+            boundary = 0
+        else:
+            boundary = words[split - 1][2]
+            # Keep closing punctuation and quotes with the sentence they end.
+            while boundary < len(stripped) and stripped[boundary] in ".,;:!?)\"'\u2019\u201d*_":
+                boundary += 1
+        pieces.append(stripped[char_cursor:boundary].rstrip())
+        char_cursor = boundary
+    pieces.append(stripped[char_cursor:].lstrip())
+    rebuilt = f"\n\n{PAGE_BREAK_MARKER}\n\n".join(piece.strip("\n") for piece in pieces)
+    return normalize_markdown_whitespace(rebuilt), True
+
+
 @dataclass(frozen=True, slots=True)
 class SourceContext:
     before: str = ""
@@ -257,6 +343,12 @@ def validate_cleaned_text(
         warnings.append("suspiciously-short-output")
 
     text = _normalize_output_whitespace(text)
+    if source_text is not None and len(PAGE_BREAK_REGEX.findall(source_text)) != len(
+        PAGE_BREAK_REGEX.findall(text)
+    ):
+        text, restored = restore_page_breaks(source_text, text)
+        if restored:
+            warnings.append("page-breaks-restored")
     warnings.extend(_markdown_quality_warnings(text, source_text=source_text, context=context))
     return ValidationResult(text=text, warnings=tuple(warnings))
 

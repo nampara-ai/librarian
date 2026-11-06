@@ -232,3 +232,82 @@ def test_cached_abbreviated_output_is_not_served_as_clean() -> None:
     assert revalidated.text == SOURCE_40
     assert "substantial-content-loss" in revalidated.warnings
     assert "source-preserved-after-fidelity-check" in revalidated.warnings
+
+
+# --- page-break restoration ---------------------------------------------------
+
+from librarian.pipeline.validation import PAGE_BREAK_REGEX, restore_page_breaks  # noqa: E402
+
+PB = "\n\n<!-- page-break -->\n\n"
+PAGES = [
+    "People don't want to read ads in their inbox.\nThat's just the way it is.",
+    "Types of Emails\nPeople get two kinds of emails. Some are personal, and some are ads.",
+    "For instance, if you sell courses, and you don't have millions of people on your list,\n"
+    "then you have to play a bit of a different game than just sending out blatant ads.",
+    "First Pillar:\nThree Types of Email Campaigns\nEvery one of these campaigns has an objective.",
+]
+SOURCE = PB.join(PAGES)
+
+
+def _cleaned(page: str) -> str:
+    return page.replace("\n", " ").replace("don't", "do not")
+
+
+def test_dropped_page_breaks_are_restored_from_word_anchors() -> None:
+    candidate = (
+        _cleaned(PAGES[0])
+        + PB
+        + "## "
+        + _cleaned(PAGES[1])
+        + "\n\n"  # break dropped here
+        + _cleaned(PAGES[2])
+        + " "
+        + _cleaned(PAGES[3])  # and here
+    )
+
+    text, restored = restore_page_breaks(SOURCE, candidate)
+
+    assert restored
+    blocks = PAGE_BREAK_REGEX.split(text)
+    assert len(blocks) == 4
+    assert blocks[2].strip().startswith("For instance, if you sell courses")
+    assert blocks[3].strip().startswith("First Pillar")
+    assert blocks[1].strip().startswith("## Types of Emails")
+
+
+def test_invented_page_break_is_removed() -> None:
+    candidate = PB.lstrip() + PB.join(_cleaned(page) for page in PAGES)
+
+    text, restored = restore_page_breaks(SOURCE, candidate)
+
+    assert restored
+    assert len(PAGE_BREAK_REGEX.findall(text)) == 3
+    assert text.startswith("People do not want")
+
+
+def test_unplaceable_page_break_leaves_candidate_alone() -> None:
+    candidate = _cleaned(PAGES[0]) + PB + _cleaned(PAGES[3])  # two pages missing entirely
+
+    text, restored = restore_page_breaks(SOURCE, candidate)
+
+    assert not restored
+    assert text == candidate
+
+
+def test_validation_restores_breaks_instead_of_rejecting() -> None:
+    candidate = (
+        _cleaned(PAGES[0])
+        + PB
+        + _cleaned(PAGES[1])
+        + " "
+        + _cleaned(PAGES[2])
+        + PB
+        + _cleaned(PAGES[3])
+    )
+
+    result = validate_cleaned_text(candidate, input_size=len(SOURCE), source_text=SOURCE)
+
+    assert "changed-page-breaks" not in result.warnings
+    assert "page-breaks-restored" in result.warnings
+    assert len(PAGE_BREAK_REGEX.findall(result.text)) == 3
+    assert not DETERMINISTIC_WARNINGS.intersection(result.warnings)

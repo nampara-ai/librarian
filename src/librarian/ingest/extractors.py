@@ -3371,7 +3371,7 @@ def _extractor_metadata(extractor: object) -> dict[str, object] | None:
 
 # Bump when extraction output for a given config could change materially, to
 # invalidate every cached entry without a data migration.
-_EXTRACTION_CACHE_VERSION = 6
+_EXTRACTION_CACHE_VERSION = 7
 # Raw LiteParse pages have not changed; keep their resumable cache while
 # invalidating cached finalized Markdown after the normalization improvements.
 _LITEPARSE_RAW_CACHE_VERSION = 3
@@ -3414,6 +3414,33 @@ class ExtractionCacheStore(Protocol):
     async def get_extraction(self, content_sha256: str, config_signature: str) -> str | None: ...
 
     async def put_extraction(self, entry: ExtractionCacheEntry) -> None: ...
+
+
+def extraction_is_incomplete(metadata: Mapping[str, object] | None) -> bool:
+    """Whether an extraction report records pages that could not be read.
+
+    Such a result is still published (the rest of the document is fine), but
+    it must not be cached or treated as current: the next run should retry
+    the failed pages, for instance after an OCR tool is repaired.
+    """
+    if not isinstance(metadata, Mapping):
+        return False
+    summary = metadata.get("quality_summary")
+    if isinstance(summary, Mapping):
+        failed = cast("Mapping[str, object]", summary).get("ocr_failed_pages")
+        if isinstance(failed, int) and failed > 0:
+            return True
+    manifest_summary = metadata.get("summary")
+    if isinstance(manifest_summary, Mapping):
+        status = cast("Mapping[str, object]", manifest_summary).get("status")
+        if status in {"failed", "pending"}:
+            return True
+    pages = metadata.get("pages")
+    if isinstance(pages, list):
+        for page in cast("list[object]", pages):
+            if isinstance(page, Mapping) and cast("Mapping[str, object]", page).get("error"):
+                return True
+    return False
 
 
 class CachingExtractor:
@@ -3470,6 +3497,12 @@ class CachingExtractor:
             return ExtractionPayload(text=cached)
 
         payload = await self._extract_uncached_payload(path)
+        if extraction_is_incomplete(self.last_metadata):
+            # A page that could not be read (OCR failed, engine fell back
+            # mid-way) is a result to retry on the next run, not to serve from
+            # cache for the lifetime of the library.
+            _LOGGER.info("extraction-not-cached", extra={"path": path.name})
+            return payload
         await self._cache.put_extraction(
             ExtractionCacheEntry(
                 content_sha256=content_sha256,

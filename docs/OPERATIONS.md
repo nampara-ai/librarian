@@ -253,6 +253,16 @@ ellipsis the source did not. No review mode or reviewer verdict clears either;
 a unit that fails them after its retry budget is published as its complete
 source inside a review marker. The run quality report records `words_retained`
 per chunk and for the document, and warns `low-content-retention` below 90%.
+A candidate whose `<!-- page-break -->` markers differ from the source has them
+rebuilt from the words around each source break (`page-breaks-restored`)
+before the structural checks run; `changed-page-breaks` remains for the case
+where a break cannot be placed.
+
+The app's data directory (`~/Library/Application Support/Librarian` for the
+Mac app; `LIBRARIAN_DATA_DIR` otherwise) holds the SQLite library, the
+extraction and cleaned-chunk caches, the `.env` settings, and `backend.log`.
+Removing the app or the export folder leaves it in place. An extraction whose
+pages could not all be read is never cached or reused, so a retry re-extracts.
 
 For constrained models, this explicit profile reduces each editing job and
 avoids source-reading and unchanged-prose review calls:

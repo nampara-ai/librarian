@@ -151,9 +151,7 @@ def test_composite_config_signature_tracks_engine_change() -> None:
 def test_composite_config_signature_tracks_output_affecting_ocr_options() -> None:
     base = CompositeExtractor(pdf_engine="legacy")
     fail_changed = CompositeExtractor(pdf_engine="legacy", ocr_fail_on_page_error=True)
-    resp_changed = CompositeExtractor(
-        pdf_engine="legacy", ocr_max_correction_response_chars=4096
-    )
+    resp_changed = CompositeExtractor(pdf_engine="legacy", ocr_max_correction_response_chars=4096)
     assert base.config_signature != fail_changed.config_signature
     assert base.config_signature != resp_changed.config_signature
 
@@ -256,3 +254,23 @@ async def test_caching_extractor_with_sqlite_repository(tmp_path: Path) -> None:
     assert await extractor.extract(source) == "from-engine"
     assert await extractor.extract(source) == "from-engine"
     assert inner.calls == 1  # second call served by the SQLite cache
+
+
+def test_caching_extractor_does_not_cache_extractions_with_unreadable_pages(
+    tmp_path: Path,
+) -> None:
+    source = _write(tmp_path, "scan.txt", b"scan")
+    inner = _CountingExtractor("partial")
+    inner.last_metadata = {
+        "engine": "pdfium",
+        "quality_summary": {"pages": 2, "ocr_failed_pages": 1},
+        "pages": [{"page_number": 2, "error": "no tesseract", "warnings": ["ocr-page-failed"]}],
+    }
+    cache = _InMemoryCache()
+    extractor = CachingExtractor(inner, cache, config_signature="sig-1")
+
+    assert asyncio.run(extractor.extract(source)) == "partial"
+    assert asyncio.run(extractor.extract(source)) == "partial"
+
+    assert inner.calls == 2  # retried, never served from cache
+    assert cache.entries == {}

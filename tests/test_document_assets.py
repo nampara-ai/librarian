@@ -103,3 +103,45 @@ async def test_duplicate_reextracts_when_extractor_version_changes(tmp_path: Pat
     assets = list(await repository.list_document_assets(first.document.id))
     assert len(assets) == 1
     assert assets[0].data == b"version-2"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_reextracts_when_stored_extraction_has_unreadable_pages(
+    tmp_path: Path,
+) -> None:
+    import json
+
+    from librarian.application.quality_report import extraction_report_key
+
+    class ReportingExtractor(AssetExtractor):
+        config_signature = "version-1"
+        last_metadata: dict[str, object] | None = None
+
+        async def extract_with_assets(self, path: Path) -> ExtractionPayload:
+            payload = await super().extract_with_assets(path)
+            failed = 1 if self.calls == 1 else 0
+            self.last_metadata = {
+                "engine": "pdfium",
+                "quality_summary": {"pages": 2, "ocr_failed_pages": failed},
+            }
+            return payload
+
+    database = SQLiteDatabase(tmp_path / "librarian.sqlite")
+    await database.initialize()
+    repository = SQLiteRepository(database)
+    extractor = ReportingExtractor()
+    ingest = IngestDocument(
+        documents=repository, content=repository, extractor=extractor, assets=repository
+    )
+    source = tmp_path / "guide.pdf"
+    source.write_bytes(b"pdf-data")
+
+    first = await ingest.execute(source)
+    second = await ingest.execute(source)  # first extraction had a failed page: retried
+    third = await ingest.execute(source)  # second was complete: reused
+
+    assert first.duplicate is False
+    assert second.duplicate is True and third.duplicate is True
+    assert extractor.calls == 2
+    report = json.loads(await repository.get_text(extraction_report_key(first.document.id)))
+    assert report["quality_summary"]["ocr_failed_pages"] == 0
