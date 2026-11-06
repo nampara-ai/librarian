@@ -275,6 +275,25 @@ def test_dropped_page_breaks_are_restored_from_word_anchors() -> None:
     assert blocks[1].strip().startswith("## Types of Emails")
 
 
+def test_restored_pages_carry_no_stray_blank_lines() -> None:
+    # Models often leave a two-space line break and blank lines around a marker.
+    candidate = (
+        _cleaned(PAGES[0])
+        + "  \n\n<!-- page-break -->\n\n  \n\n\n"
+        + _cleaned(PAGES[1])
+        + " "
+        + _cleaned(PAGES[2])
+        + PB
+        + _cleaned(PAGES[3])
+    )
+
+    text, restored = restore_page_breaks(SOURCE, candidate)
+
+    assert restored
+    assert text == PB.join(block.strip() for block in PAGE_BREAK_REGEX.split(text))
+    assert "\n\n\n" not in text and "  \n\n" not in text
+
+
 def test_invented_page_break_is_removed() -> None:
     candidate = PB.lstrip() + PB.join(_cleaned(page) for page in PAGES)
 

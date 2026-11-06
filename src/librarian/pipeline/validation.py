@@ -294,7 +294,7 @@ def restore_page_breaks(source: str, candidate: str) -> tuple[str, bool]:
         pieces.append(stripped[char_cursor:boundary].rstrip())
         char_cursor = boundary
     pieces.append(stripped[char_cursor:].lstrip())
-    rebuilt = f"\n\n{PAGE_BREAK_MARKER}\n\n".join(piece.strip("\n") for piece in pieces)
+    rebuilt = f"\n\n{PAGE_BREAK_MARKER}\n\n".join(piece.strip() for piece in pieces)
     return normalize_markdown_whitespace(rebuilt), True
 
 
