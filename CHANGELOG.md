@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 1.10.3 - 2026-11-06
+
+Keep small models' output instead of rejecting it over lost page markers, and stop serving
+stale extractions after a failure.
+
+- Restore page-break markers a model drops or invents. Small models (gpt-oss-120b on a real
+  57-page book) left out two to four of a chunk's ten `<!-- page-break -->` markers on every
+  attempt, so 40% of the book was published as unedited source. Each source break is now put
+  back by aligning the words on either side of it (`page-breaks-restored`); only a break that
+  cannot be placed still rejects the chunk.
+- Never cache or reuse an extraction with unreadable pages. A PDF whose OCR failed was cached by
+  content hash and served again on every retry and reinstall, so a repaired OCR tool changed
+  nothing until the library database was deleted. Such extractions are now retried on the next
+  run, and the extraction cache version is bumped so earlier results are rebuilt.
+
 ## 1.10.2 - 2026-11-06
 
 Fix OCR of scanned pages in the Mac app and tidy printed page numbers.
