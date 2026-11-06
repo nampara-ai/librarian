@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +12,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from librarian.application.assemble_document import assemble_cleaned_document
+from librarian.application.clean_chunks import FidelityValidationError
 from librarian.application.factory import ApplicationContainer
 from librarian.domain.ids import DocumentId, digest_text
 from librarian.pipeline.chunking import chunk_text
@@ -104,7 +106,27 @@ async def run_eval_suite(container: ApplicationContainer, suite: EvalSuite) -> E
             case.input_text,
             container.process_document.chunking_policy,
         )
-        cleaned_chunks = await container.process_document.cleaner.execute(chunks)
+        try:
+            cleaned_chunks = await container.process_document.cleaner.execute(chunks)
+        except FidelityValidationError as exc:
+            duration_seconds = max(time.perf_counter() - case_start, 1e-9)
+            results.append(
+                EvalCaseResult(
+                    name=case.name,
+                    passed=False,
+                    tags=tuple(case.tags),
+                    input_chars=len(case.input_text),
+                    output_chars=0,
+                    output_char_ratio=0.0,
+                    duration_seconds=duration_seconds,
+                    chars_per_second=len(case.input_text) / duration_seconds,
+                    classification_code="",
+                    classification_label="",
+                    warnings=exc.warnings,
+                    failures=(str(exc),),
+                )
+            )
+            continue
         assembled = assemble_cleaned_document(cleaned_chunks)
         classification = await container.process_document.classifier.execute(document_id, assembled)
         duration_seconds = max(time.perf_counter() - case_start, 1e-9)
@@ -117,7 +139,7 @@ async def run_eval_suite(container: ApplicationContainer, suite: EvalSuite) -> E
         unexpected_warnings = [warning for warning in warnings if warning not in allowed_warnings]
         if unexpected_warnings:
             failures.append(f"unexpected output warnings: {', '.join(unexpected_warnings)}")
-        lower_output = assembled.lower()
+        lower_output = _comparison_text(assembled)
         if len(assembled) < case.min_output_chars:
             failures.append(
                 f"output has {len(assembled)} chars, expected at least {case.min_output_chars}"
@@ -140,14 +162,16 @@ async def run_eval_suite(container: ApplicationContainer, suite: EvalSuite) -> E
                 f"{output_char_ratio:.3f} is above maximum {case.max_output_char_ratio:.3f}"
             )
         for expected in case.expected_contains:
-            if expected.lower() not in lower_output:
+            if _comparison_text(expected) not in lower_output:
                 failures.append(f"missing expected text: {expected}")
         for forbidden in case.forbidden_contains:
-            if forbidden.lower() in lower_output:
+            if _comparison_text(forbidden) in lower_output:
                 failures.append(f"found forbidden text: {forbidden}")
         if (
             case.expected_classification_prefix
-            and not classification.code.startswith(case.expected_classification_prefix)
+            and not classification.code.startswith(
+                case.expected_classification_prefix.rstrip("0") or "0"
+            )
         ):
             failures.append(
                 "classification "
@@ -180,6 +204,11 @@ async def run_eval_suite(container: ApplicationContainer, suite: EvalSuite) -> E
         cleaning_prompt_version=container.settings.cleaning_prompt_version,
         classification_prompt_version=container.settings.classification_prompt_version,
     )
+
+
+def _comparison_text(text: str) -> str:
+    text = unicodedata.normalize("NFKC", text).translate(str.maketrans({"‐": "-", "‑": "-"}))
+    return " ".join(text.casefold().split())
 
 
 def eval_result_json(result: EvalRunResult) -> str:

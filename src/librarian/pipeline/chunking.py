@@ -8,8 +8,13 @@ from dataclasses import dataclass
 
 from librarian.domain.ids import ChunkId, DocumentId
 from librarian.domain.models import Chunk
+from librarian.pipeline.markdown import protected_spans
 
 _BOUNDARY_PATTERN = re.compile(r"\n(?=#{1,6}\s)|\n{2,}|(?<=[.!?])\s+")
+_DISCOURSE_PATTERN = re.compile(
+    r"\b(?:all right|so|but|now|for instance|for example|let's|and (?:I|we|that's))\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,10 +57,11 @@ def chunk_text(document_id: DocumentId, text: str, policy: ChunkingPolicy) -> li
     start = 0
     ordinal = 0
     text_length = len(normalized)
+    protected = protected_spans(normalized)
 
     while start < text_length:
         desired_end = min(start + policy.target_chars, text_length)
-        end = _choose_boundary(normalized, start, desired_end, policy)
+        end = _choose_boundary(normalized, start, desired_end, policy, protected)
         chunk_body = normalized[start:end].strip()
 
         if chunk_body:
@@ -75,19 +81,49 @@ def chunk_text(document_id: DocumentId, text: str, policy: ChunkingPolicy) -> li
     return chunks
 
 
-def _choose_boundary(text: str, start: int, desired_end: int, policy: ChunkingPolicy) -> int:
+def _choose_boundary(
+    text: str,
+    start: int,
+    desired_end: int,
+    policy: ChunkingPolicy,
+    protected: list[tuple[int, int]],
+) -> int:
     if desired_end >= len(text):
         return len(text)
 
-    lower_bound = start + max(policy.min_chunk_chars, policy.target_chars // 2)
+    for left, right in protected:
+        if left < desired_end < right:
+            return left if left > start else right
+    lower_bound = start + min(
+        policy.target_chars, max(policy.min_chunk_chars, policy.target_chars // 2)
+    )
     candidates = [
         match.start()
         for match in _BOUNDARY_PATTERN.finditer(text, lower_bound, min(len(text), desired_end + 1))
+        if not any(left < match.start() < right for left, right in protected)
     ]
     if candidates:
         return candidates[-1]
 
-    return desired_end
+    # Raw speech often has no punctuation at all. Prefer a nearby clause opener
+    # over a mechanical word boundary (which can split phrases such as "you know").
+    radius = max(20, policy.target_chars // 8)
+    discourse = [
+        match.start()
+        for match in _DISCOURSE_PATTERN.finditer(
+            text, max(start + 1, desired_end - radius), min(len(text), desired_end + radius)
+        )
+        if not any(left < match.start() < right for left, right in protected)
+    ]
+    if discourse:
+        return min(discourse, key=lambda position: abs(position - desired_end))
+
+    # A target is a size preference, never permission to cut a word or identifier.
+    spaces = list(re.finditer(r"\s+", text[start : desired_end + 1]))
+    if spaces:
+        return start + spaces[-1].start()
+    following = re.search(r"\s+", text[desired_end:])
+    return desired_end + following.start() if following else len(text)
 
 
 def _make_chunk(
@@ -115,3 +151,19 @@ def _skip_leading_space(text: str, offset: int) -> int:
     while offset < len(text) and text[offset].isspace():
         offset += 1
     return offset
+
+
+def chunk_separator_before(chunk: Chunk, source: str | None) -> str:
+    """Recover the original transport join from validated source offsets."""
+    if source is None:
+        return "\n\n"
+    source = source.strip()
+    if (
+        not 0 <= chunk.start_char <= chunk.end_char <= len(source)
+        or source[chunk.start_char : chunk.end_char] != chunk.text
+    ):
+        return "\n\n"
+    start = chunk.start_char
+    while start and source[start - 1].isspace():
+        start -= 1
+    return source[start : chunk.start_char]

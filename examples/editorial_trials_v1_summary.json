@@ -1,0 +1,569 @@
+{
+  "artifact_type": "public-corpus-editorial-trial-summary",
+  "git_revision": "ba09e0a8ccff3db5821f17f7731e75ccc4f921d1",
+  "suite_file_sha256": "2caa22bd339e1314cebd7c07aa62e87b0d0d0058fe589368c54b4913fd2d7b41",
+  "judge_model": "qwen-3.8-27b",
+  "judge_prompt_version": "editorial_v3",
+  "summary": [
+    {
+      "trial": 1,
+      "passed_cases": 4,
+      "total_cases": 10,
+      "processing_failures": 0
+    },
+    {
+      "trial": 2,
+      "passed_cases": 5,
+      "total_cases": 10,
+      "processing_failures": 0
+    },
+    {
+      "trial": 3,
+      "passed_cases": 3,
+      "total_cases": 10,
+      "processing_failures": 2
+    }
+  ],
+  "settings": {
+    "llm_model": "gpt-oss-120b",
+    "cleaning_prompt_version": "cmos_v8",
+    "cleaning_source_reading": true,
+    "cleaning_reasoning_effort": "high",
+    "cleaning_temperature": 1.0,
+    "cleaning_verification_model": "qwen-3.8-27b",
+    "cleaning_verification_reasoning_effort": "medium"
+  },
+  "limitations": [
+    "Model assessments have known false positives and are not human quality scores.",
+    "The cases became exposed development material after this trial.",
+    "Original verdicts are preserved; secondary adjudication must be reported separately."
+  ],
+  "cases": [
+    {
+      "case_id": "fiction-1",
+      "trial": 1,
+      "processing_succeeded": true,
+      "passed": false,
+      "error": null,
+      "criteria": {
+        "fidelity": "fail",
+        "completeness": "pass",
+        "fluency": "fail",
+        "voice": "pass",
+        "style": "fail",
+        "structure": "fail"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "fiction-2",
+      "trial": 1,
+      "processing_succeeded": true,
+      "passed": false,
+      "error": null,
+      "criteria": {
+        "fidelity": "fail",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "science-1",
+      "trial": 1,
+      "processing_succeeded": true,
+      "passed": false,
+      "error": null,
+      "criteria": {
+        "fidelity": "fail",
+        "completeness": "pass",
+        "fluency": "fail",
+        "voice": "pass",
+        "style": "fail",
+        "structure": "fail"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "science-2",
+      "trial": 1,
+      "processing_succeeded": true,
+      "passed": false,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "uncertain",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "political-argument-1",
+      "trial": 1,
+      "processing_succeeded": true,
+      "passed": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "political-argument-2",
+      "trial": 1,
+      "processing_succeeded": true,
+      "passed": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "philosophy-1",
+      "trial": 1,
+      "processing_succeeded": true,
+      "passed": false,
+      "error": null,
+      "criteria": {
+        "fidelity": "fail",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "fail",
+        "structure": "fail"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "philosophy-2",
+      "trial": 1,
+      "processing_succeeded": true,
+      "passed": false,
+      "error": null,
+      "criteria": {
+        "fidelity": "fail",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "fail",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "autobiography-1",
+      "trial": 1,
+      "processing_succeeded": true,
+      "passed": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "autobiography-2",
+      "trial": 1,
+      "processing_succeeded": true,
+      "passed": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "fiction-1",
+      "trial": 2,
+      "processing_succeeded": true,
+      "passed": false,
+      "error": null,
+      "criteria": {
+        "fidelity": "fail",
+        "completeness": "pass",
+        "fluency": "fail",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "fiction-2",
+      "trial": 2,
+      "processing_succeeded": true,
+      "passed": false,
+      "error": null,
+      "criteria": {
+        "fidelity": "fail",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "fail",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "science-1",
+      "trial": 2,
+      "processing_succeeded": true,
+      "passed": false,
+      "error": null,
+      "criteria": {
+        "fidelity": "fail",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "fail",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "science-2",
+      "trial": 2,
+      "processing_succeeded": true,
+      "passed": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "political-argument-1",
+      "trial": 2,
+      "processing_succeeded": true,
+      "passed": false,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "fail",
+        "voice": "pass",
+        "style": "fail",
+        "structure": "fail"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "political-argument-2",
+      "trial": 2,
+      "processing_succeeded": true,
+      "passed": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "philosophy-1",
+      "trial": 2,
+      "processing_succeeded": true,
+      "passed": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "philosophy-2",
+      "trial": 2,
+      "processing_succeeded": true,
+      "passed": false,
+      "error": null,
+      "criteria": {
+        "fidelity": "fail",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "autobiography-1",
+      "trial": 2,
+      "processing_succeeded": true,
+      "passed": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "autobiography-2",
+      "trial": 2,
+      "processing_succeeded": true,
+      "passed": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "fiction-1",
+      "trial": 3,
+      "processing_succeeded": true,
+      "passed": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "fiction-2",
+      "trial": 3,
+      "processing_succeeded": true,
+      "passed": false,
+      "error": null,
+      "criteria": {
+        "fidelity": "fail",
+        "completeness": "pass",
+        "fluency": "fail",
+        "voice": "pass",
+        "style": "fail",
+        "structure": "uncertain"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "science-1",
+      "trial": 3,
+      "processing_succeeded": true,
+      "passed": false,
+      "error": null,
+      "criteria": {
+        "fidelity": "fail",
+        "completeness": "pass",
+        "fluency": "fail",
+        "voice": "pass",
+        "style": "fail",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "science-2",
+      "trial": 3,
+      "processing_succeeded": true,
+      "passed": false,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "fail",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "political-argument-1",
+      "trial": 3,
+      "processing_succeeded": false,
+      "passed": false,
+      "error": "Cleaning chunk 1 failed fidelity checks after 4 attempt(s): editorial-quality-failed. Original source remains available; no uncleaned replacement was published.",
+      "criteria": null,
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": null
+    },
+    {
+      "case_id": "political-argument-2",
+      "trial": 3,
+      "processing_succeeded": true,
+      "passed": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "philosophy-1",
+      "trial": 3,
+      "processing_succeeded": true,
+      "passed": true,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "philosophy-2",
+      "trial": 3,
+      "processing_succeeded": false,
+      "passed": false,
+      "error": "Cleaning chunk 1 failed fidelity checks after 4 attempt(s): editorial-quality-failed. Original source remains available; no uncleaned replacement was published.",
+      "criteria": null,
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": null
+    },
+    {
+      "case_id": "autobiography-1",
+      "trial": 3,
+      "processing_succeeded": true,
+      "passed": false,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "fail",
+        "style": "fail",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    },
+    {
+      "case_id": "autobiography-2",
+      "trial": 3,
+      "processing_succeeded": true,
+      "passed": false,
+      "error": null,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "uncertain",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "assessment_errors": [],
+      "protected_failures": [],
+      "unresolved_readings": 0
+    }
+  ]
+}

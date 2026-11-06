@@ -35,7 +35,7 @@ from librarian.application.transcripts import (
 )
 from librarian.domain.models import ExtractedAsset, ExtractionPayload
 from librarian.observability import sanitize_error_message
-from librarian.pipeline.validation import validate_cleaned_text
+from librarian.pipeline.validation import FIDELITY_WARNINGS, validate_cleaned_text
 
 _LOGGER = logging.getLogger("librarian.ingest.extractors")
 
@@ -1218,6 +1218,224 @@ def reset_page_manifest_path() -> None:
     _page_manifest_path_var.set(None)
 
 
+PdfTextLayerEngine = Literal["pdfium", "pdfplumber"]
+PdfPageMarkup = Literal["headings", "breaks"]
+
+# Word tokens used for the model-free retention metric: runs of two or more
+# letters/digits (any script), compared as a case-folded multiset.
+_RETENTION_TOKEN_RE = re.compile(r"[^\W_]{2,}")
+# A text layer shorter than this (non-whitespace characters) is treated as a
+# possible scan with stray printed labels rather than as the page's content.
+_MIN_USABLE_TEXT_LAYER_CHARS = 50
+# A page's text layer counts as a reference for the retention guard only when
+# it has at least this much content; shorter pages (titles, blanks) are noise.
+_MIN_REFERENCE_PAGE_CHARS = 200
+# Page classifications that send a page to OCR (see PdfExtractor._extract_embedded_pages).
+_OCR_CANDIDATE_SOURCES = frozenset({"empty", "sparse"})
+
+
+def pdfium_available() -> bool:
+    """Whether the bundled PDFium binding (``pypdfium2``) can be imported."""
+    return importlib.util.find_spec("pypdfium2") is not None
+
+
+def pdfium_page_texts(path: Path) -> list[str]:
+    """Return every page's raw text layer as PDFium reads it.
+
+    This is the cheapest complete view of a PDF's text (tens of milliseconds a
+    page) and serves two purposes: the primary text source for the built-in
+    extractor, and the model-free reference the retention guard measures every
+    other engine against. Line endings are normalized to ``\\n``.
+    """
+    pdfium = importlib.import_module("pypdfium2")
+    document = pdfium.PdfDocument(str(path))
+    texts: list[str] = []
+    try:
+        for index in range(len(document)):
+            page = document[index]
+            try:
+                textpage = page.get_textpage()
+                try:
+                    text = cast(str, textpage.get_text_range() or "")
+                finally:
+                    textpage.close()
+            finally:
+                page.close()
+            texts.append(text.replace("\r\n", "\n").replace("\r", "\n"))
+    finally:
+        document.close()
+    return texts
+
+
+def _pdfium_pages_with_images(path: Path) -> set[int]:
+    """1-based numbers of pages that draw at least one raster image."""
+    pdfium = importlib.import_module("pypdfium2")
+    raw = importlib.import_module("pypdfium2.raw")
+    image_type = int(raw.FPDF_PAGEOBJ_IMAGE)
+    document = pdfium.PdfDocument(str(path))
+    numbers: set[int] = set()
+    try:
+        for index in range(len(document)):
+            page = document[index]
+            try:
+                if any(int(obj.type) == image_type for obj in page.get_objects(max_depth=1)):
+                    numbers.add(index + 1)
+            finally:
+                page.close()
+    finally:
+        document.close()
+    return numbers
+
+
+def text_retention(candidate: str, reference: str) -> float:
+    """Fraction of the reference's word tokens that survive in the candidate.
+
+    Multiset recall over case-folded alphanumeric tokens: Markdown syntax,
+    reflowed line breaks, and reordering do not lower it, while dropped
+    sentences do. ``1.0`` when the reference has no tokens to lose.
+    """
+    reference_tokens = Counter(token.casefold() for token in _RETENTION_TOKEN_RE.findall(reference))
+    if not reference_tokens:
+        return 1.0
+    candidate_tokens = Counter(token.casefold() for token in _RETENTION_TOKEN_RE.findall(candidate))
+    matched = sum((reference_tokens & candidate_tokens).values())
+    return matched / sum(reference_tokens.values())
+
+
+def _content_chars(text: str) -> int:
+    return len(re.sub(r"\s+", "", text))
+
+
+def text_layer_is_usable(text: str, *, min_chars: int = _MIN_USABLE_TEXT_LAYER_CHARS) -> bool:
+    """Whether a page's embedded text layer is real content rather than scan noise.
+
+    Rejects sparse layers (a lone page number on a scanned page), layers that
+    are mostly symbols (vector-art glyph soup), and a single repeated glyph.
+    A usable layer is never replaced by OCR.
+    """
+    content = re.sub(r"\s+", "", text)
+    if len(content) < min_chars:
+        return False
+    alphanumeric = sum(1 for char in content if char.isalnum())
+    if alphanumeric / len(content) < 0.6:
+        return False
+    return len(set(content)) >= 5
+
+
+@dataclass(frozen=True, slots=True)
+class RetentionVerdict:
+    """Outcome of measuring an engine's output against the raw text layer."""
+
+    document: float
+    threshold: float
+    measured_pages: int
+    page_retention: tuple[tuple[int, float, int], ...]
+    failed_pages: tuple[int, ...]
+    replaced_pages: tuple[int, ...] = ()
+    fallback: bool = False
+    text: str | None = None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "document": round(self.document, 4),
+            "threshold": self.threshold,
+            "measured_pages": self.measured_pages,
+            "pages_below_threshold": list(self.failed_pages),
+            "replaced_pages": list(self.replaced_pages),
+            "fallback": self.fallback,
+            "pages": [
+                {"page_number": number, "retention": round(value, 4), "reference_chars": chars}
+                for number, value, chars in self.page_retention
+            ],
+        }
+
+
+def measure_retention(
+    primary_text: str,
+    reference_pages: Sequence[str],
+    *,
+    threshold: float,
+    min_reference_chars: int = _MIN_REFERENCE_PAGE_CHARS,
+    max_failed_fraction: float = 1 / 3,
+) -> RetentionVerdict | None:
+    """Compare an engine's Markdown with the per-page text layer.
+
+    When the Markdown carries one block per page (``<!-- page-break -->``
+    separators), each page is scored and failing pages are replaced with the
+    text layer; otherwise the document is scored as a whole. More failing
+    pages than ``max_failed_fraction`` of the measured pages (or a failing
+    whole-document score) requests a full fallback instead of a splice. Returns
+    ``None`` when the reference holds no measurable page (a pure scan).
+    """
+    measurable = [
+        (number, text)
+        for number, text in enumerate(reference_pages, start=1)
+        if _content_chars(text) >= min_reference_chars
+    ]
+    if not measurable:
+        return None
+    blocks = primary_text.split(f"\n\n{_PAGE_BREAK}\n\n")
+    if len(blocks) != len(reference_pages):
+        reference_text = "\n".join(text for _number, text in measurable)
+        document = text_retention(primary_text, reference_text)
+        return RetentionVerdict(
+            document=document,
+            threshold=threshold,
+            measured_pages=len(measurable),
+            page_retention=(),
+            failed_pages=(),
+            fallback=document < threshold,
+        )
+    page_scores: list[tuple[int, float, int]] = []
+    failed: list[int] = []
+    for number, reference in measurable:
+        retention = text_retention(blocks[number - 1], reference)
+        page_scores.append((number, retention, _content_chars(reference)))
+        if retention < threshold:
+            failed.append(number)
+    total_reference = sum(chars for _number, _retention, chars in page_scores)
+    document = (
+        sum(retention * chars for _number, retention, chars in page_scores) / total_reference
+        if total_reference
+        else 1.0
+    )
+    if not failed:
+        return RetentionVerdict(
+            document=document,
+            threshold=threshold,
+            measured_pages=len(measurable),
+            page_retention=tuple(page_scores),
+            failed_pages=(),
+        )
+    if len(failed) > max_failed_fraction * len(measurable):
+        return RetentionVerdict(
+            document=document,
+            threshold=threshold,
+            measured_pages=len(measurable),
+            page_retention=tuple(page_scores),
+            failed_pages=tuple(failed),
+            fallback=True,
+        )
+    for number in failed:
+        original = blocks[number - 1]
+        # Keep the figure placeholders the engine emitted so their extracted
+        # assets stay referenced; only the prose is taken from the text layer.
+        images = [match.group(0) for match in re.finditer(r"!\[[^\]]*\]\([^)\s]+\)", original)]
+        replacement = reference_pages[number - 1].strip()
+        if images:
+            replacement = replacement + "\n\n" + "\n\n".join(images)
+        blocks[number - 1] = replacement
+    return RetentionVerdict(
+        document=document,
+        threshold=threshold,
+        measured_pages=len(measurable),
+        page_retention=tuple(page_scores),
+        failed_pages=tuple(failed),
+        replaced_pages=tuple(failed),
+        text=f"\n\n{_PAGE_BREAK}\n\n".join(blocks),
+    )
+
+
 class PdfExtractor:
     """Extractor for text-bearing PDFs."""
 
@@ -1241,11 +1459,15 @@ class PdfExtractor:
         ocr_low_confidence_threshold: float = 85.0,
         ocr_max_correction_response_chars: int = 2 * 1024 * 1024,
         ocr_page_concurrency: int = 2,
-        ocr_fail_on_page_error: bool = True,
+        ocr_fail_on_page_error: bool = False,
         max_input_bytes: int = 200 * 1024 * 1024,
         max_pages: int = 1_000,
         metrics: ExtractionMetrics | None = None,
+        text_layer_engine: PdfTextLayerEngine = "pdfplumber",
+        page_markup: PdfPageMarkup = "headings",
     ) -> None:
+        self.text_layer_engine: PdfTextLayerEngine = text_layer_engine
+        self.page_markup: PdfPageMarkup = page_markup
         self.ocr_language = ocr_language
         self.ocr_timeout_seconds = ocr_timeout_seconds
         self.ocr_pdf_dpi = ocr_pdf_dpi
@@ -1290,7 +1512,7 @@ class PdfExtractor:
                 f"PDF has {page_count} pages, exceeding configured limit {self.max_pages}: {path}"
             )
 
-        empty_pages = [page.page_number for page in pages if not page.text.strip()]
+        empty_pages = [page.page_number for page in pages if page.source in _OCR_CANDIDATE_SOURCES]
         if len(empty_pages) > self.ocr_pdf_max_pages:
             page_list = ", ".join(str(page_number) for page_number in empty_pages)
             raise ValueError(
@@ -1313,13 +1535,15 @@ class PdfExtractor:
             reusable_page = reusable_pages.get(page.page_number)
             if reusable_page is not None:
                 page_results.append(reusable_page)
-            elif page.text.strip():
+            elif page.source not in _OCR_CANDIDATE_SOURCES:
                 page_results.append(page)
             else:
+                # A sparse text layer rides along on the pending record so an
+                # OCR failure can still fall back to it (see recover_page).
                 page_results.append(
                     PdfPageExtraction(
                         page_number=page.page_number,
-                        text="",
+                        text=page.text,
                         source="pending",
                         attempts=previous_attempts.get(page.page_number, 0),
                     )
@@ -1344,6 +1568,7 @@ class PdfExtractor:
             existing = page_results[page_number - 1]
             if existing is not None and existing.text.strip() and existing.source == "ocr":
                 return
+            text_layer = existing.text if existing is not None else ""
             async with semaphore:
                 page_start = time.perf_counter()
                 try:
@@ -1362,11 +1587,27 @@ class PdfExtractor:
                         auto_orient=self.ocr_auto_orient,
                     )
                     ocr_result = _coerce_ocr_result(ocr_result_obj)
-                    correction = await self._correct_ocr_page(
-                        page_number=page_number,
-                        text=ocr_result.text,
-                        confidence=ocr_result.confidence,
-                    )
+                    try:
+                        correction = await self._correct_ocr_page(
+                            page_number=page_number,
+                            text=ocr_result.text,
+                            confidence=ocr_result.confidence,
+                        )
+                    except Exception as correction_error:
+                        if self.ocr_fail_on_page_error:
+                            raise
+                        # The LLM polish failed its own fidelity checks or limits;
+                        # the raw OCR text is still the page. Keep it, flagged.
+                        _LOGGER.warning(
+                            "ocr-correction-failed",
+                            extra={
+                                "page_number": page_number,
+                                "error": sanitize_error_message(correction_error),
+                            },
+                        )
+                        correction = OcrCorrectionResult(
+                            text=ocr_result.text, warnings=("ocr-correction-failed",)
+                        )
                     corrected = correction.text
                     corrected_page = corrected != ocr_result.text
                     duration_ms = (time.perf_counter() - page_start) * 1000
@@ -1378,19 +1619,35 @@ class PdfExtractor:
                         ),
                         *correction.warnings,
                     )
-                    page_results[page_number - 1] = PdfPageExtraction(
-                        page_number=page_number,
-                        text=corrected,
-                        source="ocr",
-                        confidence=ocr_result.confidence,
-                        corrected=corrected_page,
-                        raw_text=ocr_result.text,
-                        image_path=ocr_result.image_path,
-                        rotation_degrees=ocr_result.rotation_degrees,
-                        attempts=previous_attempts.get(page_number, 0) + 1,
-                        duration_ms=duration_ms,
-                        warnings=tuple(dict.fromkeys(warnings)),
-                    )
+                    if _content_chars(text_layer) > _content_chars(corrected):
+                        # OCR must never replace a text layer that holds more of
+                        # the page than the OCR result does.
+                        page_results[page_number - 1] = PdfPageExtraction(
+                            page_number=page_number,
+                            text=text_layer,
+                            source="embedded",
+                            confidence=ocr_result.confidence,
+                            raw_text=ocr_result.text,
+                            image_path=ocr_result.image_path,
+                            rotation_degrees=ocr_result.rotation_degrees,
+                            attempts=previous_attempts.get(page_number, 0) + 1,
+                            duration_ms=duration_ms,
+                            warnings=("ocr-shorter-than-text-layer",),
+                        )
+                    else:
+                        page_results[page_number - 1] = PdfPageExtraction(
+                            page_number=page_number,
+                            text=corrected,
+                            source="ocr",
+                            confidence=ocr_result.confidence,
+                            corrected=corrected_page,
+                            raw_text=ocr_result.text,
+                            image_path=ocr_result.image_path,
+                            rotation_degrees=ocr_result.rotation_degrees,
+                            attempts=previous_attempts.get(page_number, 0) + 1,
+                            duration_ms=duration_ms,
+                            warnings=tuple(dict.fromkeys(warnings)),
+                        )
                     self._record_ocr_page(
                         status="succeeded",
                         duration_ms=duration_ms,
@@ -1404,80 +1661,55 @@ class PdfExtractor:
                         status="failed",
                         duration_ms=duration_ms,
                     )
-                    if self.ocr_fail_on_page_error:
-                        page_results[page_number - 1] = PdfPageExtraction(
-                            page_number=page_number,
-                            text="",
-                            source="ocr",
-                            error=error,
-                            warnings=("ocr-page-failed",),
-                            attempts=previous_attempts.get(page_number, 0) + 1,
-                            duration_ms=duration_ms,
-                        )
-                        await write_manifest()
-                        raise RuntimeError(
-                            f"Unable to OCR scanned PDF page {page_number}: {error}"
-                        ) from exc
+                    # One unreadable page never sinks the document: keep whatever
+                    # text layer exists (or an explicit failed-page marker), flag
+                    # the page for review, and carry on. Aborting is opt-in.
                     page_results[page_number - 1] = PdfPageExtraction(
                         page_number=page_number,
-                        text="",
-                        source="ocr",
+                        text=text_layer,
+                        source="embedded" if text_layer.strip() else "ocr",
                         error=error,
                         warnings=("ocr-page-failed",),
                         attempts=previous_attempts.get(page_number, 0) + 1,
                         duration_ms=duration_ms,
                     )
                     await write_manifest()
+                    if self.ocr_fail_on_page_error:
+                        raise RuntimeError(
+                            f"Unable to OCR scanned PDF page {page_number}: {error}"
+                        ) from exc
 
-        await asyncio.gather(*(recover_page(page_number) for page_number in empty_pages))
+        recovery_tasks = [asyncio.create_task(recover_page(number)) for number in empty_pages]
+        try:
+            await asyncio.gather(*recovery_tasks)
+        except BaseException:
+            for task in recovery_tasks:
+                task.cancel()
+            await asyncio.gather(*recovery_tasks, return_exceptions=True)
+            raise
         final_pages = [page for page in page_results if page is not None]
         if not any(page.text.strip() for page in final_pages):
             raise ValueError(f"No extractable content found in PDF: {path}")
 
+        page_records = [_pdf_page_record(page) for page in final_pages]
         self.last_metadata = {
             "artifact_type": "pdf-page-extraction",
+            "engine": self._resolved_text_layer_engine,
+            "text_layer_engine": self._resolved_text_layer_engine,
             "manifest_path": str(self.page_manifest_path) if self.page_manifest_path else None,
             "source_sha256": source_sha256,
             "extraction_config": extraction_config,
             "page_count": page_count,
-            "summary": _pdf_page_manifest_summary(
-                [
-                    {
-                        "page_number": page.page_number,
-                        "source": page.source,
-                        "chars": len(page.text),
-                        "confidence": page.confidence,
-                        "corrected": page.corrected,
-                        "status": _pdf_page_status(page),
-                        "error": page.error,
-                        "warnings": list(page.warnings),
-                        "attempts": page.attempts,
-                        "duration_ms": page.duration_ms,
-                        "image_path": page.image_path,
-                        "rotation_degrees": page.rotation_degrees,
-                    }
-                    for page in final_pages
-                ]
-            ),
-            "pages": [
-                {
-                    "page_number": page.page_number,
-                    "source": page.source,
-                    "chars": len(page.text),
-                    "confidence": page.confidence,
-                    "corrected": page.corrected,
-                    "status": _pdf_page_status(page),
-                    "error": page.error,
-                    "warnings": list(page.warnings),
-                    "attempts": page.attempts,
-                    "duration_ms": page.duration_ms,
-                    "image_path": page.image_path,
-                    "rotation_degrees": page.rotation_degrees,
-                }
-                for page in final_pages
-            ],
+            "summary": _pdf_page_manifest_summary(page_records),
+            "quality_summary": _pdf_quality_summary(final_pages),
+            "pages": page_records,
         }
-        return render_pdf_pages_markdown(path, final_pages)
+        return self._render_pages(path, final_pages)
+
+    def _render_pages(self, path: Path, pages: Sequence[PdfPageExtraction]) -> str:
+        if self.page_markup == "breaks":
+            return render_pdf_pages_with_breaks(pages)
+        return render_pdf_pages_markdown(path, pages)
 
     def _record_ocr_page(
         self,
@@ -1497,6 +1729,9 @@ class PdfExtractor:
 
     def _extraction_config(self) -> dict[str, object]:
         return {
+            "ocr_fidelity_policy": 2,
+            "text_layer_engine": self.text_layer_engine,
+            "page_markup": self.page_markup,
             "ocr_language": self.ocr_language,
             "ocr_timeout_seconds": self.ocr_timeout_seconds,
             "ocr_pdf_dpi": self.ocr_pdf_dpi,
@@ -1519,7 +1754,7 @@ class PdfExtractor:
             raise ValueError(
                 f"PDF has {page_count} pages, exceeding configured limit {self.max_pages}: {path}"
             )
-        empty_pages = [page.page_number for page in pages if not page.text.strip()]
+        empty_pages = [page.page_number for page in pages if page.source in _OCR_CANDIDATE_SOURCES]
         if len(empty_pages) > self.ocr_pdf_max_pages:
             raise ValueError(
                 f"PDF contains {len(empty_pages)} scanned/empty pages, exceeding OCR page "
@@ -1527,6 +1762,7 @@ class PdfExtractor:
             )
         page_outputs = list(pages)
         for page_number in empty_pages:
+            text_layer = page_outputs[page_number - 1].text
             try:
                 ocr_result = _coerce_ocr_result(
                     _ocr_pdf_page(
@@ -1545,9 +1781,30 @@ class PdfExtractor:
                 )
             except (RuntimeError, ValueError) as exc:
                 error = sanitize_error_message(exc)
-                raise RuntimeError(
-                    f"Unable to OCR scanned PDF page {page_number}: {error}"
-                ) from exc
+                page_outputs[page_number - 1] = PdfPageExtraction(
+                    page_number=page_number,
+                    text=text_layer,
+                    source="embedded" if text_layer.strip() else "ocr",
+                    error=error,
+                    warnings=("ocr-page-failed",),
+                    attempts=1,
+                )
+                if self.ocr_fail_on_page_error:
+                    raise RuntimeError(
+                        f"Unable to OCR scanned PDF page {page_number}: {error}"
+                    ) from exc
+                continue
+            if _content_chars(text_layer) > _content_chars(ocr_result.text):
+                page_outputs[page_number - 1] = PdfPageExtraction(
+                    page_number=page_number,
+                    text=text_layer,
+                    source="embedded",
+                    confidence=ocr_result.confidence,
+                    raw_text=ocr_result.text,
+                    warnings=("ocr-shorter-than-text-layer",),
+                    attempts=1,
+                )
+                continue
             page_outputs[page_number - 1] = PdfPageExtraction(
                 page_number=page_number,
                 text=ocr_result.text,
@@ -1556,33 +1813,24 @@ class PdfExtractor:
                 raw_text=ocr_result.text,
                 image_path=ocr_result.image_path,
                 rotation_degrees=ocr_result.rotation_degrees,
+                attempts=1,
                 warnings=_ocr_page_warnings(
                     confidence=ocr_result.confidence,
                     low_confidence_threshold=self.ocr_low_confidence_threshold,
                     rotation_degrees=ocr_result.rotation_degrees,
                 ),
             )
+        if not any(page.text.strip() for page in page_outputs):
+            raise ValueError(f"No extractable content found in PDF: {path}")
         self.last_metadata = {
             "artifact_type": "pdf-page-extraction",
+            "engine": self._resolved_text_layer_engine,
+            "text_layer_engine": self._resolved_text_layer_engine,
             "page_count": page_count,
-            "pages": [
-                {
-                    "page_number": page.page_number,
-                    "source": page.source,
-                    "chars": len(page.text),
-                    "confidence": page.confidence,
-                    "corrected": page.corrected,
-                    "status": _pdf_page_status(page),
-                    "error": page.error,
-                    "warnings": list(page.warnings),
-                    "attempts": page.attempts,
-                    "duration_ms": page.duration_ms,
-                    "image_path": page.image_path,
-                }
-                for page in page_outputs
-            ],
+            "quality_summary": _pdf_quality_summary(page_outputs),
+            "pages": [_pdf_page_record(page) for page in page_outputs],
         }
-        return render_pdf_pages_markdown(path, page_outputs)
+        return self._render_pages(path, page_outputs)
 
     def _ocr_page_image_artifact_path(self, page_number: int) -> Path | None:
         if not self.ocr_preserve_page_images or self.page_manifest_path is None:
@@ -1592,34 +1840,61 @@ class PdfExtractor:
         )
 
     def _extract_embedded_pages(self, path: Path) -> tuple[list[PdfPageExtraction], int]:
+        """Read every page's text layer and classify it.
+
+        ``embedded`` pages carry usable text and are never OCR'd. ``empty``
+        pages (no text) and ``sparse`` pages (a few stray characters on a page
+        that draws an image, e.g. a scan with a printed page number) are OCR
+        candidates; a sparse page keeps its text layer as the fallback.
+        """
+        self._resolved_text_layer_engine = self.text_layer_engine
+        if self.text_layer_engine == "pdfium":
+            try:
+                texts = pdfium_page_texts(path)
+                image_pages = _pdfium_pages_with_images(path)
+            except ImportError:
+                self._resolved_text_layer_engine = "pdfplumber"
+                texts, image_pages = self._pdfplumber_page_texts(path)
+        else:
+            texts, image_pages = self._pdfplumber_page_texts(path)
+        pages: list[PdfPageExtraction] = []
+        for page_number, page_text in enumerate(texts, start=1):
+            if text_layer_is_usable(page_text):
+                source = "embedded"
+            elif not page_text.strip():
+                source = "empty"
+            elif page_number in image_pages:
+                source = "sparse"
+            else:
+                # A short page with no raster image (a part title, a dedication)
+                # is complete as it stands; OCR could only add noise.
+                source = "embedded"
+            pages.append(
+                PdfPageExtraction(
+                    page_number=page_number,
+                    text=page_text if source != "empty" else "",
+                    source=source,
+                )
+            )
+        return pages, len(texts)
+
+    _resolved_text_layer_engine: PdfTextLayerEngine = "pdfplumber"
+
+    @staticmethod
+    def _pdfplumber_page_texts(path: Path) -> tuple[list[str], set[int]]:
         try:
             pdfplumber = importlib.import_module("pdfplumber")
         except ImportError as exc:
             raise RuntimeError("PDF support requires installing the 'pdf' extra") from exc
-
-        pages: list[PdfPageExtraction] = []
+        texts: list[str] = []
+        image_pages: set[int] = set()
         pdf_module = cast(Any, pdfplumber)
         with pdf_module.open(path) as pdf:
-            page_count = len(pdf.pages)
             for page_number, page in enumerate(pdf.pages, start=1):
-                page_text = cast(str | None, page.extract_text())
-                if page_text and page_text.strip():
-                    pages.append(
-                        PdfPageExtraction(
-                            page_number=page_number,
-                            text=page_text,
-                            source="embedded",
-                        )
-                    )
-                else:
-                    pages.append(
-                        PdfPageExtraction(
-                            page_number=page_number,
-                            text="",
-                            source="empty",
-                        )
-                    )
-        return pages, page_count
+                texts.append(cast(str | None, page.extract_text()) or "")
+                if getattr(page, "images", None):
+                    image_pages.add(page_number)
+        return texts, image_pages
 
     async def _correct_ocr_page(
         self,
@@ -1631,36 +1906,43 @@ class PdfExtractor:
         if self.ocr_correction_mode == "never":
             return OcrCorrectionResult(text=text)
         if self.ocr_correction_mode == "low-confidence" and (
-            confidence is None or confidence >= self.ocr_low_confidence_threshold
+            confidence is not None and confidence >= self.ocr_low_confidence_threshold
         ):
             return OcrCorrectionResult(text=text)
         provider = self.ocr_correction_provider
         if provider is None:
             raise RuntimeError("LLM OCR correction is enabled but no LLM provider is configured")
-        corrected = await provider.complete(
-            system_prompt=OCR_CORRECTION_PROMPT,
-            user_prompt=(
-                f"Correct OCR text from PDF page {page_number}. "
-                "Return only corrected text.\n\n"
-                f"{text}"
-            ),
-            model=self.ocr_correction_model,
-            max_tokens=8192,
-            temperature=0.0,
-        )
-        clean = str(corrected).strip()
-        if len(clean) > self.ocr_max_correction_response_chars:
-            raise ValueError(
-                f"LLM OCR correction returned {len(clean)} characters for page {page_number}, "
-                "exceeding configured limit "
-                f"{self.ocr_max_correction_response_chars}"
+        checks: tuple[str, ...] = ()
+        for attempt in range(3):
+            diagnostics = (
+                "\nThe previous candidate failed: " + ", ".join(checks)
+                + ". Repair those failures using the original OCR below."
+                if attempt else ""
             )
-        if not clean:
-            raise ValueError(f"LLM OCR correction returned empty text for page {page_number}")
-        validated = validate_cleaned_text(clean, input_size=len(text), source_text=text)
-        if not validated.ok:
-            raise ValueError(f"LLM OCR correction returned empty text for page {page_number}")
-        return OcrCorrectionResult(text=validated.text, warnings=validated.warnings)
+            corrected = await provider.complete(
+                system_prompt=OCR_CORRECTION_PROMPT,
+                user_prompt=(
+                    f"Correct OCR text from PDF page {page_number}. "
+                    "Return only corrected text." + diagnostics + "\n\n" + text
+                ),
+                model=self.ocr_correction_model,
+                max_tokens=8192,
+                temperature=0.0,
+            )
+            clean = str(corrected).strip()
+            if len(clean) > self.ocr_max_correction_response_chars:
+                raise ValueError(
+                    f"LLM OCR correction returned {len(clean)} characters for page {page_number}, "
+                    f"exceeding configured limit {self.ocr_max_correction_response_chars}"
+                )
+            validated = validate_cleaned_text(clean, input_size=len(text), source_text=text)
+            checks = tuple(w for w in validated.warnings if w in FIDELITY_WARNINGS)
+            if validated.ok and not checks:
+                return OcrCorrectionResult(text=validated.text, warnings=validated.warnings)
+        raise ValueError(
+            f"LLM OCR correction failed fidelity checks for page {page_number} after 3 attempts: "
+            + ", ".join(checks)
+        )
 
 
 class ImageOcrExtractor:
@@ -2940,11 +3222,17 @@ class LiteParseExtractor:
 
 
 class FallbackExtractor:
-    """Try a primary extractor, falling back to a legacy one on any failure.
+    """Try a primary extractor; fall back when it fails *or* drops the text.
 
     Used to route PDFs/images through liteparse while preserving the built-in
-    pdfplumber/Tesseract path as a safety net (e.g. when a document trips the
-    new engine, or an image needs a system tool the engine can't find).
+    PDFium/Tesseract path as a safety net. "Primary succeeded" means "primary
+    returned the page's text", not "primary did not throw": when a reference
+    text reader is given, every page of the primary's output is measured
+    against the raw text layer (``measure_retention``). Pages that retain less
+    than ``min_retention`` are replaced with the text layer; when more than a
+    third of the measured pages fail, the whole document is re-extracted with
+    the fallback. The verdict is recorded as ``extraction_retention`` metadata
+    so a user can see when the guard intervened.
     """
 
     def __init__(
@@ -2953,9 +3241,17 @@ class FallbackExtractor:
         fallback: TextExtractorLike,
         *,
         supported_extensions: frozenset[str],
+        reference_texts: Callable[[Path], list[str]] | None = None,
+        min_retention: float = 0.80,
+        min_reference_chars: int = _MIN_REFERENCE_PAGE_CHARS,
+        max_failed_page_fraction: float = 1 / 3,
     ) -> None:
         self._primary = primary
         self._fallback = fallback
+        self._reference_texts = reference_texts
+        self.min_retention = min_retention
+        self.min_reference_chars = min_reference_chars
+        self.max_failed_page_fraction = max_failed_page_fraction
         self.supported_extensions = supported_extensions
         self.last_metadata: dict[str, object] | None = None
 
@@ -2965,8 +3261,6 @@ class FallbackExtractor:
     async def extract_with_assets(self, path: Path) -> ExtractionPayload:
         try:
             payload = await _extract_payload(self._primary, path)
-            self.last_metadata = _extractor_metadata(self._primary)
-            return payload
         except Exception as exc:  # noqa: BLE001 - intentional fallback to the legacy extractor
             # A silent engine downgrade (e.g. a permanently broken liteparse
             # install) is otherwise undiagnosable, so record why we fell back.
@@ -2974,12 +3268,67 @@ class FallbackExtractor:
             _LOGGER.warning(
                 "primary extractor failed for %s; falling back: %s", path.name, primary_error
             )
-            payload = await _extract_payload(self._fallback, path)
-            metadata = dict(_extractor_metadata(self._fallback) or {})
-            metadata["fallback_from_primary"] = True
-            metadata["primary_error"] = primary_error
+            return await self._extract_with_fallback(
+                path, reason="primary-error", primary_error=primary_error
+            )
+        metadata = dict(_extractor_metadata(self._primary) or {})
+        verdict = await self._retention_verdict(path, payload.text)
+        if verdict is None:
             self.last_metadata = metadata
             return payload
+        metadata["extraction_retention"] = verdict.as_dict()
+        if verdict.fallback:
+            _LOGGER.warning(
+                "retention-fallback",
+                extra={
+                    "path": path.name,
+                    "document_retention": round(verdict.document, 3),
+                    "pages_below_threshold": list(verdict.failed_pages),
+                    "threshold": verdict.threshold,
+                },
+            )
+            return await self._extract_with_fallback(
+                path, reason="low-retention", primary_retention=verdict.as_dict()
+            )
+        if verdict.replaced_pages and verdict.text is not None:
+            _LOGGER.warning(
+                "retention-page-replaced",
+                extra={"path": path.name, "pages": list(verdict.replaced_pages)},
+            )
+            payload = ExtractionPayload(text=verdict.text, assets=payload.assets)
+        self.last_metadata = metadata
+        return payload
+
+    async def _retention_verdict(self, path: Path, text: str) -> RetentionVerdict | None:
+        if self._reference_texts is None or path.suffix.lower() != ".pdf":
+            return None
+        try:
+            reference_pages = await asyncio.to_thread(self._reference_texts, path)
+        except Exception as exc:  # noqa: BLE001 - the guard must never break extraction
+            _LOGGER.warning(
+                "retention reference unavailable for %s: %s",
+                path.name,
+                sanitize_error_message(exc),
+            )
+            return None
+        return measure_retention(
+            text,
+            reference_pages,
+            threshold=self.min_retention,
+            min_reference_chars=self.min_reference_chars,
+            max_failed_fraction=self.max_failed_page_fraction,
+        )
+
+    async def _extract_with_fallback(
+        self, path: Path, *, reason: str, **details: object
+    ) -> ExtractionPayload:
+        payload = await _extract_payload(self._fallback, path)
+        metadata = dict(_extractor_metadata(self._fallback) or {})
+        metadata["fallback_from_primary"] = True
+        metadata["fallback_reason"] = reason
+        metadata.update(details)
+        self.last_metadata = metadata
+        return payload
 
     def set_page_manifest_path(self, path: Path | None) -> None:
         _page_manifest_path_var.set(path)
@@ -3151,12 +3500,15 @@ class CompositeExtractor:
         ocr_low_confidence_threshold: float = 85.0,
         ocr_max_correction_response_chars: int = 2 * 1024 * 1024,
         ocr_page_concurrency: int = 2,
-        ocr_fail_on_page_error: bool = True,
+        ocr_fail_on_page_error: bool = False,
         text_max_input_bytes: int = 100 * 1024 * 1024,
         docx_max_input_bytes: int = 100 * 1024 * 1024,
         pdf_max_input_bytes: int = 200 * 1024 * 1024,
         pdf_max_pages: int = 1_000,
         pdf_engine: str = "auto",
+        pdf_layout_enhancer: str = "off",
+        pdf_min_retention: float = 0.80,
+        pdf_enhancer_min_retention: float = 0.95,
         liteparse_ocr_server_url: str | None = None,
         liteparse_tessdata_path: str | None = None,
         liteparse_dpi: int = 150,
@@ -3174,7 +3526,20 @@ class CompositeExtractor:
         extraction_timeout_seconds: int = 0,
         metrics: ExtractionMetrics | None = None,
     ) -> None:
+        if pdf_engine not in {"auto", "pdfium", "liteparse", "legacy"}:
+            raise ValueError(f"Unsupported pdf_engine: {pdf_engine}")
+        if pdf_layout_enhancer not in {"off", "liteparse"}:
+            raise ValueError(f"Unsupported pdf_layout_enhancer: {pdf_layout_enhancer}")
+        # "legacy" keeps the historical pdfplumber text layer and page-heading
+        # layout; every other engine reads the text layer with PDFium (complete
+        # and fast) and renders liteparse-compatible page breaks.
+        text_layer_engine: PdfTextLayerEngine = (
+            "pdfplumber" if pdf_engine == "legacy" or not pdfium_available() else "pdfium"
+        )
+        page_markup: PdfPageMarkup = "headings" if pdf_engine == "legacy" else "breaks"
         pdf_extractor = PdfExtractor(
+            text_layer_engine=text_layer_engine,
+            page_markup=page_markup,
             ocr_language=ocr_language,
             ocr_timeout_seconds=ocr_timeout_seconds,
             ocr_pdf_dpi=ocr_pdf_dpi,
@@ -3218,10 +3583,36 @@ class CompositeExtractor:
             for extractor in extractors
             for extension in extractor.supported_extensions
         }
-        # When the liteparse engine is selected and importable, route PDFs and
-        # images through it for richer Markdown (tables/headings/figures,
-        # selective OCR), keeping the built-in extractors as a fallback.
-        self.liteparse_active = pdf_engine != "legacy" and liteparse_available()
+        # liteparse runs only when asked for: as the engine (``liteparse``) or
+        # as a layout enhancer on top of the PDFium text (``auto`` with
+        # ``pdf_layout_enhancer=liteparse``). Either way its output is accepted
+        # page by page only while it retains the text layer; the built-in
+        # extractor is the reference and the fallback. It reconstructs tables,
+        # headings, and figures, but has been observed to drop most of a clean
+        # page's text, so it is never trusted unguarded.
+        # Figure descriptions need the engine's embedded figure images, so a
+        # vision provider turns the enhancer on (still guarded) under ``auto``.
+        enhancer_mode = pdf_engine == "auto" and (
+            pdf_layout_enhancer == "liteparse" or figure_vision_provider is not None
+        )
+        self.liteparse_active = liteparse_available() and (
+            pdf_engine == "liteparse" or enhancer_mode
+        )
+        self.pdf_text_layer_engine = text_layer_engine
+        self.pdf_engine = pdf_engine
+        self.pdf_layout_enhancer = (
+            "liteparse" if self.liteparse_active and enhancer_mode else "off"
+        )
+        if self.liteparse_active:
+            self.resolved_pdf_engine = (
+                f"{text_layer_engine}+liteparse-enhancer" if enhancer_mode else "liteparse"
+            )
+        elif pdf_engine == "legacy":
+            self.resolved_pdf_engine = "legacy"
+        else:
+            self.resolved_pdf_engine = text_layer_engine
+        retention_threshold = pdf_enhancer_min_retention if enhancer_mode else pdf_min_retention
+        self.pdf_retention_threshold = retention_threshold if self.liteparse_active else None
         # Vision enrichment only applies to the liteparse engine (it needs the
         # engine's embedded figure images); it is off unless a provider is given.
         self.figure_vision_active = self.liteparse_active and figure_vision_provider is not None
@@ -3246,7 +3637,11 @@ class CompositeExtractor:
                 vision_max_response_chars=figure_vision_max_response_chars,
             )
             self._extractors[".pdf"] = FallbackExtractor(
-                liteparse_extractor, pdf_extractor, supported_extensions=frozenset({".pdf"})
+                liteparse_extractor,
+                pdf_extractor,
+                supported_extensions=frozenset({".pdf"}),
+                reference_texts=pdfium_page_texts if pdfium_available() else None,
+                min_retention=retention_threshold,
             )
             for extension in IMAGE_EXTENSIONS:
                 self._extractors[extension] = FallbackExtractor(
@@ -3260,6 +3655,10 @@ class CompositeExtractor:
         self.config_signature = extraction_config_signature(
             {
                 "pdf_engine": pdf_engine,
+                "pdf_text_layer_engine": text_layer_engine,
+                "pdf_page_markup": page_markup,
+                "pdf_layout_enhancer": self.pdf_layout_enhancer,
+                "pdf_retention_threshold": self.pdf_retention_threshold,
                 "liteparse_active": self.liteparse_active,
                 "liteparse_ocr_server_url": liteparse_ocr_server_url,
                 "liteparse_dpi": liteparse_dpi,
@@ -4301,6 +4700,78 @@ def _manifest_warnings(value: object) -> tuple[str, ...]:
     return tuple(warnings)
 
 
+def _pdf_page_record(page: PdfPageExtraction) -> dict[str, object]:
+    """Per-page quality record shared by the manifest summary and the app's report.
+
+    Carries the same keys the liteparse engine reports (``kind``, ``action``,
+    ``native_text_coverage``, ...) so one quality view renders either engine.
+    """
+    if page.error:
+        action = "ocr-failed"
+    elif page.source == "ocr":
+        action = "ocr-corrected" if page.corrected else "ocr"
+    elif "ocr-shorter-than-text-layer" in page.warnings:
+        action = "text-layer-kept"
+    else:
+        action = "accepted"
+    if page.source == "ocr":
+        kind = "scanned"
+    elif page.text.strip():
+        kind = "text"
+    else:
+        kind = "empty"
+    return {
+        "page_number": page.page_number,
+        "source": page.source,
+        "kind": kind,
+        "action": action,
+        "native_text_coverage": 1.0 if page.text.strip() else 0.0,
+        "image_references": 0,
+        "figure_ocr_lines_removed": 0,
+        "chars": len(page.text),
+        "confidence": page.confidence,
+        "corrected": page.corrected,
+        "status": _pdf_page_status(page),
+        "error": page.error,
+        "warnings": list(page.warnings),
+        "attempts": page.attempts,
+        "duration_ms": page.duration_ms,
+        "image_path": page.image_path,
+        "rotation_degrees": page.rotation_degrees,
+    }
+
+
+def _pdf_quality_summary(pages: Sequence[PdfPageExtraction]) -> dict[str, object]:
+    """Engine-neutral summary the Mac app's quality report renders."""
+    return {
+        "pages": len(pages),
+        "pages_requiring_layout_repair": 0,
+        "pages_with_warnings": sum(1 for page in pages if page.warnings or page.error),
+        "figure_ocr_lines_removed": 0,
+        "side_furniture_lines_removed": 0,
+        "native_body_lines_restored": 0,
+        "ocr_pages": sum(1 for page in pages if page.source == "ocr"),
+        "ocr_failed_pages": sum(1 for page in pages if page.error),
+    }
+
+
+def render_pdf_pages_with_breaks(pages: Sequence[PdfPageExtraction]) -> str:
+    """Render pages as plain blocks separated by ``<!-- page-break -->``.
+
+    This is the page layout the liteparse engine produces, so the chunker,
+    the page-boundary fidelity guard, and the app's page mapping see the same
+    document shape whichever engine ran. A page that failed OCR and has no
+    text layer leaves an explicit marker rather than disappearing.
+    """
+    blocks: list[str] = []
+    for page in sorted(pages, key=lambda item: item.page_number):
+        text = page.text.strip()
+        if not text and page.error:
+            text = f"<!-- page {page.page_number}: OCR failed: {page.error} -->"
+        blocks.append(text)
+    return f"\n\n{_PAGE_BREAK}\n\n".join(blocks).strip() + "\n"
+
+
 def render_pdf_pages_markdown(path: Path, pages: Sequence[PdfPageExtraction]) -> str:
     """Render ordered PDF page records as canonical Markdown."""
     title = path.stem.replace("_", " ").replace("-", " ").strip() or path.name
@@ -4453,6 +4924,11 @@ def _paragraph_text(paragraph: Any) -> str:
     if not text:
         return ""
     style_name = str(getattr(getattr(paragraph, "style", None), "name", "")).lower()
+    heading = re.fullmatch(r"heading\s+([1-6])", style_name)
+    if heading:
+        return "#" * int(heading.group(1)) + " " + text
+    if style_name == "title":
+        return "# " + text
     if "list bullet" in style_name:
         return f"- {text}"
     if "list number" in style_name:
@@ -4461,10 +4937,18 @@ def _paragraph_text(paragraph: Any) -> str:
 
 
 def _table_text(table: Any) -> str:
-    rows: list[str] = []
+    rows: list[list[str]] = []
     for row in table.rows:
-        cells = [_paragraph_text(cell) for cell in row.cells]
-        rendered = " | ".join(cell for cell in cells if cell)
-        if rendered:
-            rows.append(rendered)
-    return "\n".join(rows)
+        # Empty cells carry position: dropping one can associate a value with
+        # the wrong column. A cell is not a paragraph and has no paragraph style.
+        rows.append(
+            [str(cell.text).strip().replace("|", r"\|").replace("\n", "<br>") for cell in row.cells]
+        )
+    if not rows:
+        return ""
+    columns = max(len(row) for row in rows)
+    if not columns:
+        return ""
+    rendered = ["| " + " | ".join(row + [""] * (columns - len(row))) + " |" for row in rows]
+    rendered.insert(1, "| " + " | ".join(["---"] * columns) + " |")
+    return "\n".join(rendered)

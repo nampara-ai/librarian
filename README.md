@@ -102,10 +102,13 @@ librarian import ./input --recursive --format md --process
 
 From import to export, a document goes through these steps:
 
-1. **Extract** — PDFs, DOCX, images, transcripts, and 20+ formats → clean Markdown. Tables,
-   headings, lists, and figures are reconstructed; only the pages that *need* OCR get it.
+1. **Extract** — PDFs, DOCX, images, transcripts, and 20+ formats → clean Markdown. PDF text
+   layers are read in full; only the pages that *need* OCR get it, and a page that cannot be
+   read is flagged rather than lost.
 2. **Clean** — with a configured model, copy-edit the Markdown while preserving source facts and
-   order. Chunk checks reject likely truncation, lost numbers, tables, and image references.
+   order. Deterministic checks reject lost content (filler-aware word retention), model
+   abbreviation (ellipses the source never had), lost numbers, tables, and image references;
+   a passage the model cannot clean is published as its complete source, marked for review.
 3. **Refine and check** — inspect extraction and whole-document reports, try bounded,
    source-grounded fixes for flagged issues, and record what was applied, rejected, or deferred.
    Warnings still need review against the source; a report is not a guarantee of perfect output.
@@ -119,17 +122,25 @@ From import to export, a document goes through these steps:
 
 ## 📄 The extraction engine
 
-With the `liteparse` extra (included in `[all]`), Librarian extracts PDFs and images with
-[liteparse](https://github.com/run-llama/liteparse) (Apache-2.0) — reconstructed **Markdown tables,
-headings, lists, and figure placeholders**, with selective OCR and its own bundled PDFium +
-Tesseract (no `poppler` needed). The built-in `pdfplumber` + Tesseract path stays as a per-document
-fallback. Standalone images (PNG/JPG/scans) get the same treatment: Librarian converts them to a
-one-page PDF with Pillow (oriented upright first) and runs them through liteparse — no ImageMagick
-required.
+PDF pages are read from the PDF's own text layer with **PDFium** (`pypdfium2`, bundled): every
+word the file carries, in tens of milliseconds a page. Only pages with no usable text layer
+(scans, image-only pages) go to OCR, and a page whose OCR fails keeps its text layer or leaves an
+explicit marker instead of sinking the document. Standalone images (PNG/JPG/scans) are OCR'd with
+Tesseract after being oriented upright.
+
+The optional [liteparse](https://github.com/run-llama/liteparse) engine (Apache-2.0, `liteparse`
+extra, included in `[all]`) reconstructs **Markdown tables, headings, lists, and figure
+placeholders**. It has been observed to drop most of a clean page's prose, so it never runs
+unguarded: every page it returns is measured against the PDFium text layer and any page retaining
+too little is replaced by the text layer (`extraction_retention` in the quality report records
+the verdict). Select it as the engine, or keep the text layer as the engine and run liteparse as a
+layout enhancer whose Markdown is kept only for pages that retain ≥ 95% of the words.
 
 | Capability | How to turn it on | What it does |
 | --- | --- | --- |
-| **Engine select** | `LIBRARIAN_PDF_ENGINE=auto\|liteparse\|legacy` | `auto` (default) uses liteparse when installed, else built-in. |
+| **Engine select** | `LIBRARIAN_PDF_ENGINE=auto\|pdfium\|liteparse\|legacy` | `auto`/`pdfium` (default) read the PDFium text layer and OCR only image pages; `liteparse` runs the layout engine behind the retention guard; `legacy` is the historical pdfplumber path with per-page headings. |
+| **Layout enhancer** | `LIBRARIAN_PDF_LAYOUT_ENHANCER=liteparse` | With `auto`: keep liteparse's richer Markdown for pages that retain ≥ 95% of the text layer, the text layer otherwise. Off by default. |
+| **OCR failure policy** | `LIBRARIAN_OCR_FAIL_ON_PAGE_ERROR=false` (default) | A page that cannot be OCR'd is flagged and the document completes; `true` aborts the document instead. |
 | **Offline OCR data** | `LIBRARIAN_LITEPARSE_TESSDATA_PATH=/path/to/tessdata` | Point liteparse's OCR at local language data (the Mac app does this for you). |
 | **Higher-accuracy OCR** | `LIBRARIAN_LITEPARSE_OCR_SERVER_URL=...` | Offload OCR to a Surya/EasyOCR/PaddleOCR server. |
 | **Figure → data (vision)** | `LIBRARIAN_FIGURE_VISION_ENABLED=true` | A vision model describes figures and may render chart values as Markdown tables; verify important values against the source. |
@@ -253,7 +264,8 @@ The essentials:
 | `LIBRARIAN_LLM_MAX_CONCURRENCY` | `8` | Parallel chunk-cleaning requests; lower this on rate-limited providers. |
 | `LIBRARIAN_LLM_MAX_RETRIES` | `5` | Retries for transient provider failures. |
 | `LIBRARIAN_FINAL_REFINEMENT_ENABLED` | `true` | Source-grounded final pass on reported issues, capped by `LIBRARIAN_FINAL_REFINEMENT_MAX_ACTIONS` (default `32`). |
-| `LIBRARIAN_PDF_ENGINE` | `auto` | Extraction engine (see [the engine](#-the-extraction-engine)). |
+| `LIBRARIAN_PDF_ENGINE` | `auto` | PDF engine: PDFium text layer by default (see [the engine](#-the-extraction-engine)). |
+| `LIBRARIAN_PDF_LAYOUT_ENHANCER` | `off` | `liteparse` keeps the layout engine's Markdown for pages that retain the text layer. |
 | `LIBRARIAN_FIGURE_VISION_ENABLED` | `false` | Vision pass that turns charts into data tables. |
 | `LIBRARIAN_IMPORT_CONCURRENCY` | `2` | Files converted/ingested in parallel. |
 | `LIBRARIAN_API_KEY` / `LIBRARIAN_API_KEYS` | – | Require an API key for protected endpoints. |
@@ -264,9 +276,9 @@ The base install is lean; opt into capabilities (or take `[all]`):
 
 | Extra | Enables |
 | --- | --- |
-| `pdf` | Built-in PDF text extraction (`pdfplumber`). |
+| `pdf` | PDF text-layer extraction (`pypdfium2`, with `pdfplumber` for the legacy engine). |
 | `ocr` | Scanned/image-PDF OCR for the built-in engine (`pdf2image`, `pillow`, `pytesseract`). |
-| `liteparse` | High-fidelity engine — tables, headings, figures, selective OCR (bundles PDFium + Tesseract). |
+| `liteparse` | Layout engine — tables, headings, figures (guarded by the PDFium text layer). |
 | `universal` | Broad conversion via `markitdown` (PPTX, XLSX, Outlook, …). |
 | `otel` | OpenTelemetry tracing/metrics export. |
 | `all` | Everything above. |

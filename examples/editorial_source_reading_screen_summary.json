@@ -1,0 +1,348 @@
+{
+  "purpose": "Exposed development screening only; all four preselected cases retained for each configuration. No fresh-passage generalization claim.",
+  "limitations": [
+    "One repeat per configuration is not sufficient to estimate reliability or establish statistical superiority.",
+    "The cases were selected because they had already exposed failures; performance here is development evidence only.",
+    "High reasoning did not eliminate missed punctuation, so it is not presumed better by label alone."
+  ],
+  "profiles": [
+    {
+      "profile": "source-reading-screen-false",
+      "git_revision": "e17de6b7c6f3b8a08f6539b445f712c7c810f742",
+      "source_reading": false,
+      "editor_and_reviewer_reasoning": "medium",
+      "model": "gpt-6.1-terra",
+      "assessor": "gpt-6-luna medium editorial_v3",
+      "full_passes": 3,
+      "cases": [
+        {
+          "case_id": "fiction-v3-1",
+          "passed": true,
+          "processing_succeeded": true,
+          "elapsed_seconds": 56.5,
+          "criteria": {
+            "fidelity": "pass",
+            "completeness": "pass",
+            "fluency": "pass",
+            "voice": "pass",
+            "style": "pass",
+            "structure": "pass"
+          },
+          "issues": [],
+          "assessment_errors": [],
+          "protected_failures": []
+        },
+        {
+          "case_id": "science-v3-2",
+          "passed": true,
+          "processing_succeeded": true,
+          "elapsed_seconds": 28.09,
+          "criteria": {
+            "fidelity": "pass",
+            "completeness": "pass",
+            "fluency": "pass",
+            "voice": "pass",
+            "style": "pass",
+            "structure": "pass"
+          },
+          "issues": [],
+          "assessment_errors": [],
+          "protected_failures": []
+        },
+        {
+          "case_id": "philosophy-v3-2",
+          "passed": true,
+          "processing_succeeded": true,
+          "elapsed_seconds": 33.63,
+          "criteria": {
+            "fidelity": "pass",
+            "completeness": "pass",
+            "fluency": "pass",
+            "voice": "pass",
+            "style": "pass",
+            "structure": "pass"
+          },
+          "issues": [],
+          "assessment_errors": [],
+          "protected_failures": []
+        },
+        {
+          "case_id": "autobiography-v2-2",
+          "passed": false,
+          "processing_succeeded": true,
+          "elapsed_seconds": 41.3,
+          "criteria": {
+            "fidelity": "pass",
+            "completeness": "pass",
+            "fluency": "pass",
+            "voice": "pass",
+            "style": "fail",
+            "structure": "pass"
+          },
+          "issues": [
+            {
+              "criterion": "style",
+              "source_quote": "and says he",
+              "candidate_quote": "And, says he,",
+              "explanation": "The comma after the coordinating conjunction is unnecessary and disrupts the sentence join; write “And says he” or keep the attribution joined to the preceding sentence."
+            }
+          ],
+          "assessment_errors": [],
+          "protected_failures": []
+        }
+      ]
+    },
+    {
+      "profile": "source-reading-screen-true",
+      "git_revision": "e17de6b7c6f3b8a08f6539b445f712c7c810f742",
+      "source_reading": true,
+      "editor_and_reviewer_reasoning": "medium",
+      "model": "gpt-6.1-terra",
+      "assessor": "gpt-6-luna medium editorial_v3",
+      "full_passes": 4,
+      "cases": [
+        {
+          "case_id": "fiction-v3-1",
+          "passed": true,
+          "processing_succeeded": true,
+          "elapsed_seconds": 65.59,
+          "criteria": {
+            "fidelity": "pass",
+            "completeness": "pass",
+            "fluency": "pass",
+            "voice": "pass",
+            "style": "pass",
+            "structure": "pass"
+          },
+          "issues": [],
+          "assessment_errors": [],
+          "protected_failures": []
+        },
+        {
+          "case_id": "science-v3-2",
+          "passed": true,
+          "processing_succeeded": true,
+          "elapsed_seconds": 43.31,
+          "criteria": {
+            "fidelity": "pass",
+            "completeness": "pass",
+            "fluency": "pass",
+            "voice": "pass",
+            "style": "pass",
+            "structure": "pass"
+          },
+          "issues": [],
+          "assessment_errors": [],
+          "protected_failures": []
+        },
+        {
+          "case_id": "philosophy-v3-2",
+          "passed": true,
+          "processing_succeeded": true,
+          "elapsed_seconds": 49.17,
+          "criteria": {
+            "fidelity": "pass",
+            "completeness": "pass",
+            "fluency": "pass",
+            "voice": "pass",
+            "style": "pass",
+            "structure": "pass"
+          },
+          "issues": [],
+          "assessment_errors": [],
+          "protected_failures": []
+        },
+        {
+          "case_id": "autobiography-v2-2",
+          "passed": true,
+          "processing_succeeded": true,
+          "elapsed_seconds": 41.86,
+          "criteria": {
+            "fidelity": "pass",
+            "completeness": "pass",
+            "fluency": "pass",
+            "voice": "pass",
+            "style": "pass",
+            "structure": "pass"
+          },
+          "issues": [],
+          "assessment_errors": [],
+          "protected_failures": []
+        }
+      ]
+    },
+    {
+      "profile": "high-reasoning-screen-false",
+      "git_revision": "20887b63be15838054b37374d6566dbc693c25f8",
+      "source_reading": false,
+      "editor_and_reviewer_reasoning": "high",
+      "model": "gpt-6.1-terra",
+      "assessor": "gpt-6-luna medium editorial_v3",
+      "full_passes": 3,
+      "cases": [
+        {
+          "case_id": "fiction-v3-1",
+          "passed": true,
+          "processing_succeeded": true,
+          "elapsed_seconds": 53.87,
+          "criteria": {
+            "fidelity": "pass",
+            "completeness": "pass",
+            "fluency": "pass",
+            "voice": "pass",
+            "style": "pass",
+            "structure": "pass"
+          },
+          "issues": [],
+          "assessment_errors": [],
+          "protected_failures": []
+        },
+        {
+          "case_id": "science-v3-2",
+          "passed": false,
+          "processing_succeeded": true,
+          "elapsed_seconds": 34.49,
+          "criteria": {
+            "fidelity": "pass",
+            "completeness": "pass",
+            "fluency": "pass",
+            "voice": "pass",
+            "style": "fail",
+            "structure": "pass"
+          },
+          "issues": [
+            {
+              "criterion": "style",
+              "source_quote": "two palæontologists, whose opinions are worthy of much deference, namely Bronn and Woodward, have concluded",
+              "candidate_quote": "two palæontologists whose opinions are worthy of much deference, namely Bronn and Woodward, have concluded",
+              "explanation": "The nonrestrictive relative clause should be set off with a comma after “palæontologists,” as in the reference."
+            }
+          ],
+          "assessment_errors": [],
+          "protected_failures": []
+        },
+        {
+          "case_id": "philosophy-v3-2",
+          "passed": true,
+          "processing_succeeded": true,
+          "elapsed_seconds": 43.13,
+          "criteria": {
+            "fidelity": "pass",
+            "completeness": "pass",
+            "fluency": "pass",
+            "voice": "pass",
+            "style": "pass",
+            "structure": "pass"
+          },
+          "issues": [],
+          "assessment_errors": [],
+          "protected_failures": []
+        },
+        {
+          "case_id": "autobiography-v2-2",
+          "passed": true,
+          "processing_succeeded": true,
+          "elapsed_seconds": 44.95,
+          "criteria": {
+            "fidelity": "pass",
+            "completeness": "pass",
+            "fluency": "pass",
+            "voice": "pass",
+            "style": "pass",
+            "structure": "pass"
+          },
+          "issues": [],
+          "assessment_errors": [],
+          "protected_failures": []
+        }
+      ]
+    },
+    {
+      "profile": "high-reasoning-screen-true",
+      "git_revision": "20887b63be15838054b37374d6566dbc693c25f8",
+      "source_reading": true,
+      "editor_and_reviewer_reasoning": "high",
+      "model": "gpt-6.1-terra",
+      "assessor": "gpt-6-luna medium editorial_v3",
+      "full_passes": 3,
+      "cases": [
+        {
+          "case_id": "fiction-v3-1",
+          "passed": true,
+          "processing_succeeded": true,
+          "elapsed_seconds": 102.01,
+          "criteria": {
+            "fidelity": "pass",
+            "completeness": "pass",
+            "fluency": "pass",
+            "voice": "pass",
+            "style": "pass",
+            "structure": "pass"
+          },
+          "issues": [],
+          "assessment_errors": [],
+          "protected_failures": []
+        },
+        {
+          "case_id": "science-v3-2",
+          "passed": false,
+          "processing_succeeded": true,
+          "elapsed_seconds": 47.2,
+          "criteria": {
+            "fidelity": "pass",
+            "completeness": "pass",
+            "fluency": "pass",
+            "voice": "pass",
+            "style": "fail",
+            "structure": "pass"
+          },
+          "issues": [
+            {
+              "criterion": "style",
+              "source_quote": "two palæontologists, whose opinions are worthy of much deference, namely Bronn and Woodward",
+              "candidate_quote": "two palæontologists whose opinions are worthy of much deference, namely Bronn and Woodward",
+              "explanation": "The nonrestrictive phrase “whose opinions are worthy of much deference” needs an opening comma to match the closing comma."
+            }
+          ],
+          "assessment_errors": [],
+          "protected_failures": []
+        },
+        {
+          "case_id": "philosophy-v3-2",
+          "passed": true,
+          "processing_succeeded": true,
+          "elapsed_seconds": 85.81,
+          "criteria": {
+            "fidelity": "pass",
+            "completeness": "pass",
+            "fluency": "pass",
+            "voice": "pass",
+            "style": "pass",
+            "structure": "pass"
+          },
+          "issues": [],
+          "assessment_errors": [],
+          "protected_failures": []
+        },
+        {
+          "case_id": "autobiography-v2-2",
+          "passed": true,
+          "processing_succeeded": true,
+          "elapsed_seconds": 70.14,
+          "criteria": {
+            "fidelity": "pass",
+            "completeness": "pass",
+            "fluency": "pass",
+            "voice": "pass",
+            "style": "pass",
+            "structure": "pass"
+          },
+          "issues": [],
+          "assessment_errors": [],
+          "protected_failures": []
+        }
+      ]
+    }
+  ],
+  "next_configuration": "Terra medium editor/reviewer with source reading, the only profile to pass all four in this screen; follow with fresh prospective evaluation, not a claim of superiority."
+}

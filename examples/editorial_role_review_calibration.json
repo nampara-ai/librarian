@@ -1,0 +1,53 @@
+{
+  "purpose": "Authored production-review controls for formatting-role distinctions; no reference or desired verdict is given to the reviewer.",
+  "cases": [
+    {
+      "id": "proper-and-generic-roles-faithful",
+      "source": "the archives at the british library kept the letters the local library only kept copies",
+      "candidate": "The archives at the British Library kept the letters; the local library only kept copies.",
+      "expected_pass": true
+    },
+    {
+      "id": "proper-and-generic-roles-damaged",
+      "source": "the archives at the british library kept the letters the local library only kept copies",
+      "candidate": "The archives at the British Library kept the letters; the Local Library only kept copies.",
+      "expected_pass": false
+    },
+    {
+      "id": "note-role-faithful",
+      "source": "Bacon23 describes the experiment while Locke24 disputes it the small appended numbers identify source notes",
+      "candidate": "Bacon[23] describes the experiment, while Locke[24] disputes it. The small appended numbers identify source notes.",
+      "expected_pass": true
+    },
+    {
+      "id": "note-role-damaged",
+      "source": "Bacon23 describes the experiment while Locke24 disputes it the small appended numbers identify source notes",
+      "candidate": "Bacon23 describes the experiment, while Locke24 disputes it. The small appended numbers identify source notes.",
+      "expected_pass": false
+    },
+    {
+      "id": "identifier-role-faithful",
+      "source": "the QX23 sensor was calibrated these are device identifiers",
+      "candidate": "The QX23 sensor was calibrated. These are device identifiers.",
+      "expected_pass": true
+    },
+    {
+      "id": "identifier-role-damaged",
+      "source": "the QX23 sensor was calibrated these are device identifiers",
+      "candidate": "The QX[23] sensor was calibrated. These are device identifiers.",
+      "expected_pass": false
+    },
+    {
+      "id": "metalinguistic-role-faithful",
+      "source": "here is an ungrammatical example She go to school the verb disagrees with its subject",
+      "candidate": "Here is an ungrammatical example: She go to school. The verb disagrees with its subject.",
+      "expected_pass": true
+    },
+    {
+      "id": "metalinguistic-role-damaged",
+      "source": "here is an ungrammatical example She go to school the verb disagrees with its subject",
+      "candidate": "Here is an ungrammatical example: She goes to school. The verb disagrees with its subject.",
+      "expected_pass": false
+    }
+  ]
+}

@@ -8,7 +8,7 @@ from typing import Any, cast
 import pytest
 
 from librarian.application.classify_document import ClassifyDocument
-from librarian.application.clean_chunks import CleanChunks
+from librarian.application.clean_chunks import CleanChunks, CleanedChunk, FidelityValidationError
 from librarian.application.factory import build_container
 from librarian.application.ports import EventSink, OutputRepository
 from librarian.application.process_document import ProcessDocument, select_pdf_chunks_for_cleaning
@@ -86,7 +86,10 @@ def test_pdf_cleaning_preserves_only_verified_page_chunks() -> None:
             },
         ],
     }
-    model_chunks, preserved = select_pdf_chunks_for_cleaning(chunks, source, report)
+    assert select_pdf_chunks_for_cleaning(chunks, source, report) == (chunks, [])
+    model_chunks, preserved = select_pdf_chunks_for_cleaning(
+        chunks, source, report, preserve_verified=True
+    )
     assert preserved
     assert model_chunks
     assert all("verified-source-preserved" in chunk.warnings for chunk in preserved)
@@ -181,6 +184,77 @@ async def test_ingest_process_and_search_round_trip(tmp_path: Path) -> None:
     events = await container.repository.list_events(second_run.id)
 
     assert any("1 cache hit(s)" in event for event in events)
+
+
+@pytest.mark.asyncio
+async def test_failed_fidelity_repair_preserves_previous_published_output(tmp_path: Path) -> None:
+    source = tmp_path / "numeric-notes.txt"
+    source.write_text("The timeout must remain 120 seconds.", encoding="utf-8")
+    container = await build_container(Settings(data_dir=tmp_path / "data"))
+    ingested = await container.ingest_document.execute(source)
+    original_run = await container.process_document.execute(ingested.document.id)
+
+    class LosingProvider:
+        name = "losing-provider"
+        calls = 0
+
+        async def complete(self, **_: object) -> str:
+            self.calls += 1
+            return "The timeout must remain unchanged."
+
+    provider = LosingProvider()
+    cleaner = replace(container.process_document.cleaner, provider=provider, publish_partial=False)  # type: ignore[arg-type]
+    process = replace(container.process_document, cleaner=cleaner)
+    queued = await process.start(ingested.document.id)
+
+    with pytest.raises(FidelityValidationError, match="missing-verbatim-number"):
+        await process.execute_existing(queued.id)
+
+    latest = await container.repository.get_run(queued.id)
+    output = await container.repository.get_cleaned_output(ingested.document.id)
+    assert latest is not None and latest.status == RunStatus.FAILED
+    assert output is not None and output.run_id == original_run.id
+    assert "120 seconds" in output.text
+    assert provider.calls == 4
+    assert source.read_text() == "The timeout must remain 120 seconds."
+    assert latest.failed_chunks == 1
+    quality = json.loads(await container.repository.get_text(run_quality_key(queued.id)))
+    assert quality["cleaning_status"] == "failed"
+    assert quality["output_available"] is False
+    assert quality["failed_chunk"] == 1
+    rejected = [item for item in quality["cleaning_attempts"] if item["status"] == "rejected"]
+    assert len(rejected) == 4
+    assert all("missing-verbatim-number" in item["warnings"] for item in rejected)
+    candidate = await container.repository.get_text(rejected[0]["candidate_key"])
+    assert candidate == "The timeout must remain unchanged."
+    events = await container.repository.list_events(queued.id)
+    assert any("attempt 2/4: started" in event for event in events)
+    assert any("attempt 4/4: rejected" in event for event in events)
+
+
+@pytest.mark.asyncio
+async def test_processing_recleans_legacy_raw_fallback_cache(tmp_path: Path) -> None:
+    source = tmp_path / "cached-notes.txt"
+    source.write_text("The timeout is 120 seconds.", encoding="utf-8")
+    container = await build_container(Settings(data_dir=tmp_path / "data"))
+    ingested = await container.ingest_document.execute(source)
+    cleaner = container.process_document.cleaner
+    chunks = chunk_text(
+        ingested.document.id, ingested.raw_text, container.process_document.chunking_policy
+    )
+    await container.repository.save_cleaned_chunk_cache(
+        [CleanedChunk(chunks[0], chunks[0].text, ("source-preserved-after-fidelity-check",))],
+        prompt_version=cleaner.prompt_version,
+        model_provider=cleaner.provider.name,
+        model_name=cleaner.model,
+    )
+
+    run = await container.process_document.execute(ingested.document.id)
+
+    quality = json.loads(await container.repository.get_text(run_quality_key(run.id)))
+    assert run.status == RunStatus.SUCCEEDED
+    assert quality["cached_cleaned_chunks"] == 0
+    assert quality["source_preserved_chunks"] == 0
 
 
 @pytest.mark.asyncio
@@ -445,7 +519,7 @@ async def test_balanced_coherence_carries_context_within_parallel_groups() -> No
         ) -> str:
             del system_prompt, model, max_tokens, temperature
             self.prompts.append(user_prompt)
-            return user_prompt
+            return user_prompt.split("]\n\n", 1)[-1]
 
     provider = RecordingProvider()
     cleaner = CleanChunks(
@@ -472,12 +546,14 @@ async def test_balanced_coherence_carries_context_within_parallel_groups() -> No
 
     await cleaner.execute(chunks)
 
-    assert provider.prompts[0] == "chunk 0"
-    assert provider.prompts[1].startswith("[CONTEXT:")
-    assert "chunk 0" in provider.prompts[1]
-    assert provider.prompts[2] == "chunk 2"
-    assert provider.prompts[3].startswith("[CONTEXT:")
-    assert "chunk 2" in provider.prompts[3]
+    assert {prompt for prompt in provider.prompts if not prompt.startswith("[CONTEXT:")} == {
+        "chunk 0",
+        "chunk 2",
+    }
+    carried = [prompt for prompt in provider.prompts if prompt.startswith("[CONTEXT:")]
+    assert len(carried) == 2
+    assert any("chunk 0" in prompt and prompt.endswith("chunk 1") for prompt in carried)
+    assert any("chunk 2" in prompt and prompt.endswith("chunk 3") for prompt in carried)
 
 
 @pytest.mark.asyncio
@@ -522,12 +598,12 @@ async def test_clean_chunks_preserves_markdown_quality_warnings() -> None:
         model="test",
     )
 
-    results = await cleaner.execute([chunk])
-
-    assert "missing-markdown-heading" in results[0].warnings
-    assert "missing-markdown-list" in results[0].warnings
-    assert "missing-markdown-table" in results[0].warnings
-    assert "missing-citation-marker" in results[0].warnings
+    with pytest.raises(FidelityValidationError) as failure:
+        await cleaner.execute([chunk])
+    assert "missing-markdown-heading" in failure.value.warnings
+    assert "missing-markdown-list" in failure.value.warnings
+    assert "missing-markdown-table" in failure.value.warnings
+    assert "missing-citation-marker" in failure.value.warnings
 
 
 @pytest.mark.asyncio
@@ -731,6 +807,8 @@ async def test_late_publish_failure_marks_run_failed_and_hides_output(tmp_path: 
     assert document is not None
     assert latest.status == RunStatus.FAILED
     assert latest.error == "publish boom"
+    quality = json.loads(await container.repository.get_text(run_quality_key(run.id)))
+    assert quality["output_available"] is False
     assert document.status == DocumentStatus.FAILED
     assert output is None
     assert classification is None
@@ -1045,7 +1123,7 @@ async def test_failed_clean_preserves_completed_chunks_for_retry(tmp_path: Path)
             if len(self.calls) == 2:
                 raise RuntimeError("provider failed on second chunk")
             if user_prompt.startswith("[CONTEXT:"):
-                return user_prompt.split("\n\n", 1)[-1]
+                return user_prompt.split("]\n\n", 1)[-1]
             return user_prompt
 
     provider = FailOnceProvider()
@@ -1060,10 +1138,18 @@ async def test_failed_clean_preserves_completed_chunks_for_retry(tmp_path: Path)
     with pytest.raises(RuntimeError, match="Cleaning chunk 2 failed: provider failed"):
         await process.execute(ingested.document.id)
 
+    failed_run = (await container.repository.list_runs())[0]
+    failure_quality = json.loads(
+        await container.repository.get_text(run_quality_key(failed_run.id))
+    )
+    assert failure_quality["fatal"] == ["cleaning-failed"]
+    assert failure_quality["failed_chunk"] == 2
+    assert failure_quality["cleaned_chunks"] == 1
+
     chunks = await container.repository.list_for_document(ingested.document.id)
     cached = await container.repository.get_cached_cleaned_chunks(
         chunks,
-        prompt_version=cleaner.prompt_version,
+        prompt_version=cleaner.cache_version(source.read_text().strip()),
         model_provider=provider.name,
         model_name=cleaner.model,
     )
@@ -1160,7 +1246,7 @@ async def test_clean_chunks_reports_per_chunk_progress(coherence_mode: str) -> N
             temperature: float,
         ) -> str:
             del system_prompt, model, max_tokens, temperature
-            return user_prompt
+            return user_prompt.split("]\n\n", 1)[-1]
 
     chunks = [
         Chunk(
@@ -1231,3 +1317,169 @@ async def test_processing_persists_incremental_chunk_progress(tmp_path: Path) ->
     assert len(observed) >= run.total_chunks
     assert sorted(set(increasing)) == list(range(min(increasing), run.total_chunks + 1))
     assert observed[-1] == run.total_chunks
+
+
+@pytest.mark.asyncio
+async def test_configured_editing_window_reaches_the_engine_and_invalidates_its_cache(
+    tmp_path: Path,
+) -> None:
+    container = await build_container(
+        Settings(
+            data_dir=tmp_path,
+            llm_provider="mock",
+            cleaning_prompt_version="cmos_v8",
+            cleaning_unit_target_chars=6000,
+        )
+    )
+    cleaner = container.process_document.cleaner
+    assert cleaner.unit_target_chars == 6000
+    assert cleaner.cache_version("A source passage.") != replace(
+        cleaner, unit_target_chars=2000
+    ).cache_version("A source passage.")
+
+
+@pytest.mark.asyncio
+async def test_fully_cached_prose_skips_unavailable_spelling_preparation(tmp_path: Path) -> None:
+    class UnavailablePreparation:
+        name = "unavailable-preparation"
+        calls = 0
+
+        async def complete(self, **_: object) -> str:
+            self.calls += 1
+            raise RuntimeError("The preparation service is unavailable")
+
+    container = await build_container(
+        Settings(data_dir=tmp_path / "data", cleaning_prompt_version="cmos_v8", llm_provider="mock")
+    )
+    source = tmp_path / "complete.md"
+    source.write_text("The committee accepted the evidence. The report is ready for publication.")
+    document = await container.ingest_document.execute(source)
+
+    class FixtureProvider:
+        name = "cache-fixture"
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            try:
+                payload = json.loads(user_prompt)
+            except ValueError:
+                return '{"corrections": []}'
+            if "pairs" in payload:
+                return '{"issues": []}'
+            return payload["source"]
+
+    fixture = FixtureProvider()
+    original_process = replace(
+        container.process_document,
+        cleaner=replace(
+            container.process_document.cleaner,
+            provider=fixture,
+            preparation_provider=fixture,
+            verification_provider=fixture,
+        ),
+    )
+    await original_process.execute(document.document.id)
+    original = await container.repository.get_cleaned_output(document.document.id)
+    unavailable = UnavailablePreparation()
+    process = replace(
+        original_process,
+        cleaner=replace(original_process.cleaner, preparation_provider=unavailable),
+    )
+    run = await process.execute(document.document.id)
+    quality = json.loads(await container.repository.get_text(run_quality_key(run.id)))
+    output = await container.repository.get_cleaned_output(document.document.id)
+    assert unavailable.calls == 0
+    assert run.status == RunStatus.SUCCEEDED
+    assert quality["cached_cleaned_chunks"] == quality["chunks"] == 1
+    assert original is not None and output is not None
+    assert output.text == original.text
+
+
+@pytest.mark.asyncio
+async def test_accepted_local_query_is_published_as_needs_review_not_fully_cleaned(
+    tmp_path: Path,
+) -> None:
+    class FixtureProvider:
+        name = "query-fixture"
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            try:
+                payload = json.loads(user_prompt)
+            except ValueError:
+                return '{"corrections": []}'
+            if "pairs" in payload:
+                return '{"issues": []}'
+            return payload["source"].replace(
+                "[unintelligible]", "[transcription unclear: unintelligible]"
+            )
+
+    container = await build_container(
+        Settings(data_dir=tmp_path / "data", llm_provider="mock", cleaning_prompt_version="cmos_v8")
+    )
+    fixture = FixtureProvider()
+    process = replace(
+        container.process_document,
+        cleaner=replace(
+            container.process_document.cleaner,
+            provider=fixture,
+            preparation_provider=fixture,
+            verification_provider=fixture,
+        ),
+    )
+    source = tmp_path / "source.md"
+    source.write_text("The shipment contains 318 units of [unintelligible].")
+    document = await container.ingest_document.execute(source)
+    run = await process.execute(document.document.id)
+    quality = json.loads(await container.repository.get_text(run_quality_key(run.id)))
+    output = await container.repository.get_cleaned_output(document.document.id)
+    assert run.status == RunStatus.SUCCEEDED
+    assert quality["cleaning_status"] == "needs-review"
+    assert quality["editorial_queries"] == ["unintelligible"]
+    assert output is not None and "318" in output.text
+
+
+@pytest.mark.asyncio
+async def test_individual_approval_logs_do_not_overwrite_each_other(tmp_path: Path) -> None:
+    class Editor:
+        name = "editor"
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            return json.loads(user_prompt)["source"].replace("teh", "The")
+
+    class Reviewer:
+        name = "reviewer"
+
+        async def complete(self, *, user_prompt: str, **_: object) -> str:
+            return json.dumps(
+                {"issues": []} if user_prompt.lstrip().startswith("{") else {"corrections": []}
+            )
+
+    source = tmp_path / "notes.txt"
+    source.write_text("teh patient rested.\n\nteh doctor arrived.")
+    container = await build_container(Settings(data_dir=tmp_path / "data"))
+    ingested = await container.ingest_document.execute(source)
+    reviewer = Reviewer()
+    process = replace(
+        container.process_document,
+        refiner=None,
+        cleaner=replace(
+            container.process_document.cleaner,
+            provider=Editor(),
+            preparation_provider=reviewer,
+            verification_provider=reviewer,
+            prompt_version="cmos_v8",
+            review_mode="strict",
+            unit_target_chars=30,
+        ),
+    )
+    run = await process.execute(ingested.document.id)
+    quality = json.loads(await container.repository.get_text(run_quality_key(run.id)))
+    accepted = [
+        entry for entry in quality["cleaning_attempts"] if entry["status"] == "units-accepted"
+    ]
+    assert len(accepted) == 2
+    assert len({entry["candidate_key"] for entry in accepted}) == 2
+    unit_ids: list[str] = []
+    for entry in accepted:
+        details = json.loads(await container.repository.get_text(entry["candidate_key"]))
+        unit_ids.extend(u["id"] for u in details["units"])
+    assert set(unit_ids) == {"u0000", "u0001"}

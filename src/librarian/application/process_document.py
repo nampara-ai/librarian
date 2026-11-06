@@ -9,13 +9,21 @@ import logging
 import time
 import uuid
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import TracebackType
 from typing import Any, cast
 
 from librarian.application.assemble_document import assemble_cleaned_document
+from librarian.application.async_progress import await_with_progress
 from librarian.application.classify_document import ClassifyDocument
-from librarian.application.clean_chunks import CleanChunks, CleanedChunk
+from librarian.application.clean_chunks import (
+    CleanChunks,
+    CleanedChunk,
+    CleaningAttempt,
+    FidelityValidationError,
+)
+from librarian.application.editorial_context import editorial_context
+from librarian.application.errors import AdvisoryModelOutputError, ProcessingCanceled
 from librarian.application.final_refinement import FinalRefiner
 from librarian.application.ingest_document import IngestDocument, raw_text_key
 from librarian.application.ports import (
@@ -32,6 +40,13 @@ from librarian.application.quality_report import (
     extraction_report_key,
     run_quality_key,
 )
+from librarian.application.review_items import (
+    UnitCheckpoint,
+    load_checkpoint,
+    partial_key,
+    review_body,
+    review_items,
+)
 from librarian.domain.ids import DocumentId, RunId
 from librarian.domain.models import (
     Chunk,
@@ -43,15 +58,22 @@ from librarian.domain.models import (
 )
 from librarian.observability import NoOpMetricsRecorder, sanitize_error_message, start_span
 from librarian.pipeline.chunking import ChunkingPolicy, chunk_text
-from librarian.pipeline.validation import PAGE_BREAK_REGEX
+from librarian.pipeline.validation import (
+    MIN_CONTENT_RETENTION,
+    PAGE_BREAK_REGEX,
+    UNCLEAR_TRANSCRIPTION_REGEX,
+    content_retention,
+)
 
 logger = logging.getLogger("librarian.application.process_document")
 
 
 def select_pdf_chunks_for_cleaning(
-    chunks: list[Chunk], source: str, report: object
+    chunks: list[Chunk], source: str, report: object, *, preserve_verified: bool = False
 ) -> tuple[list[Chunk], list[CleanedChunk]]:
-    """Preserve verified PDF text and send uncertain pages through the model."""
+    """Extraction confidence alone does not establish that prose is copyedited."""
+    if not preserve_verified:
+        return chunks, []
     if not isinstance(report, dict):
         return chunks, []
     typed_report = cast("dict[str, object]", report)
@@ -96,10 +118,6 @@ def _verified_pdf_page(page: object) -> bool:
         and page.get("kind") not in {"contents", "figure-list", "index"}
         and page.get("warnings") == []
     )
-
-
-class ProcessingCanceled(RuntimeError):
-    """Raised when a run is canceled while work is in progress."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,6 +178,9 @@ class ProcessDocument:
         previous_document_status = document.status
 
         published = False
+        cleaning_attempts: list[dict[str, object]] = []
+        preparation_warnings: list[str] = []
+        progress = {"completed": 0}
 
         try:
             await self.events.emit(run_id, RunStage.INGEST, "started processing run")
@@ -207,6 +228,9 @@ class ProcessDocument:
             await self._raise_if_canceled(run_id)
 
             async with self._timed_stage(RunStage.CLEAN, run_id, document_id):
+                await self.runs.update_status(
+                    run_id, status=RunStatus.RUNNING, stage=RunStage.CLEAN
+                )
                 run = ProcessingRun(
                     id=run_id,
                     document_id=document_id,
@@ -215,7 +239,6 @@ class ProcessDocument:
                     total_chunks=len(chunked),
                 )
                 await self.runs.save_run(run)
-                await self._raise_if_canceled(run_id)
                 extraction_report: object = None
                 if document.source.filename.lower().endswith(".pdf"):
                     try:
@@ -227,24 +250,28 @@ class ProcessDocument:
                 model_chunks, verified_chunks = select_pdf_chunks_for_cleaning(
                     chunked, normalized_text, extraction_report
                 )
+                contextual_cleaner = replace(self.cleaner, document_source=normalized_text.strip())
+                cache_version = contextual_cleaner.cache_version(normalized_text)
                 loaded_cached_chunks = await self.outputs.get_cached_cleaned_chunks(
                     model_chunks,
-                    prompt_version=self.cleaner.prompt_version,
+                    prompt_version=cache_version,
                     model_provider=self.cleaner.provider.name,
                     model_name=self.cleaner.model,
                 )
-                cached_chunks = [self.cleaner.revalidate(chunk) for chunk in loaded_cached_chunks]
+                cached_chunks = [
+                    validated
+                    for chunk in loaded_cached_chunks
+                    if not (validated := contextual_cleaner.revalidate(chunk)).fidelity_failed
+                ]
                 if cached_chunks != loaded_cached_chunks:
                     # Upgrade stale cache entries to the current validation
                     # policy once, then reuse the safe result on later runs.
                     await self.outputs.save_cleaned_chunk_cache(
                         cached_chunks,
-                        prompt_version=self.cleaner.prompt_version,
+                        prompt_version=cache_version,
                         model_provider=self.cleaner.provider.name,
                         model_name=self.cleaner.model,
                     )
-                cached_ids = {chunk.chunk.id for chunk in cached_chunks}
-                missing_chunks = [chunk for chunk in model_chunks if chunk.id not in cached_ids]
                 # Persist live per-chunk progress so clients can render a
                 # real bar during long cleans; cache hits count immediately.
                 progress = {"completed": len(cached_chunks) + len(verified_chunks)}
@@ -255,17 +282,113 @@ class ProcessDocument:
                     stage=RunStage.CLEAN,
                 )
 
+                spelling_sheet = ""
+                if self.cleaner.source_aligned and len(cached_chunks) + len(verified_chunks) < len(
+                    chunked
+                ):
+                    await self.events.emit(
+                        run_id, RunStage.CLEAN, "building document spelling sheet"
+                    )
+                    await self._raise_if_canceled(run_id)
+
+                    async def context_wait(elapsed: float) -> None:
+                        await self._raise_if_canceled(run_id)
+                        await self.events.emit(
+                            run_id,
+                            RunStage.CLEAN,
+                            f"building document spelling sheet: waiting {elapsed:.0f}s",
+                        )
+
+                    try:
+                        spelling_sheet = await await_with_progress(
+                            editorial_context(
+                                self.cleaner.preparation_provider or self.cleaner.provider,
+                                self.cleaner.prompt_catalog,
+                                self.cleaner.model,
+                                normalized_text,
+                                advisory=self.cleaner.plain_edits,
+                            ),
+                            context_wait,
+                        )
+                    except AdvisoryModelOutputError:
+                        spelling_sheet = ""
+                        preparation_warnings.append("spelling-preparation-unavailable")
+                    await self._raise_if_canceled(run_id)
+                    await self.content.put_text(f"quality:context:{run_id}", spelling_sheet)
+                    await self.events.emit(
+                        run_id,
+                        RunStage.CLEAN,
+                        "document spelling sheet ready"
+                        if spelling_sheet
+                        else "spelling suggestions unavailable; continuing without them",
+                    )
+                await self._raise_if_canceled(run_id)
+
+                resume_units = {}
+                accepted_coverage: dict[str, tuple[int, int, int]] = {}
+                for pending_chunk in model_chunks:
+                    checkpoint_key = partial_key(
+                        cache_version,
+                        pending_chunk.sha256,
+                        provider=self.cleaner.provider.name,
+                        model=self.cleaner.model,
+                    )
+                    try:
+                        checkpoint_raw = await self.content.get_text(checkpoint_key)
+                    except KeyError:
+                        checkpoint_raw = "[]"
+                    checkpoint = load_checkpoint(checkpoint_raw)
+                    if checkpoint:
+                        resume_units[pending_chunk.id] = checkpoint
+
+                async def _note_units_checkpoint(
+                    chunk: Chunk, units: tuple[UnitCheckpoint, ...]
+                ) -> None:
+                    await self.content.put_text(
+                        partial_key(
+                            cache_version,
+                            chunk.sha256,
+                            provider=self.cleaner.provider.name,
+                            model=self.cleaner.model,
+                        ),
+                        json.dumps([u.as_dict() for u in units]),
+                    )
+                    lengths = [
+                        len(u.source) + (len(u.separator) if i else 0) for i, u in enumerate(units)
+                    ]
+                    total = sum(lengths)
+                    covered = sum(
+                        size
+                        for u, size in zip(units, lengths, strict=True)
+                        if u.accepted_text is not None
+                    )
+                    accepted_coverage[str(chunk.id)] = (
+                        sum(u.accepted_text is not None for u in units),
+                        len(units),
+                        round(100 * covered / max(1, total)),
+                    )
+
                 async def _note_chunk_cleaned(cleaned_chunk: CleanedChunk) -> None:
                     # A later chunk may fail or the app may stop. Persist each
                     # successful result before reporting progress so a retry
                     # can reuse the work already paid for.
                     await self.outputs.save_cleaned_chunks(run_id, [cleaned_chunk])
-                    if cleaned_chunk.text.strip():
+                    if cleaned_chunk.text.strip() and not review_items(cleaned_chunk.text):
                         await self.outputs.save_cleaned_chunk_cache(
                             [cleaned_chunk],
-                            prompt_version=self.cleaner.prompt_version,
+                            prompt_version=cache_version,
                             model_provider=self.cleaner.provider.name,
                             model_name=self.cleaner.model,
+                        )
+                    if cleaned_chunk.checkpoint:
+                        await self.content.put_text(
+                            partial_key(
+                                cache_version,
+                                cleaned_chunk.chunk.sha256,
+                                provider=self.cleaner.provider.name,
+                                model=self.cleaner.model,
+                            ),
+                            json.dumps([u.as_dict() for u in cleaned_chunk.checkpoint]),
                         )
                     progress["completed"] += 1
                     await self.runs.update_run_progress(
@@ -275,12 +398,68 @@ class ProcessDocument:
                         stage=RunStage.CLEAN,
                     )
 
-                cleaned_missing = await self.cleaner.execute(
-                    missing_chunks, on_chunk_cleaned=_note_chunk_cleaned
+                async def _note_attempt(attempt: CleaningAttempt) -> None:
+                    await self._raise_if_canceled(run_id)
+                    record: dict[str, object] = {
+                        "chunk_id": str(attempt.chunk.id),
+                        "chunk": attempt.chunk.ordinal + 1,
+                        "attempt": attempt.number,
+                        "limit": attempt.limit,
+                        "status": attempt.status,
+                        "warnings": list(attempt.warnings),
+                        "elapsed_seconds": attempt.elapsed_seconds,
+                    }
+                    if attempt.text is not None:
+                        key = (
+                            f"quality:attempt:{run_id}:{attempt.chunk.id}:"
+                            f"{attempt.number}:{uuid.uuid4().hex}:{attempt.status}"
+                        )
+                        await self.content.put_text(key, attempt.text)
+                        record["candidate_key"] = key
+                        record["output_chars"] = len(attempt.text)
+                    cleaning_attempts.append(record)
+                    message = (
+                        f"chunk {attempt.chunk.ordinal + 1}/{len(chunked)} "
+                        f"attempt {attempt.number}/{attempt.limit}: {attempt.status}"
+                    )
+                    if attempt.status == "context-approval-deferred":
+                        message = (
+                            f"chunk {attempt.chunk.ordinal + 1}/{len(chunked)}: "
+                            "rechecking a quotation boundary after its preceding context changed"
+                        )
+                    if (
+                        attempt.status == "units-accepted"
+                        and str(attempt.chunk.id) in accepted_coverage
+                    ):
+                        accepted, total, percent = accepted_coverage[str(attempt.chunk.id)]
+                        message = (
+                            f"chunk {attempt.chunk.ordinal + 1}/{len(chunked)}: "
+                            f"accepted {accepted}/{total} units ({percent}% of source)"
+                        )
+                        record["accepted_units"] = accepted
+                        record["total_units"] = total
+                        record["accepted_source_percent"] = percent
+                    if attempt.warnings:
+                        message += " (" + ", ".join(attempt.warnings) + ")"
+                    if attempt.elapsed_seconds:
+                        message += f" [{attempt.elapsed_seconds:.1f}s]"
+                    await self.events.emit(run_id, RunStage.CLEAN, message)
+
+                cleaner = replace(
+                    contextual_cleaner,
+                    on_attempt=_note_attempt,
+                    on_unit_checkpoint=_note_units_checkpoint,
+                    editorial_context=spelling_sheet,
+                    resume_units=resume_units,
+                )
+                cleaned_missing = await cleaner.execute(
+                    chunked,
+                    on_chunk_cleaned=_note_chunk_cleaned,
+                    cached_chunks=[*cached_chunks, *verified_chunks],
                 )
                 await self._raise_if_canceled(run_id)
                 cleaned_chunks = sorted(
-                    [*verified_chunks, *cached_chunks, *cleaned_missing],
+                    cleaned_missing,
                     key=lambda item: item.chunk.ordinal,
                 )
             async with self._timed_stage(RunStage.VALIDATE, run_id, document_id):
@@ -290,12 +469,35 @@ class ProcessDocument:
                     stage=RunStage.VALIDATE,
                 )
                 await self.outputs.save_cleaned_chunks(run_id, cleaned_chunks)
+                unresolved = [chunk for chunk in cleaned_chunks if chunk.fidelity_failed]
+                if unresolved:
+                    raise ValueError(
+                        f"Cleaning incomplete: {len(unresolved)} chunk(s) failed fidelity checks; "
+                        "refusing to publish raw source as cleaned output"
+                    )
                 failed_chunks = sum(1 for chunk in cleaned_chunks if not chunk.text.strip())
                 completed_chunks = len(cleaned_chunks) - failed_chunks
                 fidelity_fallbacks = sum(
                     "source-preserved-after-fidelity-check" in chunk.warnings
                     for chunk in cleaned_chunks
                 )
+                # Content words that reached the published text, per chunk. This
+                # is the deterministic view a reader needs when a model has been
+                # quietly abbreviating; it counts preserved source passages, so a
+                # unit shipped for review scores as retained, not as cleaned.
+                chunk_retention = {
+                    chunk.chunk.ordinal + 1: content_retention(
+                        chunk.chunk.text, review_body(chunk.text)
+                    )
+                    for chunk in cleaned_chunks
+                }
+                words_retained: dict[str, object] = {
+                    "chunks": [
+                        {"chunk": ordinal, "retention": round(retained, 4)}
+                        for ordinal, retained in chunk_retention.items()
+                        if retained is not None
+                    ],
+                }
             await self._raise_if_canceled(run_id)
             await self.runs.update_run_progress(
                 run_id,
@@ -308,7 +510,8 @@ class ProcessDocument:
                 RunStage.CLEAN,
                 f"cleaned {completed_chunks}/{len(chunked)} chunk(s) "
                 f"({len(cached_chunks)} cache hit(s), "
-                f"{len(verified_chunks)} verified source chunk(s))",
+                f"{len(verified_chunks)} verified source chunk(s)); "
+                f"{sum(len(review_items(c.text)) for c in cleaned_chunks)} unit(s) need review",
             )
             if fidelity_fallbacks:
                 await self.events.emit(
@@ -325,7 +528,7 @@ class ProcessDocument:
                     status=RunStatus.RUNNING,
                     stage=RunStage.ASSEMBLE,
                 )
-                assembled = assemble_cleaned_document(cleaned_chunks)
+                assembled = assemble_cleaned_document(cleaned_chunks, source_text=normalized_text)
             # Guard against publishing an empty document as a success: if every
             # chunk cleaned to nothing (truncation, refusal, provider outage),
             # fail loudly instead of silently shipping a blank output.
@@ -342,7 +545,7 @@ class ProcessDocument:
                 "deferred": 0,
                 "actions": [],
             }
-            if self.refiner is not None:
+            if self.refiner is not None and not review_items(assembled):
                 async with self._timed_stage(RunStage.REFINE, run_id, document_id):
                     await self.runs.update_status(
                         run_id,
@@ -370,7 +573,7 @@ class ProcessDocument:
                 document_id=document_id,
                 run_id=run_id,
                 text=assembled,
-                prompt_version=self.cleaner.prompt_version,
+                prompt_version=cache_version,
                 model_provider=self.cleaner.provider.name,
                 model_name=self.cleaner.model,
             )
@@ -382,23 +585,63 @@ class ProcessDocument:
                 )
                 classification = await self.classifier.execute(
                     document_id,
-                    assembled,
+                    review_body(assembled),
                     source_filename=document.source.filename,
                 )
                 final_quality = audit_final_document(
                     normalized_text, assembled, title=classification.title
                 )
+                cast("list[str]", final_quality["warnings"]).extend(preparation_warnings)
+                if any("source-reading-unavailable" in item.warnings for item in cleaned_chunks):
+                    cast("list[str]", final_quality["warnings"]).append(
+                        "source-reading-unavailable"
+                    )
+                if any("repaired-decade-shorthand" in item.warnings for item in cleaned_chunks):
+                    cast("list[str]", final_quality["warnings"]).append("repaired-decade-shorthand")
+                pending_review = review_items(assembled)
+                if pending_review:
+                    cast("list[str]", final_quality["warnings"]).append("unit-needs-review")
+                queries = UNCLEAR_TRANSCRIPTION_REGEX.findall(assembled)
+                if queries:
+                    cast("list[str]", final_quality["warnings"]).append("uncertain-transcription")
+                document_retention = content_retention(normalized_text, review_body(assembled))
+                words_retained["document"] = (
+                    round(document_retention, 4) if document_retention is not None else None
+                )
+                if document_retention is not None and document_retention < MIN_CONTENT_RETENTION:
+                    cast("list[str]", final_quality["warnings"]).append("low-content-retention")
                 await self.content.put_text(
                     run_quality_key(run_id),
                     json.dumps(
                         {
                             **final_quality,
+                            "output_available": False,
                             "chunks": len(chunked),
                             "cleaned_chunks": completed_chunks,
                             "cached_cleaned_chunks": len(cached_chunks),
                             "verified_source_chunks": len(verified_chunks),
-                            "source_preserved_chunks": fidelity_fallbacks,
+                            "source_preserved_chunks": sum(
+                                any(i.get("kind") == "source" for i in review_items(c.text))
+                                for c in cleaned_chunks
+                            )
+                            + fidelity_fallbacks,
                             "refinement": refinement_report,
+                            "words_retained": words_retained,
+                            "cleaning_attempts": cleaning_attempts,
+                            "review_mode": self.cleaner.review_mode,
+                            "cleaning_status": "needs-review"
+                            if queries or pending_review
+                            else "cleaned",
+                            "needs_review": pending_review,
+                            "review_units": len(pending_review),
+                            "advisory_units": sum(
+                                i.get("kind") == "advisory" for i in pending_review
+                            ),
+                            "unreviewed_units": sum(
+                                "review-unavailable" in cast("list[str]", i["reasons"])
+                                for i in pending_review
+                            ),
+                            "editorial_queries": queries,
                         },
                         ensure_ascii=False,
                     ),
@@ -478,6 +721,56 @@ class ProcessDocument:
             if published:
                 raise
             error_message = sanitize_error_message(exc)
+            latest = await self.runs.get_run(run_id)
+            if isinstance(exc, FidelityValidationError) or (
+                latest is not None and latest.stage == RunStage.CLEAN
+            ):
+                fidelity_failure = isinstance(exc, FidelityValidationError)
+                failed_attempt = next(
+                    (item for item in reversed(cleaning_attempts) if item["status"] == "error"),
+                    None,
+                )
+                failed_chunk = (
+                    exc.chunk.ordinal + 1
+                    if isinstance(exc, FidelityValidationError)
+                    else failed_attempt.get("chunk")
+                    if failed_attempt
+                    else None
+                )
+                failed_chunks = 1 if failed_chunk is not None else 0
+                await self.runs.update_run_progress(
+                    run_id,
+                    completed_chunks=progress["completed"],
+                    failed_chunks=failed_chunks,
+                    stage=RunStage.CLEAN,
+                )
+                report = {
+                    "pages": None,
+                    "image_references": 0,
+                    "chunks": latest.total_chunks if latest else 0,
+                    "cleaned_chunks": progress["completed"],
+                    "cached_cleaned_chunks": 0,
+                    "source_preserved_chunks": 0,
+                    "failed_chunks": failed_chunks,
+                    "cleaning_status": "failed",
+                    "output_available": False,
+                    "fatal": [
+                        "cleaning-fidelity-failed" if fidelity_failure else "cleaning-failed"
+                    ],
+                    "warnings": list(exc.warnings)
+                    if isinstance(exc, FidelityValidationError)
+                    else [],
+                    "cleaning_attempts": cleaning_attempts,
+                    "failed_chunk": failed_chunk,
+                    "error_stage": RunStage.CLEAN.value,
+                    "error_type": type(exc).__name__,
+                }
+                try:
+                    await self.content.put_text(run_quality_key(run_id), json.dumps(report))
+                except Exception as report_error:  # noqa: BLE001 - preserve original failure
+                    logger.error(
+                        "Could not persist failed cleaning report: %s", type(report_error).__name__
+                    )
             await self.runs.update_status(
                 run_id,
                 status=RunStatus.FAILED,

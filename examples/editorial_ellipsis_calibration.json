@@ -1,0 +1,61 @@
+{
+  "purpose": "Authored source-only assessor controls for independent possessives and grammatical ellipsis versus malformed syntax and invented events. No desired readings or reference are supplied to the assessor.",
+  "cases": [
+    {
+      "id": "independent-possessive-faithful",
+      "source": "the committee rejected her design and approved his",
+      "candidate": "The committee rejected her design and approved his.",
+      "expected_pass": true,
+      "requirements": []
+    },
+    {
+      "id": "independent-possessive-damaged",
+      "source": "the committee rejected her design and approved his",
+      "candidate": "The committee rejected her design and approved his plan to leave.",
+      "expected_pass": false,
+      "requirements": []
+    },
+    {
+      "id": "pronoun-not-determiner-faithful",
+      "source": "I borrowed Omars laptop because mine had failed",
+      "candidate": "I borrowed Omar’s laptop because mine had failed.",
+      "expected_pass": true,
+      "requirements": []
+    },
+    {
+      "id": "pronoun-not-determiner-damaged",
+      "source": "I borrowed Omars laptop because mine had failed",
+      "candidate": "I borrowed Omar’s laptop because my had failed.",
+      "expected_pass": false,
+      "requirements": []
+    },
+    {
+      "id": "comparative-possessive-faithful",
+      "source": "they liked our garden better than his",
+      "candidate": "They liked our garden better than his.",
+      "expected_pass": true,
+      "requirements": []
+    },
+    {
+      "id": "comparative-possessive-damaged",
+      "source": "they liked our garden better than his",
+      "candidate": "They liked our garden better than his was.",
+      "expected_pass": false,
+      "requirements": []
+    },
+    {
+      "id": "coordinated-ellipsis-faithful",
+      "source": "Finn ordered tea and Anna coffee",
+      "candidate": "Finn ordered tea and Anna coffee.",
+      "expected_pass": true,
+      "requirements": []
+    },
+    {
+      "id": "coordinated-ellipsis-damaged",
+      "source": "Finn ordered tea and Anna coffee",
+      "candidate": "Finn ordered tea and Anna drank coffee.",
+      "expected_pass": false,
+      "requirements": []
+    }
+  ]
+}

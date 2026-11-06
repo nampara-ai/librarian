@@ -22,16 +22,8 @@ from openai import (
 )
 from openai.types.chat import ChatCompletion
 
+from librarian.application.errors import LLMAccessError, LLMResponseTruncatedError
 from librarian.observability import sanitize_error_message
-
-
-class LLMResponseTruncatedError(RuntimeError):
-    """Raised when the model stopped because it hit the output token cap.
-
-    Silently returning a truncated completion is a correctness hazard — the
-    caller (chunk cleaner, classifier) cannot tell a mid-sentence cutoff from a
-    complete answer — so we fail loudly and let it surface as a run error.
-    """
 
 
 def _content_or_raise(response: ChatCompletion) -> str:
@@ -40,7 +32,8 @@ def _content_or_raise(response: ChatCompletion) -> str:
     if getattr(choice, "finish_reason", None) == "length":
         raise LLMResponseTruncatedError(
             "LLM response was truncated at the output token limit; "
-            "increase max_tokens (LIBRARIAN_LLM_MAX_OUTPUT_TOKENS)"
+            "increase max_tokens (LIBRARIAN_LLM_MAX_OUTPUT_TOKENS)",
+            partial_text=choice.message.content or "",
         )
     return choice.message.content or ""
 
@@ -162,6 +155,7 @@ class OpenAICompatibleProvider:
         metrics: LLMUsageMetrics | None = None,
         prompt_cost_per_1k_tokens_usd: float = 0.0,
         completion_cost_per_1k_tokens_usd: float = 0.0,
+        reasoning_effort: str | None = None,
     ) -> None:
         api_key = os.environ.get(api_key_env)
         if not api_key:
@@ -173,12 +167,14 @@ class OpenAICompatibleProvider:
             api_key=api_key, base_url=base_url, timeout=timeout_seconds, max_retries=0
         )
         self._semaphore = asyncio.Semaphore(max_concurrency)
+        self._timeout_seconds = timeout_seconds
         self._max_retries = max_retries
         self._retry_base_delay_seconds = retry_base_delay_seconds
         self._retry_max_delay_seconds = retry_max_delay_seconds
         self._metrics = metrics
         self._prompt_cost_per_1k_tokens_usd = prompt_cost_per_1k_tokens_usd
         self._completion_cost_per_1k_tokens_usd = completion_cost_per_1k_tokens_usd
+        self._reasoning_effort = reasoning_effort
         # Parameter dialect learned per model (see ModelParamPrefs).
         self._param_prefs: dict[str, ModelParamPrefs] = {}
 
@@ -191,6 +187,43 @@ class OpenAICompatibleProvider:
         max_tokens: int,
         temperature: float,
     ) -> str:
+        return await self._complete(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            json_output=False,
+        )
+
+    async def complete_json(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        model: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        return await self._complete(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            json_output=True,
+        )
+
+    async def _complete(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        model: str,
+        max_tokens: int,
+        temperature: float,
+        json_output: bool,
+    ) -> str:
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -201,6 +234,7 @@ class OpenAICompatibleProvider:
                 model=model,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                json_output=json_output,
             )
         self._record_usage(response, model=model)
         return _content_or_raise(response)
@@ -247,6 +281,7 @@ class OpenAICompatibleProvider:
         model: str,
         max_tokens: int,
         temperature: float,
+        json_output: bool = False,
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"model": model, "messages": cast("Any", messages)}
         if prefs.use_max_completion_tokens:
@@ -255,6 +290,10 @@ class OpenAICompatibleProvider:
             kwargs["max_tokens"] = max_tokens
         if not prefs.omit_temperature:
             kwargs["temperature"] = temperature
+        if self._reasoning_effort is not None:
+            kwargs["reasoning_effort"] = self._reasoning_effort
+        if json_output:
+            kwargs["response_format"] = {"type": "json_object"}
         return kwargs
 
     async def _chat_with_retries(
@@ -264,6 +303,7 @@ class OpenAICompatibleProvider:
         model: str,
         max_tokens: int,
         temperature: float,
+        json_output: bool = False,
     ) -> ChatCompletion:
         prefs = self._param_prefs.setdefault(model, ModelParamPrefs())
         # One adaptation per parameter at most; a dialect mismatch is resolved
@@ -280,15 +320,19 @@ class OpenAICompatibleProvider:
                 model=model,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                json_output=json_output,
             )
             try:
                 # Kwargs are assembled dynamically (dialect varies per model),
                 # which defeats the SDK's typed overloads; the API contract
                 # is still a ChatCompletion.
-                return cast(
-                    "ChatCompletion",
-                    await self._client.chat.completions.create(**kwargs),
-                )
+                # HTTP read timeouts reset when bytes arrive. Own a total attempt
+                # deadline as well, so a slow or unfinished response cannot live forever.
+                async with asyncio.timeout(self._timeout_seconds):
+                    return cast(
+                        "ChatCompletion",
+                        await self._client.chat.completions.create(**kwargs),
+                    )
             except Exception as exc:  # noqa: BLE001 - provider errors feed retry policy
                 rejected = unsupported_parameter(exc)
                 if adaptations < max_adaptations:
@@ -304,12 +348,23 @@ class OpenAICompatibleProvider:
                         adaptations += 1
                         continue
                 if not is_retriable_openai_error(exc):
+                    blocked = provider_access_failure(exc)
+                    if blocked:
+                        raise LLMAccessError(
+                            f"LLM provider request failed: {sanitize_error_message(exc)}",
+                            reason=blocked,
+                        ) from None
                     raise RuntimeError(
                         f"LLM provider request failed: {sanitize_error_message(exc)}"
                     ) from None
                 if attempt >= self._max_retries:
+                    detail = (
+                        "request deadline exceeded"
+                        if isinstance(exc, TimeoutError)
+                        else sanitize_error_message(exc)
+                    )
                     raise RuntimeError(
-                        f"LLM provider request failed after retries: {sanitize_error_message(exc)}"
+                        f"LLM provider request failed after retries: {detail}"
                     ) from None
                 server_delay = retry_after_seconds(exc)
                 if server_delay is None:
@@ -343,9 +398,35 @@ class OpenAICompatibleProvider:
         )
 
 
+def provider_access_failure(exc: Exception) -> str | None:
+    if not isinstance(exc, APIStatusError):
+        return None
+    if int(exc.status_code) in {401, 403}:
+        return "credentials-or-permissions"
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        payload = cast("dict[str, object]", body)
+        error = payload.get("error", payload)
+        if isinstance(error, dict):
+            details = cast("dict[str, object]", error)
+            for field in ("code", "type"):
+                value = details.get(field)
+                if isinstance(value, str) and value in {
+                    "insufficient_quota",
+                    "credit_balance_exhausted",
+                }:
+                    return "credit-exhausted"
+    return None
+
+
 def is_retriable_openai_error(exc: Exception) -> bool:
     """Return true for transient OpenAI-compatible transport/status failures."""
-    if isinstance(exc, (APIConnectionError, APITimeoutError, InternalServerError, RateLimitError)):
+    if provider_access_failure(exc):
+        return False
+    if isinstance(
+        exc,
+        (TimeoutError, APIConnectionError, APITimeoutError, InternalServerError, RateLimitError),
+    ):
         return True
     if isinstance(exc, APIStatusError):
         return int(exc.status_code) >= 500

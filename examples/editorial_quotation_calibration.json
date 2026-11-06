@@ -1,0 +1,41 @@
+{
+  "purpose": "Source-only review controls distinguishing quoted wording from narration and clear glyph corruption; no assessment references are supplied to the production reviewer.",
+  "cases": [
+    {
+      "id": "authored-dialect-preserved",
+      "source": "The novel quotes Mara exactly: “Them files is gone.”",
+      "candidate": "The novel quotes Mara exactly: “Them files is gone.”",
+      "expected_pass": true
+    },
+    {
+      "id": "authored-dialect-rewritten",
+      "source": "The novel quotes Mara exactly: “Them files is gone.”",
+      "candidate": "The novel quotes Mara exactly: “Those files are gone.”",
+      "expected_pass": false
+    },
+    {
+      "id": "unquoted-dangling-modifier-repaired",
+      "source": "After packing the fragile jars, the crate was loaded by Bea.",
+      "candidate": "After Bea packed the fragile jars, she loaded the crate.",
+      "expected_pass": true
+    },
+    {
+      "id": "unquoted-invented-actor",
+      "source": "After packing the fragile jars, the crate was loaded.",
+      "candidate": "After Bea packed the fragile jars, she loaded the crate.",
+      "expected_pass": false
+    },
+    {
+      "id": "quoted-ocr-corruption-repaired",
+      "source": "The scanned letter reads: “I wili return tomorrow.”",
+      "candidate": "The scanned letter reads: “I will return tomorrow.”",
+      "expected_pass": true
+    },
+    {
+      "id": "quoted-qualification-deleted",
+      "source": "The scanned letter reads: “I wili return tomorrow, if the roads reopen.”",
+      "candidate": "The scanned letter reads: “I will return tomorrow.”",
+      "expected_pass": false
+    }
+  ]
+}

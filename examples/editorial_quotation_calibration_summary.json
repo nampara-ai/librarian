@@ -1,0 +1,54 @@
+{
+  "purpose": "Source-only production reviewer calibration; authored controls, not editor performance or a reliability guarantee.",
+  "git_revision": "e17de6b7c6f3b8a08f6539b445f712c7c810f742",
+  "model": "gpt-6.1-terra",
+  "reasoning_effort": "medium",
+  "review_prompt": "prose_review_v4",
+  "confirmation_prompt": "confirm_prose_v4",
+  "cases": [
+    {
+      "case": "authored-dialect-preserved",
+      "expected_pass": true,
+      "passed": true,
+      "correct": true,
+      "warning": null
+    },
+    {
+      "case": "authored-dialect-rewritten",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed"
+    },
+    {
+      "case": "unquoted-dangling-modifier-repaired",
+      "expected_pass": true,
+      "passed": true,
+      "correct": true,
+      "warning": null
+    },
+    {
+      "case": "unquoted-invented-actor",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed"
+    },
+    {
+      "case": "quoted-ocr-corruption-repaired",
+      "expected_pass": true,
+      "passed": true,
+      "correct": true,
+      "warning": null
+    },
+    {
+      "case": "quoted-qualification-deleted",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed"
+    }
+  ],
+  "correct": 6,
+  "total": 6
+}

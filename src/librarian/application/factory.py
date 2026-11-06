@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -77,6 +78,7 @@ async def build_ingest_container(
         pdf_max_input_bytes=resolved_settings.pdf_max_input_bytes,
         pdf_max_pages=resolved_settings.pdf_max_pages,
         pdf_engine=resolved_settings.pdf_engine,
+        pdf_layout_enhancer=resolved_settings.pdf_layout_enhancer,
         liteparse_ocr_server_url=resolved_settings.liteparse_ocr_server_url,
         liteparse_tessdata_path=resolved_settings.liteparse_tessdata_path,
         liteparse_dpi=resolved_settings.liteparse_dpi,
@@ -137,16 +139,66 @@ async def build_container(
     resolved_settings = ingest_container.settings
     repository = ingest_container.repository
     provider = _build_provider(resolved_settings, metrics=metrics)
+    editing_effort = (
+        resolved_settings.cleaning_reasoning_effort or resolved_settings.llm_reasoning_effort
+    )
+    editing_provider = provider
+    if resolved_settings.cleaning_reasoning_effort is not None:
+        editing_provider = _build_provider(
+            resolved_settings.model_copy(update={"llm_reasoning_effort": editing_effort}),
+            metrics=metrics,
+        )
+    verification_provider = None
+    if (
+        resolved_settings.cleaning_verification_model is not None
+        or resolved_settings.cleaning_verification_reasoning_effort is not None
+    ):
+        review_settings = resolved_settings.model_copy(
+            update={
+                "llm_model": resolved_settings.cleaning_verification_model
+                or resolved_settings.llm_model,
+                "llm_reasoning_effort": resolved_settings.cleaning_verification_reasoning_effort
+                or editing_effort,
+            }
+        )
+        verification_provider = _build_provider(review_settings, metrics=metrics)
     cleaner = CleanChunks(
-        provider=provider,
+        provider=editing_provider,
         prompt_catalog=PromptCatalog(),
         prompt_version=resolved_settings.cleaning_prompt_version,
         model=resolved_settings.llm_model,
         max_tokens=resolved_settings.llm_max_output_tokens,
+        temperature=resolved_settings.cleaning_temperature,
+        source_reading=resolved_settings.cleaning_source_reading,
+        unit_target_chars=resolved_settings.cleaning_unit_target_chars,
         coherence_mode=resolved_settings.coherence_mode,
         max_parallel_chunks=resolved_settings.llm_max_concurrency,
         max_response_chars=resolved_settings.llm_max_response_chars,
+        max_fidelity_retries=resolved_settings.cleaning_fidelity_max_retries,
+        unit_max_retries=resolved_settings.cleaning_unit_max_retries,
+        publish_partial=resolved_settings.cleaning_publish_partial,
+        review_mode=(
+            resolved_settings.cleaning_review_mode
+            if resolved_settings.cleaning_semantic_verification is None
+            else "strict"
+            if resolved_settings.cleaning_semantic_verification
+            else "off"
+        ),
+        verify_semantics=resolved_settings.cleaning_semantic_verification is not False,
+        provider_endpoint=resolved_settings.llm_base_url or "",
         context_chars=resolved_settings.chunk_overlap_chars,
+        verification_provider=verification_provider,
+        verification_model=resolved_settings.cleaning_verification_model,
+        verification_temperature=resolved_settings.cleaning_verification_temperature,
+        preparation_provider=provider,
+        generation_signature=json.dumps(
+            {
+                "editing_reasoning": editing_effort,
+                "preparation_reasoning": resolved_settings.llm_reasoning_effort,
+                "verification_reasoning": resolved_settings.cleaning_verification_reasoning_effort,
+            },
+            sort_keys=True,
+        ),
     )
     taxonomy = ingest_container.taxonomy
     classifier = ClassifyDocument(

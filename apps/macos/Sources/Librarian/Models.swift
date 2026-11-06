@@ -58,6 +58,7 @@ struct RunQualityReport: Codable {
 }
 
 struct ExtractionQuality: Codable {
+    let engine: String?
     let qualitySummary: ExtractionQualitySummary?
     let figuresExtracted: Int?
     let figureReferencesRestored: Int?
@@ -65,6 +66,20 @@ struct ExtractionQuality: Codable {
     let pagesReusedFromCache: Int?
     let assetPagesReusedFromCache: Int?
     let pages: [PageQuality]?
+    /// Set when the engine's output was measured against the PDF text layer.
+    let extractionRetention: ExtractionRetention?
+    /// Set when the built-in extractor replaced the selected engine's output.
+    let fallbackFromPrimary: Bool?
+    let fallbackReason: String?
+}
+
+struct ExtractionRetention: Codable {
+    let document: Double
+    let threshold: Double
+    let measuredPages: Int
+    let pagesBelowThreshold: [Int]
+    let replacedPages: [Int]?
+    let fallback: Bool
 }
 
 struct ExtractionQualitySummary: Codable {
@@ -74,19 +89,31 @@ struct ExtractionQualitySummary: Codable {
     let figureOcrLinesRemoved: Int
     let sideFurnitureLinesRemoved: Int?
     let nativeBodyLinesRestored: Int?
+    let ocrPages: Int?
+    let ocrFailedPages: Int?
 }
 
 struct PageQuality: Codable, Identifiable {
     let pageNumber: Int
-    let kind: String
-    let action: String
-    let nativeTextCoverage: Double
-    let imageReferences: Int
+    let kind: String?
+    let action: String?
+    let nativeTextCoverage: Double?
+    let imageReferences: Int?
     let figureReferencesRestored: Int?
-    let figureOcrLinesRemoved: Int
+    let figureOcrLinesRemoved: Int?
     let warnings: [String]
 
     var id: Int { pageNumber }
+}
+
+struct WordsRetained: Codable {
+    let document: Double?
+    let chunks: [ChunkRetention]
+}
+
+struct ChunkRetention: Codable {
+    let chunk: Int
+    let retention: Double
 }
 
 struct ProcessingQuality: Codable {
@@ -94,11 +121,14 @@ struct ProcessingQuality: Codable {
     let imageReferences: Int
     let tocEntriesWithoutMatchingHeadingOrBody: Int?
     let tocUnmatchedEntries: [String]?
+    let needsReview: [UnitReviewItem]?
+    let editorialQueries: [String]?
     let chunks: Int
     let cachedCleanedChunks: Int
     let verifiedSourceChunks: Int?
     let sourcePreservedChunks: Int
     let refinement: RefinementQuality?
+    let wordsRetained: WordsRetained?
     let warnings: [String]
     let fatal: [String]
 }
@@ -277,4 +307,13 @@ struct QueueItem: Identifiable {
     func exceededPreRunTimeout(at now: Date, timeout: TimeInterval) -> Bool {
         runID == nil && now.timeIntervalSince(startedAt) > timeout
     }
+}
+
+struct UnitReviewItem: Codable {
+    let unitId: String
+    let kind: String?
+    let chunk: Int
+    let reasons: [String]
+    let attempts: Int
+    let source: String
 }

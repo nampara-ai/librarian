@@ -87,7 +87,9 @@ async def test_eval_suite_fails_on_unexpected_quality_warnings(tmp_path: Path) -
             del system_prompt, user_prompt, model, max_tokens, temperature
             return "Horse Notes Saddle fit Groundwork"
 
-    cleaner = replace(container.process_document.cleaner, provider=CollapsingProvider())
+    cleaner = replace(
+        container.process_document.cleaner, provider=CollapsingProvider(), publish_partial=False
+    )
     process_document = replace(container.process_document, cleaner=cleaner)
     container = replace(container, process_document=process_document)
     suite = EvalSuite(
@@ -104,7 +106,8 @@ async def test_eval_suite_fails_on_unexpected_quality_warnings(tmp_path: Path) -
 
     assert not result.passed
     assert "missing-markdown-list" in result.cases[0].warnings
-    assert any("unexpected output warnings" in failure for failure in result.cases[0].failures)
+    assert any("failed fidelity checks" in failure for failure in result.cases[0].failures)
+    assert result.cases[0].output_chars == 0
     rendered = json.loads(eval_result_json(result))
     assert rendered["summary"]["warning_count"] == len(result.cases[0].warnings)
     assert rendered["summary"]["failure_count"] == len(result.cases[0].failures)
@@ -133,9 +136,28 @@ async def test_eval_suite_fails_on_forbidden_text(tmp_path: Path) -> None:
 
     assert not result.passed
     assert any(
-        "found forbidden text: assistant artifact" in item
-        for item in result.cases[0].failures
+        "found forbidden text: assistant artifact" in item for item in result.cases[0].failures
     )
+
+
+@pytest.mark.asyncio
+async def test_eval_comparisons_allow_equivalent_typographic_spacing(tmp_path: Path) -> None:
+    container = await build_container(
+        Settings(data_dir=tmp_path, database_path=tmp_path / "librarian.sqlite")
+    )
+    result = await run_eval_suite(
+        container,
+        EvalSuite(
+            cases=[
+                EvalCase(
+                    name="typographic equivalents",
+                    input_text="Follow‑up care is discussed in Section\u202f4.2.",
+                    expected_contains=["follow-up care", "Section 4.2"],
+                )
+            ]
+        ),
+    )
+    assert result.passed
 
 
 @pytest.mark.asyncio

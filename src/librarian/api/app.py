@@ -494,6 +494,7 @@ class ConfigResponse(BaseModel):
     universal_timeout_seconds: int
     # Extraction engine / cache.
     pdf_engine: str
+    pdf_layout_enhancer: str
     liteparse_dpi: int
     liteparse_image_mode: str
     liteparse_ocr_server_url: str | None
@@ -1914,6 +1915,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             universal_max_input_bytes=settings.universal_max_input_bytes,
             universal_timeout_seconds=settings.universal_timeout_seconds,
             pdf_engine=settings.pdf_engine,
+            pdf_layout_enhancer=settings.pdf_layout_enhancer,
             liteparse_dpi=settings.liteparse_dpi,
             liteparse_image_mode=settings.liteparse_image_mode,
             liteparse_ocr_server_url=settings.liteparse_ocr_server_url,
@@ -2605,6 +2607,7 @@ def _build_extractor(
         pdf_max_input_bytes=settings.pdf_max_input_bytes,
         pdf_max_pages=settings.pdf_max_pages,
         pdf_engine=settings.pdf_engine,
+        pdf_layout_enhancer=settings.pdf_layout_enhancer,
         liteparse_ocr_server_url=settings.liteparse_ocr_server_url,
         liteparse_tessdata_path=settings.liteparse_tessdata_path,
         liteparse_dpi=settings.liteparse_dpi,

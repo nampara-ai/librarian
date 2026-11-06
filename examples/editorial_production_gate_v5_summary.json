@@ -1,0 +1,425 @@
+{
+  "purpose": "Source-only production reviewer calibration under prose_review_v5 and confirm_prose_v5; original expected verdicts retained.",
+  "model": "gpt-6.1-terra",
+  "reasoning_effort": "medium",
+  "correct_against_original_expectations": 38,
+  "total": 40,
+  "disputed_positive_controls": [
+    "narrative-coordinator-faithful",
+    "quoted-qualification-faithful"
+  ],
+  "notes": [
+    "Both disputed controls lack quotation punctuation in the source. The reviewer questions whether direct speech is supported; one also permits materially different first-person referents. Their reported failures are retained, not excluded from the denominator.",
+    "A calibration score is research evidence, not proof of universal correctness."
+  ],
+  "cases": [
+    {
+      "case": "negation-faithful",
+      "expected_pass": true,
+      "passed": true,
+      "correct": true,
+      "warning": null,
+      "issues": {}
+    },
+    {
+      "case": "negation-damaged",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed",
+      "issues": {
+        "u0000": [
+          "The edit reverses the finding on survival: the trial did not improve survival, but it did reduce nausea."
+        ]
+      }
+    },
+    {
+      "case": "uncertainty-faithful",
+      "expected_pass": true,
+      "passed": true,
+      "correct": true,
+      "warning": null,
+      "issues": {}
+    },
+    {
+      "case": "uncertainty-damaged",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed",
+      "issues": {
+        "u0000": [
+          "The edit turns a possible, unconfirmed leak into a confirmed fact. Restore the uncertainty and lack of confirmation."
+        ]
+      }
+    },
+    {
+      "case": "attribution-faithful",
+      "expected_pass": true,
+      "passed": true,
+      "correct": true,
+      "warning": null,
+      "issues": {}
+    },
+    {
+      "case": "attribution-damaged",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed",
+      "issues": {
+        "u0000": [
+          "The actors are reversed: Nora recorded 15 failures, and Luis recorded 20 successes."
+        ]
+      }
+    },
+    {
+      "case": "rhetoric-faithful",
+      "expected_pass": true,
+      "passed": true,
+      "correct": true,
+      "warning": null,
+      "issues": {}
+    },
+    {
+      "case": "rhetoric-damaged",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed",
+      "issues": {
+        "u0000": [
+          "The edit reverses the claim that the machine cannot run safely without the lock and removes the skeptical challenge and conclusion that its optional status makes no sense."
+        ]
+      }
+    },
+    {
+      "case": "quotation-faithful",
+      "expected_pass": true,
+      "passed": true,
+      "correct": true,
+      "warning": null,
+      "issues": {}
+    },
+    {
+      "case": "quotation-damaged",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed",
+      "issues": {
+        "u0000": [
+          "The closing quotation mark should follow “guaranteed.” The narrator’s disagreement is not part of the author’s quotation."
+        ]
+      }
+    },
+    {
+      "case": "false-start-faithful",
+      "expected_pass": true,
+      "passed": true,
+      "correct": true,
+      "warning": null,
+      "issues": {}
+    },
+    {
+      "case": "false-start-damaged",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed",
+      "issues": {
+        "u0000": [
+          "The abandoned self-correction remains. Replace “The engineers, no, I mean, the inspectors” with “The inspectors.”"
+        ]
+      }
+    },
+    {
+      "case": "coverage-faithful",
+      "expected_pass": true,
+      "passed": true,
+      "correct": true,
+      "warning": null,
+      "issues": {}
+    },
+    {
+      "case": "coverage-damaged",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed",
+      "issues": {
+        "u0000": [
+          "The edit omits the maps and the statement that they document the river before the flood."
+        ]
+      }
+    },
+    {
+      "case": "invention-faithful",
+      "expected_pass": true,
+      "passed": true,
+      "correct": true,
+      "warning": null,
+      "issues": {}
+    },
+    {
+      "case": "invention-damaged",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed",
+      "issues": {
+        "u0000": [
+          "The added sentence claims that the report will prove the project is safe, which the source does not state."
+        ]
+      }
+    },
+    {
+      "case": "code-faithful",
+      "expected_pass": true,
+      "passed": true,
+      "correct": true,
+      "warning": null,
+      "issues": {}
+    },
+    {
+      "case": "code-damaged",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed",
+      "issues": {
+        "u0000": [
+          "The indentation before `run()` was removed, making the Python code invalid. Restore its 4-space indent."
+        ]
+      }
+    },
+    {
+      "case": "table-faithful",
+      "expected_pass": true,
+      "passed": true,
+      "correct": true,
+      "warning": null,
+      "issues": {}
+    },
+    {
+      "case": "table-damaged",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed",
+      "issues": {
+        "u0000": [
+          "Nora’s values are reversed: the source lists 15 failures and 20 successes, not 20 failures and 15 successes."
+        ]
+      }
+    },
+    {
+      "case": "narrative-coordinator-faithful",
+      "expected_pass": true,
+      "passed": false,
+      "correct": false,
+      "warning": "editorial-quality-failed",
+      "issues": {
+        "u0000": [
+          "The edit converts indirect speech into a quotation, presenting wording the source does not establish as Nora’s exact words. Retain indirect speech."
+        ]
+      }
+    },
+    {
+      "case": "narrative-coordinator-damaged",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed",
+      "issues": {
+        "u0000": [
+          "The edit converts indirect speech into a direct quotation and incorrectly places the narrative connective “and” inside it. Restore the indirect report."
+        ]
+      }
+    },
+    {
+      "case": "restrictive-clause-faithful",
+      "expected_pass": true,
+      "passed": true,
+      "correct": true,
+      "warning": null,
+      "issues": {}
+    },
+    {
+      "case": "restrictive-clause-damaged",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed",
+      "issues": {
+        "u0000": [
+          "The nonrestrictive clause implies all the boxes are damaged. Restore the restrictive clause: “Return only the boxes that are damaged.”"
+        ]
+      }
+    },
+    {
+      "case": "quoted-qualification-faithful",
+      "expected_pass": true,
+      "passed": false,
+      "correct": false,
+      "warning": "editorial-quality-failed",
+      "issues": {
+        "u0000": [
+          "The quotation marks attribute both statements to Lena, although the unpunctuated source leaves open whether “I” refers to the narrator."
+        ]
+      }
+    },
+    {
+      "case": "quoted-qualification-damaged",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed",
+      "issues": {
+        "u0000": [
+          "“And I promise to help” reverses the source’s contrast and negation. Restore “but I cannot promise to help.”"
+        ]
+      }
+    },
+    {
+      "case": "authored-dialect-preserved",
+      "expected_pass": true,
+      "passed": true,
+      "correct": true,
+      "warning": null,
+      "issues": {}
+    },
+    {
+      "case": "authored-dialect-rewritten",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed",
+      "issues": {
+        "u0000": [
+          "The edit changes an explicitly exact quotation. Restore Mara’s wording: “Them files is gone.”"
+        ]
+      }
+    },
+    {
+      "case": "unquoted-dangling-modifier-repaired",
+      "expected_pass": true,
+      "passed": true,
+      "correct": true,
+      "warning": null,
+      "issues": {}
+    },
+    {
+      "case": "unquoted-invented-actor",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed",
+      "issues": {
+        "u0000": [
+          "The edit invents Bea as the actor and makes her responsible for both actions. Preserve the unspecified actors: “After the fragile jars were packed, the crate was loaded.”"
+        ]
+      }
+    },
+    {
+      "case": "quoted-ocr-corruption-repaired",
+      "expected_pass": true,
+      "passed": true,
+      "correct": true,
+      "warning": null,
+      "issues": {}
+    },
+    {
+      "case": "quoted-qualification-deleted",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed",
+      "issues": {
+        "u0000": [
+          "The quotation omits “if the roads reopen,” removing the condition on the promised return. Restore it after “tomorrow.”"
+        ]
+      }
+    },
+    {
+      "case": "proper-and-generic-roles-faithful",
+      "expected_pass": true,
+      "passed": true,
+      "correct": true,
+      "warning": null,
+      "issues": {}
+    },
+    {
+      "case": "proper-and-generic-roles-damaged",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed",
+      "issues": {
+        "u0000": [
+          "“Local Library” is a generic description, not an identified institution’s name; lowercase it to “local library.”"
+        ]
+      }
+    },
+    {
+      "case": "note-role-faithful",
+      "expected_pass": true,
+      "passed": true,
+      "correct": true,
+      "warning": null,
+      "issues": {}
+    },
+    {
+      "case": "note-role-damaged",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed",
+      "issues": {
+        "u0000": [
+          "Format the appended source-note numbers as references, for example, “Bacon[23]” and “Locke[24].”"
+        ]
+      }
+    },
+    {
+      "case": "identifier-role-faithful",
+      "expected_pass": true,
+      "passed": true,
+      "correct": true,
+      "warning": null,
+      "issues": {}
+    },
+    {
+      "case": "identifier-role-damaged",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed",
+      "issues": {
+        "u0000": [
+          "QX[23] incorrectly formats part of the device identifier as a reference note; restore QX23."
+        ]
+      }
+    },
+    {
+      "case": "metalinguistic-role-faithful",
+      "expected_pass": true,
+      "passed": true,
+      "correct": true,
+      "warning": null,
+      "issues": {}
+    },
+    {
+      "case": "metalinguistic-role-damaged",
+      "expected_pass": false,
+      "passed": false,
+      "correct": true,
+      "warning": "editorial-quality-failed",
+      "issues": {
+        "u0000": [
+          "The example was changed from “She go to school” to “She goes to school,” making it grammatical and contradicting the explanation. Restore the original example."
+        ]
+      }
+    }
+  ]
+}

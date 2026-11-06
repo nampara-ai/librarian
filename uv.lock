@@ -1086,6 +1086,7 @@ all = [
     { name = "pdf2image" },
     { name = "pdfplumber" },
     { name = "pillow" },
+    { name = "pypdfium2" },
     { name = "pytesseract" },
 ]
 dev = [
@@ -1116,6 +1117,7 @@ otel = [
 ]
 pdf = [
     { name = "pdfplumber" },
+    { name = "pypdfium2" },
 ]
 universal = [
     { name = "markitdown", extra = ["docx", "outlook", "pdf", "pptx", "xls", "xlsx"] },
@@ -1149,6 +1151,8 @@ requires-dist = [
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.9.0" },
     { name = "pydantic", specifier = ">=2.9.0" },
     { name = "pydantic-settings", specifier = ">=2.14.2" },
+    { name = "pypdfium2", marker = "extra == 'all'", specifier = ">=5.0.0" },
+    { name = "pypdfium2", marker = "extra == 'pdf'", specifier = ">=5.0.0" },
     { name = "pyright", marker = "extra == 'dev'", specifier = "==1.1.411" },
     { name = "pytesseract", marker = "extra == 'all'", specifier = ">=0.3.13" },
     { name = "pytesseract", marker = "extra == 'ocr'", specifier = ">=0.3.13" },

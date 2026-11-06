@@ -1,0 +1,29 @@
+{
+  "purpose": "Production review distinguishes valid localized unresolved data from dropped values, unnecessary queries, and whole-passage fallback. Original source and candidate only; expected decisions are withheld from the model.",
+  "cases": [
+    {
+      "id": "localized-unresolved-value-kept",
+      "source": "The notation is 318; its meaning cannot be recovered from the damaged page. The board approved the plan.",
+      "candidate": "The notation is [transcription unclear: 318]; its meaning cannot be recovered from the damaged page. The board approved the plan.",
+      "expected_pass": true
+    },
+    {
+      "id": "unresolved-value-cannot-disappear",
+      "source": "The notation is 318; its meaning cannot be recovered from the damaged page. The board approved the plan.",
+      "candidate": "The notation\u2019s meaning cannot be recovered from the damaged page. The board approved the plan.",
+      "expected_pass": false
+    },
+    {
+      "id": "clear-quantity-needs-no-query",
+      "source": "The vial contains 9 mg of powder.",
+      "candidate": "The vial contains [transcription unclear: 9] mg of powder.",
+      "expected_pass": false
+    },
+    {
+      "id": "query-cannot-hide-cleanable-claim",
+      "source": "The notation is 318; its meaning cannot be recovered. The board approved the plan.",
+      "candidate": "[transcription unclear: The notation is 318; its meaning cannot be recovered. The board approved the plan.]",
+      "expected_pass": false
+    }
+  ]
+}

@@ -1,5 +1,81 @@
 # Changelog
 
+## Unreleased
+
+- Read PDF text layers with PDFium by default (`LIBRARIAN_PDF_ENGINE=auto|pdfium`): every word
+  of the file's own text, OCR only for pages without a usable text layer. The liteparse layout
+  engine (which dropped most of a clean page's prose on a real document) runs only when selected,
+  or as an opt-in layout enhancer, and always behind a retention guard that measures each page
+  against the text layer, replaces failing pages, and falls back to the built-in extractor when
+  most pages fail. `extraction_retention` and the engine used appear in the quality report and
+  the Mac quality view; the Mac settings expose the engine choice.
+- Never lose a document to one unreadable page: a failed OCR page keeps its text layer or an
+  explicit marker and is flagged (`LIBRARIAN_OCR_FAIL_ON_PAGE_ERROR` now defaults to `false`),
+  OCR never replaces a longer text layer, and a rejected LLM OCR correction keeps the raw OCR text.
+- Make content loss a deterministic, unclearable cleaning guard: filler-aware content-word
+  retention replaces the 200-word floor, a new `model-elided-text` check rejects ellipses the
+  source never had, reviewers can no longer clear either, and cached output is re-checked under
+  the current rules. The quality report records `words_retained` per chunk and document.
+
+- Retain reviewer-approved filler reductions when restoring unit checkpoints. Continue
+  enforcing numeric/structural guards and explicitly log invalidated checkpoint approvals.
+
+- Check later editorial-risk cues in bounded confirmation batches; never mark partial
+  cue coverage as complete. Report excessive review work explicitly and upgrade old receipts.
+
+- Bound adjacent repair merges by the configured unit size. Split oversized unresolved
+  legacy checkpoint windows back into source units without reopening accepted neighbors.
+
+- Retry failed chunk fidelity checks with source-grounded repair instructions and a bounded
+  budget. Publish exhausted content as explicitly marked source passages requiring review,
+  with a strict failure option. Resume accepted units from separate partial checkpoints;
+  never store partial passages as clean cache entries. Reprocess legacy raw-fallback caches.
+- Keep words, fenced code, and Markdown tables intact at chunk boundaries. Preserve source
+  quotations, code indentation, hard line breaks, and intentional repetition during cleanup.
+- Report individual cleaning attempts and fidelity failures in live progress. Persist rejected
+  candidates and failure diagnostics for review without logging document text.
+
+- Show unresolved source passages, repair reasons, and locations in the Mac quality report.
+
+- Separate advisory semantic review from blocking structural validation. Advisory findings
+  and unavailable reviewer responses are reported without driving content rewrites; strict
+  review remains opt-in, and unchanged prose skips advisory review.
+
+- Freeze accepted source-aligned units across retries, preserve their exact bytes,
+  checkpoint them before chunk completion, and apply a separate per-unit retry budget.
+  Log accepted unit IDs and hashes; retain neighboring context without reopening approvals.
+- Add experimental source-aligned prose editing with protected numeric data, source-order
+  patches, source-reading support, and neighboring source and edited context. Keep the
+  released cleaning-prompt default unchanged.
+- Add an editorial evaluation CLI, frozen test corpora, independent assessments, and retained
+  development-failure summaries. Evaluation references are withheld from editing calls.
+- Improve provider compatibility and failure handling, including reasoning/token dialects,
+  bounded JSON recovery, access/credit failures, response limits, and cancellation of sibling work.
+
+- Keep numeric reading evidence consistent across transport units. Recognized missing-zero
+  decade spelling uses the available source paragraph rather than an arbitrary character
+  radius; quantities, versions, durations, quoted labels, and paragraph boundaries remain guarded.
+
+- Persist each review approval immediately with serialized checkpoint writes. Preserve
+  audited filler removal across retries, validate frozen bytes before rendering, exclude
+  accepted units from repair-window merges, and retain merged units’ unspent retry budgets.
+- Update output availability in the publication transaction, so late publication failures
+  cannot advertise an unavailable file.
+
+- Keep quoted continuations provisional until their preceding boundary settles;
+  explicitly defer premature legacy approvals rather than trapping a repair against
+  an immutable neighboring quote. Confirmation explanations cannot replace the proposal
+  they approved. Preserve every individual approval in the persisted audit trail.
+- Continue without malformed or truncated optional spelling/source-reading aids, with
+  diagnostic warnings; use existing metadata fallback for truncated classification.
+  Access and transport failures remain terminal and resumable.
+
+- Use the same source-aware comma joins for review and final assembly, preventing
+  an original word gap from appearing before a generated leading comma.
+- Require bounded, explicit editorial-risk decisions in strict prose review. Preserve
+  genuine alternatives, uncertainty, quotations, and examples; retain audit receipts
+  and upgrade only legacy units missing the new review facet.
+
 ## 1.9.0 - 2026-09-20
 
 PDF fidelity, reliable long-running processing, and an actionable final quality review.

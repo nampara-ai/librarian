@@ -1,0 +1,188 @@
+{
+  "schema_version": 1,
+  "purpose": "Calibration controls for an independent editorial assessor. These authored minimal pairs are not evidence of cleaning performance. Both faithful edits and deliberately damaged outputs must be judged correctly before relying on a model judge.",
+  "cases": [
+    {
+      "id": "negation-faithful",
+      "source": "the trial did not improve survival but it reduced nausea",
+      "requirements": [
+        "Survival did not improve.",
+        "Nausea decreased."
+      ],
+      "candidate": "The trial did not improve survival, but it reduced nausea.",
+      "expected_pass": true
+    },
+    {
+      "id": "negation-damaged",
+      "source": "the trial did not improve survival but it reduced nausea",
+      "requirements": [
+        "Survival did not improve.",
+        "Nausea decreased."
+      ],
+      "candidate": "The trial improved survival and reduced nausea.",
+      "expected_pass": false
+    },
+    {
+      "id": "uncertainty-faithful",
+      "source": "we think the valve might be leaking but we have not confirmed it",
+      "requirements": [
+        "The leak is suspected, not confirmed."
+      ],
+      "candidate": "We think the valve might be leaking, but we have not confirmed it.",
+      "expected_pass": true
+    },
+    {
+      "id": "uncertainty-damaged",
+      "source": "we think the valve might be leaking but we have not confirmed it",
+      "requirements": [
+        "The leak is suspected, not confirmed."
+      ],
+      "candidate": "The valve is leaking. We have confirmed it.",
+      "expected_pass": false
+    },
+    {
+      "id": "attribution-faithful",
+      "source": "Nora recorded 15 failures Luis recorded 20 successes",
+      "requirements": [
+        "Nora recorded failures; Luis recorded successes."
+      ],
+      "candidate": "Nora recorded 15 failures; Luis recorded 20 successes.",
+      "expected_pass": true
+    },
+    {
+      "id": "attribution-damaged",
+      "source": "Nora recorded 15 failures Luis recorded 20 successes",
+      "requirements": [
+        "Nora recorded failures; Luis recorded successes."
+      ],
+      "candidate": "Luis recorded 15 failures; Nora recorded 20 successes.",
+      "expected_pass": false
+    },
+    {
+      "id": "rhetoric-faithful",
+      "source": "so the safety lock is optional right how can it be optional if the machine cannot run safely without it this makes no sense",
+      "requirements": [
+        "The speaker disputes the assertion that the safety lock is optional."
+      ],
+      "candidate": "So the safety lock is optional? How can it be optional if the machine cannot run safely without it? This makes no sense.",
+      "expected_pass": true
+    },
+    {
+      "id": "rhetoric-damaged",
+      "source": "so the safety lock is optional right how can it be optional if the machine cannot run safely without it this makes no sense",
+      "requirements": [
+        "The speaker disputes the assertion that the safety lock is optional."
+      ],
+      "candidate": "The safety lock is optional. The machine can run safely without it.",
+      "expected_pass": false
+    },
+    {
+      "id": "quotation-faithful",
+      "source": "The author writes, \"Success is not guaranteed.\" I disagree with that caution.",
+      "requirements": [
+        "The quoted author expresses caution; the speaker disagrees."
+      ],
+      "candidate": "The author writes, “Success is not guaranteed.” I disagree with that caution.",
+      "expected_pass": true
+    },
+    {
+      "id": "quotation-damaged",
+      "source": "The author writes, \"Success is not guaranteed.\" I disagree with that caution.",
+      "requirements": [
+        "The quoted author expresses caution; the speaker disagrees."
+      ],
+      "candidate": "The author writes, “Success is not guaranteed. I disagree with that caution.”",
+      "expected_pass": false
+    },
+    {
+      "id": "false-start-faithful",
+      "source": "the engineers no I mean inspectors found cracks in the beam",
+      "requirements": [
+        "Inspectors found the cracks; engineers is an abandoned self-correction."
+      ],
+      "candidate": "The inspectors found cracks in the beam.",
+      "expected_pass": true
+    },
+    {
+      "id": "false-start-damaged",
+      "source": "the engineers no I mean inspectors found cracks in the beam",
+      "requirements": [
+        "Inspectors found the cracks; engineers is an abandoned self-correction."
+      ],
+      "candidate": "The engineers, no, I mean, the inspectors, found cracks in the beam.",
+      "expected_pass": false
+    },
+    {
+      "id": "coverage-faithful",
+      "source": "The archive contains letters, photographs, and maps. The maps document the river before the flood.",
+      "requirements": [
+        "All three kinds of material and the maps' historical purpose survive."
+      ],
+      "candidate": "The archive contains letters, photographs, and maps. The maps document the river before the flood.",
+      "expected_pass": true
+    },
+    {
+      "id": "coverage-damaged",
+      "source": "The archive contains letters, photographs, and maps. The maps document the river before the flood.",
+      "requirements": [
+        "All three kinds of material and the maps' historical purpose survive."
+      ],
+      "candidate": "The archive contains letters and photographs.",
+      "expected_pass": false
+    },
+    {
+      "id": "invention-faithful",
+      "source": "The committee postponed its decision until the report arrives.",
+      "requirements": [
+        "The only stated decision is postponement pending the report."
+      ],
+      "candidate": "The committee postponed its decision until the report arrives.",
+      "expected_pass": true
+    },
+    {
+      "id": "invention-damaged",
+      "source": "The committee postponed its decision until the report arrives.",
+      "requirements": [
+        "The only stated decision is postponement pending the report."
+      ],
+      "candidate": "The committee postponed its decision until the report arrives. The report will prove the project is safe.",
+      "expected_pass": false
+    },
+    {
+      "id": "code-faithful",
+      "source": "Use the following condition.\n\n```python\nif ready:\n    run()\n```",
+      "requirements": [
+        "Code indentation remains unchanged."
+      ],
+      "candidate": "Use the following condition.\n\n```python\nif ready:\n    run()\n```",
+      "expected_pass": true
+    },
+    {
+      "id": "code-damaged",
+      "source": "Use the following condition.\n\n```python\nif ready:\n    run()\n```",
+      "requirements": [
+        "Code indentation remains unchanged."
+      ],
+      "candidate": "Use the following condition.\n\n```python\nif ready:\nrun()\n```",
+      "expected_pass": false
+    },
+    {
+      "id": "table-faithful",
+      "source": "| Person | Failures | Successes |\n| --- | --- | --- |\n| Nora | 15 | 20 |",
+      "requirements": [
+        "Nora has 15 failures and 20 successes."
+      ],
+      "candidate": "| Person | Failures | Successes |\n| --- | --- | --- |\n| Nora | 15 | 20 |",
+      "expected_pass": true
+    },
+    {
+      "id": "table-damaged",
+      "source": "| Person | Failures | Successes |\n| --- | --- | --- |\n| Nora | 15 | 20 |",
+      "requirements": [
+        "Nora has 15 failures and 20 successes."
+      ],
+      "candidate": "| Person | Failures | Successes |\n| --- | --- | --- |\n| Nora | 20 | 15 |",
+      "expected_pass": false
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "purpose": "Unambiguous source-marker controls. Earlier original control scores remain unchanged; source uncertainty about a legible value is distinct from an unrecoverable transcription marker.",
+  "cases": [
+    {
+      "id": "unrecoverable-source-marker-is-localized",
+      "source": "The shipment contained 318 units of [unintelligible]. The inspector approved the other crates.",
+      "candidate": "The shipment contained 318 units of [transcription unclear: unintelligible]. The inspector approved the other crates.",
+      "expected_pass": true
+    },
+    {
+      "id": "unknown-object-does-not-permit-losing-count",
+      "source": "The shipment contained 318 units of [unintelligible]. The inspector approved the other crates.",
+      "candidate": "The shipment contained units of [transcription unclear: unintelligible]. The inspector approved the other crates.",
+      "expected_pass": false
+    },
+    {
+      "id": "known-value-does-not-need-query",
+      "source": "The vial contains 9 mg of powder.",
+      "candidate": "The vial contains [transcription unclear: 9] mg of powder.",
+      "expected_pass": false
+    },
+    {
+      "id": "query-cannot-swallow-recoverable-prose",
+      "source": "The shipment contained 318 units of [unintelligible]. The inspector approved the other crates.",
+      "candidate": "[transcription unclear: The shipment contained 318 units of unintelligible. The inspector approved the other crates.]",
+      "expected_pass": false
+    }
+  ]
+}

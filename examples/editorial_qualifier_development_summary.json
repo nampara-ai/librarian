@@ -1,0 +1,101 @@
+{
+  "purpose": "One real-provider exposed-development trial, not prospective qualification. Previous numeric trial failures remain recorded separately.",
+  "writer": "gpt-6.1-terra medium",
+  "reviewer": "gpt-6.1-terra medium prose_review_v7 / confirm_prose_v7",
+  "source_reading": "source_reading_v2",
+  "assessor": "gpt-6.1-terra medium editorial_v3",
+  "full_passes": 6,
+  "total": 6,
+  "cases": [
+    {
+      "case_id": "decade-repair-with-quantities",
+      "passed": true,
+      "processing_succeeded": true,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "quoted-label-is-not-decade",
+      "passed": true,
+      "processing_succeeded": true,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "literal-decade-spelling-kept",
+      "passed": true,
+      "processing_succeeded": true,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "postposed-cause-kept",
+      "passed": true,
+      "processing_succeeded": true,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "explicit-forward-cause-kept",
+      "passed": true,
+      "processing_succeeded": true,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "protected_failures": []
+    },
+    {
+      "case_id": "separate-temporal-owners",
+      "passed": true,
+      "processing_succeeded": true,
+      "criteria": {
+        "fidelity": "pass",
+        "completeness": "pass",
+        "fluency": "pass",
+        "voice": "pass",
+        "style": "pass",
+        "structure": "pass"
+      },
+      "issues": [],
+      "protected_failures": []
+    }
+  ]
+}

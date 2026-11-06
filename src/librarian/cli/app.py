@@ -1738,6 +1738,58 @@ def eval_suite(
     asyncio.run(run())
 
 
+@maintainer_app.command("editorial-eval")
+def editorial_eval(
+    path: Annotated[Path, typer.Argument(exists=True, readable=True, dir_okay=False)],
+    output_dir: Annotated[Path, typer.Option(help="Private directory for all trial artifacts.")],
+    judge_model: Annotated[
+        str, typer.Option(help="Independent assessment model on the configured endpoint.")
+    ],
+    judge_reasoning: Annotated[
+        str, typer.Option(help="Assessment model reasoning effort.")
+    ] = "medium",
+    repeats: Annotated[int, typer.Option(min=1, max=20)] = 3,
+) -> None:
+    """Assess fresh full-pipeline generations without exposing references to the editor."""
+    import hashlib
+
+    try:
+        from librarian.llm import build_provider
+        from librarian.maintainer.editorial_benchmark import (
+            EditorialBenchmarkSuite,
+            run_editorial_benchmark,
+        )
+    except ModuleNotFoundError as exc:
+        raise typer.BadParameter(_MAINTAINER_HARNESS_MISSING) from exc
+
+    async def run() -> None:
+        settings = Settings()
+        judge_settings = Settings.model_validate(
+            {**settings.model_dump(), "llm_model": judge_model,
+             "llm_reasoning_effort": judge_reasoning}
+        )
+        with path.open("rb") as handle:
+            raw = handle.read(10 * 1024 * 1024 + 1)
+        if len(raw) > 10 * 1024 * 1024:
+            raise typer.BadParameter("Editorial suite exceeds ten MiB")
+        result = await run_editorial_benchmark(
+            settings,
+            EditorialBenchmarkSuite.model_validate_json(raw),
+            build_provider(judge_settings),
+            judge_model,
+            output_dir,
+            repeats=repeats,
+            provenance={"suite_file_sha256": hashlib.sha256(raw).hexdigest(),
+                        "judge_reasoning": judge_reasoning},
+        )
+        console.print(f"Editorial results: {result.artifact_dir}")
+        console.print(result.report()["summary"])
+        if not result.passed:
+            raise typer.Exit(code=1)
+
+    asyncio.run(run())
+
+
 @maintainer_app.command("corpus-eval")
 def corpus_eval(
     path: Annotated[Path, typer.Argument(exists=True, readable=True, dir_okay=False)],
@@ -2145,8 +2197,9 @@ def _reject_symlinked_cli_output_path(path: Path) -> None:
 
 def _doctor_module_checks() -> list[tuple[str, str, str, str]]:
     modules = [
-        ("liteparse", "high-fidelity PDF/image extraction", "pip install -e '.[liteparse]'"),
-        ("pdfplumber", "embedded PDF extraction", "pip install -e '.[pdf]'"),
+        ("pypdfium2", "PDF text-layer extraction", "pip install -e '.[pdf]'"),
+        ("pdfplumber", "legacy PDF text extraction", "pip install -e '.[pdf]'"),
+        ("liteparse", "optional PDF layout engine (guarded)", "pip install -e '.[liteparse]'"),
         ("pdf2image", "scanned PDF rasterization", "pip install -e '.[ocr]'"),
         ("pytesseract", "OCR confidence diagnostics", "pip install -e '.[ocr]'"),
         ("markitdown", "broad-format conversion", "pip install -e '.[universal]'"),
@@ -2592,6 +2645,7 @@ def _build_extractor(settings: Settings) -> CompositeExtractor:
         pdf_max_input_bytes=settings.pdf_max_input_bytes,
         pdf_max_pages=settings.pdf_max_pages,
         pdf_engine=settings.pdf_engine,
+        pdf_layout_enhancer=settings.pdf_layout_enhancer,
         liteparse_ocr_server_url=settings.liteparse_ocr_server_url,
         liteparse_tessdata_path=settings.liteparse_tessdata_path,
         liteparse_dpi=settings.liteparse_dpi,

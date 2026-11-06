@@ -4,21 +4,69 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from functools import partial
 
 from librarian.application.clean_chunks import CleanedChunk
-from librarian.pipeline.validation import ARTIFACT_REGEX
+from librarian.application.review_items import review_items
+from librarian.pipeline.chunking import chunk_separator_before
+from librarian.pipeline.markdown import (
+    normalize_markdown_whitespace,
+    protected_spans,
+    source_join_separator,
+    transform_prose,
+)
+from librarian.pipeline.validation import filter_artifact_lines
 
 
-def assemble_cleaned_document(chunks: Sequence[CleanedChunk]) -> str:
-    """Assemble cleaned chunks and perform light boundary cleanup."""
-    text = "\n\n".join(chunk.text for chunk in chunks if chunk.text.strip())
-    text = remove_context_markers(text)
-    text = remove_artifact_lines(text)
-    text = remove_consecutive_duplicate_sentences(text)
-    text = remove_duplicate_headers(text)
-    text = remove_empty_code_fences(text)
-    text = normalize_assembled_whitespace(text)
+def assemble_cleaned_document(
+    chunks: Sequence[CleanedChunk], *, source_text: str | None = None
+) -> str:
+    """Assemble audited wording with source-backed joins.
+
+    Without source offsets, retain the legacy standalone cleanup behavior.
+    The processing pipeline supplies source and must not silently rewrite an
+    already reviewed candidate during composition.
+    """
+    parts: list[str] = []
+    previous_sentence = ""
+    for chunk in chunks:
+        text = chunk.text
+        if source_text is None:
+            source = chunk.chunk.text
+            text = filter_artifact_lines(chunk.text, source_text=source)
+            if "[CONTEXT:" not in source and "[CONTINUING FROM:" not in source:
+                text = transform_prose(text, remove_context_markers)
+            # Only a generated duplicate at a known seam may be removed. Repetition
+            # present in the current source chunk remains intentional source content.
+            protected = protected_spans(text)
+            if (
+                previous_sentence
+                and not _source_starts_with_sentence(source, previous_sentence)
+                and not (protected and protected[0][0] == 0)
+            ):
+                text = _drop_leading_duplicate_sentence(text, previous_sentence)
+            text = transform_prose(text, partial(remove_duplicate_headers, source_text=source))
+            if "```" not in source and "~~~" not in source:
+                text = remove_empty_code_fences(text)
+        if text.strip():
+            separator = chunk_separator_before(chunk.chunk, source_text) if parts else ""
+            separator = source_join_separator(separator, chunk.chunk.text, text.strip())
+            parts.append(separator + text.strip())
+            previous_sentence = _last_sentence(text)
+    joined = "".join(parts)
+    if review_items(joined):
+        # Length-delimited source must remain byte-identical to its checkpoint.
+        return joined.strip()
+    text = normalize_assembled_whitespace(joined)
     return text.strip()
+
+
+def _source_starts_with_sentence(source: str, sentence: str) -> bool:
+    # ASR may have no punctuation, and OCR may use different quote glyphs.
+    # Those surface differences are not evidence that repetition was invented.
+    expected = re.findall(r"\w+", sentence.casefold())
+    observed = re.findall(r"\w+", source.casefold())
+    return bool(expected) and observed[: len(expected)] == expected
 
 
 def remove_context_markers(text: str) -> str:
@@ -33,8 +81,7 @@ def remove_context_markers(text: str) -> str:
 
 def remove_artifact_lines(text: str) -> str:
     """Drop obvious assistant-artifact lines from assembled output."""
-    lines = [line for line in text.splitlines() if not ARTIFACT_REGEX.search(line)]
-    return "\n".join(lines)
+    return filter_artifact_lines(text)
 
 
 def remove_consecutive_duplicate_sentences(text: str) -> str:
@@ -79,7 +126,7 @@ def _dedupe_sentences_in_paragraph(paragraph: str, previous_sentence: str) -> tu
 
 
 def _last_sentence(text: str) -> str:
-    sentences = re.findall(r"[^.!?]+[.!?]", text)
+    sentences = re.findall(r"[^.!?]+[.!?]", text.strip().rsplit("\n\n", 1)[-1])
     if not sentences:
         return ""
     return sentences[-1].strip().lower()
@@ -96,9 +143,13 @@ def _drop_leading_duplicate_sentence(text: str, previous_sentence: str) -> str:
     return text[match.end() :]
 
 
-def remove_duplicate_headers(text: str) -> str:
+def remove_duplicate_headers(text: str, *, source_text: str = "") -> str:
     """Collapse duplicate Markdown headers emitted at chunk boundaries."""
-    return re.sub(r"(#{1,6}\s+[^\n]+)\s+\1", r"\1", text)
+
+    def replace(match: re.Match[str]) -> str:
+        return match.group() if match.group() in source_text else match.group(1)
+
+    return re.sub(r"(#{1,6}\s+[^\n]+)\s+\1", replace, text)
 
 
 def remove_empty_code_fences(text: str) -> str:
@@ -113,7 +164,4 @@ def remove_empty_code_fences(text: str) -> str:
 
 def normalize_assembled_whitespace(text: str) -> str:
     """Normalize whitespace after final assembly."""
-    text = re.sub(r"\n{4,}", "\n\n\n", text)
-    text = re.sub(r"[ \t]+\n", "\n", text)
-    text = re.sub(r"\n[ \t]+", "\n", text)
-    return text
+    return normalize_markdown_whitespace(text)

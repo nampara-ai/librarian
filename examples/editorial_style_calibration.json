@@ -1,0 +1,125 @@
+{
+  "purpose": "Assessor controls for legitimate copyediting transformations and genuine distortions; not editor performance evidence.",
+  "cases": [
+    {
+      "id": "paragraph-reflow-faithful",
+      "source": "The morning session ended.\n\nThe afternoon session began.",
+      "candidate": "The morning session ended. The afternoon session began.",
+      "expected_pass": true,
+      "requirements": [
+        "Preserve which session ended and which began. Paragraph reflow is permitted."
+      ],
+      "reference": null
+    },
+    {
+      "id": "paragraph-reflow-damaged",
+      "source": "The morning session ended.\n\nThe afternoon session began.",
+      "candidate": "The morning session began. The afternoon session ended.",
+      "expected_pass": false,
+      "requirements": [
+        "Preserve which session ended and which began. Paragraph reflow is permitted."
+      ],
+      "reference": null
+    },
+    {
+      "id": "narrative-orthography-faithful",
+      "source": "I open'd the box and examin'd its contents.",
+      "candidate": "I opened the box and examined its contents.",
+      "expected_pass": true,
+      "requirements": [
+        "Use contemporary spelling in this narrative while preserving the actions. The reference is a meaning record, not a spelling template."
+      ],
+      "reference": "I open'd the box and examin'd its contents."
+    },
+    {
+      "id": "narrative-orthography-damaged",
+      "source": "I open'd the box and examin'd its contents.",
+      "candidate": "I opened the box and removed its contents.",
+      "expected_pass": false,
+      "requirements": [
+        "Use contemporary spelling in this narrative while preserving the actions. The reference is a meaning record, not a spelling template."
+      ],
+      "reference": "I open'd the box and examin'd its contents."
+    },
+    {
+      "id": "literal-quotation-faithful",
+      "source": "The note reads, “I open’d the box.”",
+      "candidate": "The note reads, “I open’d the box.”",
+      "expected_pass": true,
+      "requirements": [
+        "Preserve the action inside the direct quotation."
+      ],
+      "reference": null
+    },
+    {
+      "id": "literal-quotation-damaged",
+      "source": "The note reads, “I open’d the box.”",
+      "candidate": "The note reads, “I closed the box.”",
+      "expected_pass": false,
+      "requirements": [
+        "Preserve the action inside the direct quotation."
+      ],
+      "reference": null
+    },
+    {
+      "id": "future-trigger-faithful",
+      "source": "The report has not arrived. We postponed the hearing until it arrives.",
+      "candidate": "The report has not arrived. We postponed the hearing until it arrives.",
+      "expected_pass": true,
+      "requirements": [
+        "The decision to postpone is past, but the report remains pending. The different tenses reflect different event times."
+      ],
+      "reference": null
+    },
+    {
+      "id": "future-trigger-damaged",
+      "source": "The report has not arrived. We postponed the hearing until it arrives.",
+      "candidate": "The report has arrived. We postponed the hearing until it arrived.",
+      "expected_pass": false,
+      "requirements": [
+        "The decision to postpone is past, but the report remains pending. The different tenses reflect different event times."
+      ],
+      "reference": null
+    },
+    {
+      "id": "unfamiliar-name-faithful",
+      "source": "Dr. Norén presented the findings.",
+      "candidate": "Dr. Norén presented the findings.",
+      "expected_pass": true,
+      "requirements": [
+        "Preserve the named researcher; unfamiliarity is not evidence of a transcription error."
+      ],
+      "reference": null
+    },
+    {
+      "id": "unfamiliar-name-damaged",
+      "source": "Dr. Norén presented the findings.",
+      "candidate": "Dr. Norton presented the findings.",
+      "expected_pass": false,
+      "requirements": [
+        "Preserve the named researcher; unfamiliarity is not evidence of a transcription error."
+      ],
+      "reference": null
+    },
+    {
+      "id": "wrapped-source-faithful",
+      "source": "The expedition reached the\n\nriver before dawn.",
+      "candidate": "The expedition reached the river before dawn.",
+      "expected_pass": true,
+      "requirements": [
+        "Resolve the layout break inside the sentence without changing the time relationship."
+      ],
+      "reference": "The expedition reached the river before dawn."
+    },
+    {
+      "id": "wrapped-source-damaged",
+      "source": "The expedition reached the\n\nriver before dawn.",
+      "candidate": "The expedition reached the river after dawn.",
+      "expected_pass": false,
+      "requirements": [
+        "Resolve the layout break inside the sentence without changing the time relationship."
+      ],
+      "reference": "The expedition reached the river before dawn."
+    }
+  ]
+}

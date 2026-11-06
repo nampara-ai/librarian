@@ -40,7 +40,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-pdf = ["pdfplumber>=0.11.4"]
+# PDFium (pypdfium2, Apache-2.0/BSD) reads PDF text layers completely and fast;
+# pdfplumber backs the legacy engine.
+pdf = ["pdfplumber>=0.11.4", "pypdfium2>=5.0.0"]
 ocr = [
   "pdf2image>=1.17.0",
   "pillow>=12.3.0",
@@ -64,6 +66,7 @@ all = [
   "pdf2image>=1.17.0",
   "pdfplumber>=0.11.4",
   "pillow>=12.3.0",
+  "pypdfium2>=5.0.0",
   "pytesseract>=0.3.13",
 ]
 dev = [

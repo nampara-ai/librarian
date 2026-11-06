@@ -1,0 +1,130 @@
+{
+  "purpose": "Real-provider authored development checks; every original verdict retained, no holdout qualification claim.",
+  "runs": [
+    {
+      "policy": "before-shared-review-contract",
+      "full_passes": 2,
+      "total": 3,
+      "processing_failures": 1,
+      "cases": [
+        {
+          "case_id": "decade-repair-with-quantities",
+          "passed": false,
+          "processing_succeeded": false,
+          "error_kind": "pipeline",
+          "error": "Cleaning chunk 1 failed fidelity checks after 4 attempt(s): added-verbatim-number. Original source remains available; no uncleaned replacement was published.",
+          "criteria": null,
+          "issues": [],
+          "protected_failures": []
+        },
+        {
+          "case_id": "quoted-label-is-not-decade",
+          "passed": true,
+          "processing_succeeded": true,
+          "error_kind": null,
+          "error": null,
+          "criteria": {
+            "fidelity": "pass",
+            "completeness": "pass",
+            "fluency": "pass",
+            "voice": "pass",
+            "style": "pass",
+            "structure": "pass"
+          },
+          "issues": [],
+          "protected_failures": []
+        },
+        {
+          "case_id": "literal-decade-spelling-kept",
+          "passed": true,
+          "processing_succeeded": true,
+          "error_kind": null,
+          "error": null,
+          "criteria": {
+            "fidelity": "pass",
+            "completeness": "pass",
+            "fluency": "pass",
+            "voice": "pass",
+            "style": "pass",
+            "structure": "pass"
+          },
+          "issues": [],
+          "protected_failures": []
+        }
+      ]
+    },
+    {
+      "policy": "shared-review-contract",
+      "full_passes": 2,
+      "total": 3,
+      "processing_failures": 0,
+      "cases": [
+        {
+          "case_id": "decade-repair-with-quantities",
+          "passed": false,
+          "processing_succeeded": true,
+          "error_kind": null,
+          "error": null,
+          "criteria": {
+            "fidelity": "fail",
+            "completeness": "fail",
+            "fluency": "pass",
+            "voice": "pass",
+            "style": "pass",
+            "structure": "pass"
+          },
+          "issues": [
+            {
+              "criterion": "fidelity",
+              "source_quote": "styles changed in the ’70s. The interval remained 9s, not 90s.",
+              "candidate_quote": "styles changed. In the ’70s, the interval remained 9 s, not 90 s.",
+              "explanation": "The candidate moves the ’70s from the change in styles to the interval, altering the time relationship."
+            },
+            {
+              "criterion": "completeness",
+              "source_quote": "styles changed in the ’70s",
+              "candidate_quote": "styles changed. In the ’70s, the interval remained 9 s, not 90 s.",
+              "explanation": "The candidate no longer says that styles changed in the ’70s."
+            }
+          ],
+          "protected_failures": []
+        },
+        {
+          "case_id": "quoted-label-is-not-decade",
+          "passed": true,
+          "processing_succeeded": true,
+          "error_kind": null,
+          "error": null,
+          "criteria": {
+            "fidelity": "pass",
+            "completeness": "pass",
+            "fluency": "pass",
+            "voice": "pass",
+            "style": "pass",
+            "structure": "pass"
+          },
+          "issues": [],
+          "protected_failures": []
+        },
+        {
+          "case_id": "literal-decade-spelling-kept",
+          "passed": true,
+          "processing_succeeded": true,
+          "error_kind": null,
+          "error": null,
+          "criteria": {
+            "fidelity": "pass",
+            "completeness": "pass",
+            "fluency": "pass",
+            "voice": "pass",
+            "style": "pass",
+            "structure": "pass"
+          },
+          "issues": [],
+          "protected_failures": []
+        }
+      ]
+    }
+  ],
+  "remaining_issue": "The second run repaired the decade while preserving other numeric data, but its first candidate shifted a temporal modifier to a different clause. That fidelity failure remains recorded."
+}

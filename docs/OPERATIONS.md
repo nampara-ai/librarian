@@ -49,7 +49,9 @@ Local conversion and import enforce configurable input limits before expensive p
 - `LIBRARIAN_PDF_MAX_PAGES`
 - `LIBRARIAN_API_MAX_UPLOAD_BYTES`
 
-PDF extraction is page-aware. Embedded-text pages use embedded extraction; empty or scanned pages are OCRed. Long OCR jobs write `<output>.pages.json` manifests when conversion sidecars are enabled. These manifests record page status, source, OCR confidence, retry attempts, correction state, warning codes, and optional preserved page image paths.
+PDF extraction is page-aware. The text layer is read with PDFium (`LIBRARIAN_PDF_ENGINE=auto`, the default); pages with a usable text layer are never OCR'd, while empty pages and image pages with only stray characters are OCR'd. A page whose OCR fails keeps its text layer (or an explicit failed-page marker), is flagged `ocr-page-failed`, and the document completes; set `LIBRARIAN_OCR_FAIL_ON_PAGE_ERROR=true` to abort instead. OCR output never replaces a text layer that holds more of the page, and a rejected LLM OCR correction keeps the raw OCR text (`ocr-correction-failed`). Long OCR jobs write `<output>.pages.json` manifests when conversion sidecars are enabled. These manifests record page status, source, OCR confidence, retry attempts, correction state, warning codes, and optional preserved page image paths.
+
+`LIBRARIAN_PDF_ENGINE=liteparse` (or `LIBRARIAN_PDF_LAYOUT_ENHANCER=liteparse` with `auto`) runs the liteparse layout engine behind a retention guard: each page of its Markdown is measured against the PDFium text layer (word recall), pages below the threshold (80% as the engine, 95% as the enhancer) are replaced by the text layer, and a document with more than a third of its pages failing is re-extracted with the built-in extractor. The extraction report records `extraction_retention` (document and per-page scores, replaced pages, fallback) and `fallback_reason`; the Mac quality view shows them. `legacy` keeps the historical pdfplumber text layer and per-page headings.
 
 Inspect page manifests without dumping raw page text:
 
@@ -71,6 +73,61 @@ Archive formats are rejected by default, and common archive signatures are rejec
 Librarian does not log source text or generated document content. Persisted error strings are redacted and length-capped before status APIs expose them. JSON and text logging redact common credential patterns, bearer tokens, and `sk-...` provider keys.
 
 ## Run Quality And Provider Failures
+
+Chunk fidelity failures trigger up to `LIBRARIAN_CLEANING_FIDELITY_MAX_RETRIES` (default 3)
+additional cleaning attempts. Each retry uses the original source and explicit validation
+diagnostics, including numeric-token counts. This budget is separate from transport retries.
+If the model still loses content or changes protected data, the run fails and keeps the original
+source available. Raw source is never substituted for a successful cleaned chunk. Prior successful
+exports remain available, and passing chunks are cached for a later retry. Legacy cached source
+fallbacks are re-cleaned rather than accepted as completed work.
+
+The opt-in `cmos_v6` cleaning prompt uses source-aligned JSON edits and a document spelling
+sheet. It independently checks each changed span for meaning changes and retries only rejected
+spans. Code remains verbatim; table dimensions, cell quantities, and numeric occurrences are
+checked deterministically. Semantic checks are enabled by default and can be controlled with
+`LIBRARIAN_CLEANING_SEMANTIC_VERIFICATION`. They use the configured provider and incur additional
+calls. These checks reduce errors; inspect quotations and genuinely ambiguous transcription in
+the exported Markdown. `[transcription unclear: ...]` annotations make uncertainty visible and
+set the quality status to `needs-review`.
+
+Truncated structured-edit responses retain their partial candidate for diagnosis and trigger
+the same bounded smaller-span retries as rejected edits. Partial text is never accepted as a
+complete response. Chunk totals are recorded before document preparation begins, including
+when preparation fails.
+
+`LIBRARIAN_LLM_REASONING_EFFORT` optionally requests a provider-supported reasoning level.
+Leaving it unset preserves the provider default. Unsupported values are reported as request
+errors rather than silently downgraded. Larger reasoning budgets can also exhaust the output
+limit; reasoning and answer tokens may share that limit.
+`LIBRARIAN_CLEANING_REASONING_EFFORT` overrides the editing stage separately, so a deeper
+copyedit can retain ordinary reasoning budgets for classification and other model tasks.
+
+`LIBRARIAN_CLEANING_VERIFICATION_MODEL` selects an independent model on the same endpoint for
+semantic review. `LIBRARIAN_CLEANING_VERIFICATION_REASONING_EFFORT`
+controls that profile separately. Unset review options reuse the editing profile. Cache keys
+include both profiles. Independent review reduces reliance on one model approving its own edits;
+it does not establish that a model or profile is accurate without external evaluation.
+Spelling preparation uses the base LLM profile independently of the editing-only override.
+
+Rejected large spans are subdivided on later attempts, retaining neighboring context and
+checking the reconstructed parent span again. Passing spans are retained. Untouched long,
+unpunctuated prose is rejected rather than counted as an edited result. Sentence seams receive
+light capitalization and paragraph repair; prose uses ordinary editable spaces and hyphens.
+
+Long cleaning calls emit waiting heartbeats. Quality reports retain each attempt's checks and
+candidate output locally, including rejected candidates, so a failed run can be investigated.
+
+Cleaning cache keys include the full document context, prompt contents, provider endpoint,
+and verification policy. Resumed runs retain the original chunk order and neighboring context;
+only newly cleaned chunks advance progress. Verified native PDF extraction is still copyedited:
+extraction confidence is not an editorial-quality score.
+
+OCR correction retries failed fidelity checks against the original page up to three attempts.
+Unknown confidence is eligible for correction in `low-confidence` mode. Unsafe corrections fail
+the page instead of replacing its OCR with damaged text. Changing the OCR fidelity policy also
+invalidates old page manifests. DOCX extraction preserves headings, empty table cells, and
+literal cell pipes in Markdown tables.
 
 For a completed Mac app run, open **Quality** on its row. The view shows page extraction repairs,
 whole-document warnings, and final refinement actions. Use **Review page** for a flagged PDF page;
@@ -155,3 +212,94 @@ SQLite migrations live in `src/librarian/storage/migrations` and apply in lexica
 - Treat applied migrations as immutable; add a new migration for follow-up changes.
 - Keep migrations small enough to review.
 - Add tests for new migrations.
+
+## Bounded editorial recovery
+
+Content repair and provider recovery have separate outcomes. With
+`LIBRARIAN_CLEANING_PUBLISH_PARTIAL=true` (the application default), exhausted
+content repairs publish a draft with explicit `librarian:needs-review` HTML
+comments around unresolved source spans. The run succeeds and the document is
+ready to open, but its quality report says `cleaning_status: needs-review`.
+`needs_review` records unit ID, zero-based chunk index, reasons, attempt count,
+and source text. `kind: source` means the exact source was retained;
+`kind: advisory` retains the edit and records a fallible reviewer concern.
+Neither outcome is a claim that the passage has been fully cleaned.
+The comments remain in Markdown exports; consult the quality report or the Mac
+quality view before treating a draft as final.
+
+Partial work is stored separately from the clean cache. Reprocessing uses
+source- and policy-matched unit checkpoints, preserving accepted bytes and
+retrying unresolved source units. Accepted units also checkpoint before the
+chunk finishes, so a later provider failure does not discard them. Changed
+source, prompts, model settings, or review policy invalidate reuse. Authentication,
+credit, cancellation, storage, and provider failures still stop a run; they do
+not become successful source fallbacks.
+
+`LIBRARIAN_CLEANING_REVIEW_MODE` accepts `off`, `advisory` (default), or `strict`.
+Advisory findings never instruct the editor or cause another draft. Unusable
+reviewer JSON gets one format retry and is then reported as `review-unavailable`.
+Strict review can request bounded, source-grounded repairs and blocks acceptance
+of unresolved semantic issues. To retain the earlier all-or-nothing behavior,
+combine strict review with `LIBRARIAN_CLEANING_PUBLISH_PARTIAL=false`.
+The deprecated `LIBRARIAN_CLEANING_SEMANTIC_VERIFICATION` alias maps explicit
+`true` to strict and `false` to off; remove it when using the new setting.
+Deterministic checks detect defined failures; passing them does not prove
+semantic correctness. Two of them guard against a model that abbreviates:
+`substantial-content-loss` fires when fewer than 90% of a unit's content words
+(four or more letters, conversational filler such as "um" or "you know"
+excluded; spelling repairs and the odd word substitution are credited) survive
+in the candidate, and `model-elided-text` fires when the candidate contains an
+ellipsis the source did not. No review mode or reviewer verdict clears either;
+a unit that fails them after its retry budget is published as its complete
+source inside a review marker. The run quality report records `words_retained`
+per chunk and for the document, and warns `low-content-retention` below 90%.
+
+For constrained models, this explicit profile reduces each editing job and
+avoids source-reading and unchanged-prose review calls:
+
+```dotenv
+LIBRARIAN_CLEANING_PROMPT_VERSION=cmos_v8
+LIBRARIAN_CLEANING_REVIEW_MODE=advisory
+LIBRARIAN_CLEANING_PUBLISH_PARTIAL=true
+LIBRARIAN_CLEANING_UNIT_TARGET_CHARS=1200
+LIBRARIAN_CLEANING_UNIT_MAX_RETRIES=3
+LIBRARIAN_CLEANING_SOURCE_READING=false
+LIBRARIAN_LLM_MAX_CONCURRENCY=2
+```
+
+The source-aligned `cmos_v8` editor remains experimental; the release prompt
+selection is unchanged. This profile is a bounded recovery strategy, not a
+quality guarantee for an arbitrary model. Unit edits use the existing worker
+queue; dependent strict semantic patches remain in source order. Accepted units
+are excluded from later editing and review, and their neighbors remain read-only
+context. `units-accepted` attempt records identify accepted IDs and content hashes.
+Merged failed windows share their original units’ unspent retries; merging cannot reset
+or enlarge that allocation, and the whole-chunk safety ceiling still applies.
+The unit budget falls back to `CLEANING_FIDELITY_MAX_RETRIES` when
+`CLEANING_UNIT_MAX_RETRIES` is unset; its effective default is three retries.
+
+Quoted continuations whose opening boundary depends on an unresolved preceding unit
+remain provisional. Their draft is reused, but review may repeat when that context
+changes; independent accepted units stay frozen. Older checkpoints that prematurely
+froze such a quotation emit an explicit `context-approval-deferred` transition.
+Confirmation explanations stay in the audit log: only the original proposal that
+was actually approved becomes a repair instruction.
+
+Malformed or truncated spelling suggestions and optional source readings are
+reported as unavailable and skipped. They cannot abort prose cleaning. Truncated
+classification uses the existing deterministic metadata fallback. Access, credit,
+network, cancellation, and storage failures still stop the run and preserve
+completed approvals for recovery. Individual approval events have unique persisted
+keys so simultaneous approvals cannot overwrite each other’s audit records.
+
+Strict prose review also requires explicit decisions on a bounded set of candidate
+editorial risks, including apparent abandoned corrections and broken aside joins.
+These are proposals, not deterministic proof of errors. The reviewer must reject
+repairs that would remove genuine alternatives, meaningful uncertainty, humor,
+authored quotations, or linguistic examples. Audit receipts let later runs reuse
+those decisions; legacy cue-bearing units receive the missing audit without
+regenerating unrelated accepted text. No evaluation reference enters this path.
+
+Unit review and final assembly use the same source-aware comma join: a leading
+comma introduced by an editor attaches to the preceding word. Source punctuation
+and paragraph gaps are preserved, as are the bytes of the accepted units.

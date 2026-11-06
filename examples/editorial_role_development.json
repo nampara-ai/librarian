@@ -1,0 +1,62 @@
+{
+  "purpose": "Authored development checks for formatting roles, counterexamples, and metalinguistic content; these are not prospective holdout evidence. Reference is withheld from generation.",
+  "cases": [
+    {
+      "id": "institution-versus-generic",
+      "input_text": "the archives at the british library kept the letters the local library only kept copies",
+      "reference": "The archives at the British Library kept the letters; the local library only kept copies.",
+      "requirements": [
+        "Capitalize the named institution while keeping the generic local library lowercase."
+      ]
+    },
+    {
+      "id": "organization-versus-category",
+      "input_text": "the european parliament discussed the report while a parliament in another country debated a separate proposal",
+      "reference": "The European Parliament discussed the report, while a parliament in another country debated a separate proposal.",
+      "requirements": [
+        "Preserve the distinction between the named European Parliament and an unspecified parliament."
+      ]
+    },
+    {
+      "id": "reference-role-from-context",
+      "input_text": "Bacon23 describes the experiment while Locke24 disputes it the small appended numbers identify source notes",
+      "reference": "Bacon[23] describes the experiment, while Locke[24] disputes it. The small appended numbers identify source notes.",
+      "requirements": [
+        "Format the two appended source-note numbers as recognizable reference markers, preserving their values and attribution."
+      ]
+    },
+    {
+      "id": "identifier-role-kept",
+      "input_text": "the QX23 sensor was calibrated but the QX24 sensor was faulty these are device identifiers",
+      "reference": "The QX23 sensor was calibrated, but the QX24 sensor was faulty. These are device identifiers.",
+      "requirements": [
+        "Preserve QX23 and QX24 as intact device identifiers, without converting their digits to footnotes."
+      ],
+      "exact_fragments": [
+        "QX23",
+        "QX24"
+      ]
+    },
+    {
+      "id": "versions-and-dose-kept",
+      "input_text": "Atlas2 was updated from v1.7 to v1.8 the dose remained 12.5mg not 1.25mg",
+      "reference": "Atlas2 was updated from v1.7 to v1.8. The dose remained 12.5 mg, not 1.25 mg.",
+      "requirements": [
+        "Keep the product identifier, version identities, dosage values, and negation intact."
+      ],
+      "exact_fragments": [
+        "Atlas2",
+        "v1.7",
+        "v1.8"
+      ]
+    },
+    {
+      "id": "linguistic-example-kept",
+      "input_text": "here is an ungrammatical example She go to school the verb disagrees with its subject this is why the example is wrong",
+      "reference": "Here is an ungrammatical example: She go to school. The verb disagrees with its subject. This is why the example is wrong.",
+      "requirements": [
+        "Preserve the faulty agreement of the example under discussion, so the explanation remains true."
+      ]
+    }
+  ]
+}

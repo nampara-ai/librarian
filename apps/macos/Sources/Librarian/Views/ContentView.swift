@@ -431,8 +431,14 @@ struct QualityDetailsView: View {
 
     @ViewBuilder
     private func reportContent(_ report: RunQualityReport) -> some View {
+        if let extraction = report.extraction {
+            extractionEngineSummary(extraction)
+        }
         if let summary = report.extraction?.qualitySummary {
             Text("\(summary.pages) pages · \(summary.pagesRequiringLayoutRepair) layout repairs · \(summary.pagesWithWarnings) pages flagged")
+            if let ocrPages = summary.ocrPages, ocrPages > 0 {
+                Text("\(ocrPages) pages read with OCR\(summary.ocrFailedPages.map { $0 > 0 ? " · \($0) could not be read" : "" } ?? "")")
+            }
             Text("\(summary.figureOcrLinesRemoved) figure OCR fragments separated · \(report.extraction?.figuresExtracted ?? 0) figures preserved")
             if let restored = report.extraction?.figureReferencesRestored, restored > 0 {
                 Text("\(restored) figures restored after the PDF renderer omitted them")
@@ -454,6 +460,17 @@ struct QualityDetailsView: View {
             Text("\(processing.chunks) chunks · \(processing.cachedCleanedChunks) reused · \(processing.sourcePreservedChunks) kept verbatim for fidelity")
             if let verified = processing.verifiedSourceChunks, verified > 0 {
                 Text("\(verified) verified source chunks skipped model cleaning")
+            }
+            if let retained = processing.wordsRetained?.document {
+                let percent = Int((retained * 100).rounded())
+                let low = processing.wordsRetained?.chunks.filter { $0.retention < 0.9 } ?? []
+                Label(
+                    "\(percent)% of the source's words reached the cleaned text"
+                        + (low.isEmpty ? "" : " · chunks \(low.map { String($0.chunk) }.joined(separator: ", ")) lost words"),
+                    systemImage: retained < 0.9 ? "exclamationmark.triangle" : "checkmark.circle"
+                )
+                .foregroundStyle(retained < 0.9 ? Color.orange : Color.secondary)
+                .help("Content words (filler excluded) from the source that appear in the output. Below 90% means passages went missing; check the chunks named.")
             }
             Text("\(processing.imageReferences) image references in final output")
             if let refinement = processing.refinement,
@@ -500,6 +517,31 @@ struct QualityDetailsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            if let items = processing.needsReview, !items.isEmpty {
+                Divider()
+                Text("\(items.count) passage(s) need review")
+                    .font(.subheadline.weight(.semibold))
+                ForEach(items.indices, id: \.self) { index in
+                    let item = items[index]
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Chunk \(item.chunk + 1), \(item.unitId): \(item.kind == "advisory" ? "review advisory" : "source preserved")")
+                            .font(.caption.weight(.semibold))
+                        Text(item.reasons.joined(separator: "; "))
+                            .foregroundStyle(.secondary)
+                        Text(item.source).textSelection(.enabled)
+                    }
+                }
+            }
+            if let queries = processing.editorialQueries, !queries.isEmpty {
+                Divider()
+                Text("Transcription queries (\(queries.count))")
+                    .font(.subheadline.weight(.semibold))
+                Text("These source readings remain uncertain in the saved document.")
+                    .foregroundStyle(.secondary)
+                ForEach(queries.indices, id: \.self) { index in
+                    Text(queries[index]).textSelection(.enabled)
+                }
+            }
             ForEach(processing.warnings.filter { $0 != "toc-entries-unmatched" }, id: \.self) { warning in
                 Label(warning.replacingOccurrences(of: "-", with: " "), systemImage: "exclamationmark.triangle")
             }
@@ -530,6 +572,49 @@ struct QualityDetailsView: View {
                     }
                 }
             }
+        }
+    }
+
+    /// Which PDF engine read the document, and whether the text-layer guard
+    /// had to step in. Shown first so a gutted extraction is never a surprise
+    /// discovered by reading the output.
+    @ViewBuilder
+    private func extractionEngineSummary(_ extraction: ExtractionQuality) -> some View {
+        if let engine = extraction.engine {
+            let name: String = {
+                switch engine {
+                case "pdfium": return "PDF text layer (PDFium)"
+                case "pdfplumber", "legacy": return "PDF text layer (legacy)"
+                case "liteparse": return "liteparse layout engine"
+                default: return engine
+                }
+            }()
+            if extraction.fallbackFromPrimary == true {
+                Label(
+                    "Read with the \(name) after the selected engine "
+                        + (extraction.fallbackReason == "low-retention"
+                            ? "dropped too much of the text"
+                            : "failed"),
+                    systemImage: "arrow.uturn.backward.circle"
+                )
+                .foregroundStyle(.secondary)
+            } else {
+                Text("Read with the \(name)")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        if let retention = extraction.extractionRetention {
+            let percent = Int((retention.document * 100).rounded())
+            let replaced = retention.replacedPages ?? []
+            Label(
+                "\(percent)% of the PDF text layer kept by the layout engine"
+                    + (replaced.isEmpty
+                        ? ""
+                        : " · pages \(replaced.map { String($0) }.joined(separator: ", ")) taken from the text layer instead"),
+                systemImage: retention.document < 0.85 ? "exclamationmark.triangle" : "checkmark.circle"
+            )
+            .foregroundStyle(retention.document < 0.85 ? Color.orange : Color.secondary)
+            .help("Words from the PDF's own text layer that survived extraction. The guard replaces any page below \(Int((retention.threshold * 100).rounded()))%.")
         }
     }
 
