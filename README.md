@@ -20,7 +20,7 @@ own machine.
 > Dewey number, writes an 80–100 word synopsis and metadata tags, and drops it into a searchable,
 > exportable library. The **clean-up and organization are what make it Librarian**.
 
-Version `1.10.1` is the stable production release. The library and extraction cache live on your
+Version `1.10.2` is the stable production release. The library and extraction cache live on your
 disk; exports go to a folder you choose. With the default mock provider, processing stays local.
 When you connect an external provider, document text or figure images needed for cleaning,
 classification, OCR correction, or figure descriptions are sent to that provider.
@@ -69,7 +69,7 @@ pip install "nampara-librarian[all]"      # [all] pulls every optional capabilit
 librarian doctor                          # confirm what's available
 ```
 
-> From a release wheel: `pip install "nampara_librarian-1.10.1-py3-none-any.whl[all]"` ·
+> From a release wheel: `pip install "nampara_librarian-1.10.2-py3-none-any.whl[all]"` ·
 > From a checkout: `pip install -e ".[dev,all]"`
 
 ---

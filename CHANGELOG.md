@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 1.10.2 - 2026-11-06
+
+Fix OCR of scanned pages in the Mac app and tidy printed page numbers.
+
+- Fix built-in OCR failing on every image page in the Mac app with "No such file or directory:
+  tesseract_output.tsv". Tesseract was asked for its outputs by config name (`txt`, `tsv`), which
+  needs files under the tessdata `configs` directory that the bundle did not ship, so it silently
+  skipped the TSV. Outputs are now requested with explicit parameters, a missing output is reported
+  with Tesseract's own error, the bundle ships the configs, and the Mac build check exercises the
+  real page-OCR function.
+- Remove printed page numbers (folios) that recur at the top or bottom of pages from the extracted
+  text, so cleaned documents no longer open every page with a stray numeral. The count is recorded
+  as `page_numerals_removed` in the extraction report.
+
 ## 1.10.1 - 2026-11-06
 
 Complete PDF extraction, content-loss guards that no reviewer can clear, and resumable, explicit long-document cleaning for small and unreliable models. (1.10.0 was tagged but not published: its release run stopped at the dependency vulnerability gate.)
