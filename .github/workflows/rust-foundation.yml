@@ -36,13 +36,25 @@ env:
 
 jobs:
   models:
-    name: Verified shared OCR models
+    name: Verified office renderer and OCR models
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+      - name: Install office renderer build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libreoffice-writer libreoffice-impress
+      - name: Verify private Linux office dependency closure
+        run: python tools/office_bundle.py x86_64-unknown-linux-gnu --check
+      - name: Archive verified private Linux renderer
+        run: tar -czf .build-assets/verified-linux-office.tar.gz -C .build-assets office-x86_64-unknown-linux-gnu
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: verified-linux-office
+          path: .build-assets/verified-linux-office.tar.gz
+          include-hidden-files: true
+          retention-days: 7
       - name: Fetch pinned common model archives
         run: python tools/package.py --fetch-common
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -84,12 +96,14 @@ jobs:
           path: .build-assets
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
-      - name: Install office renderer build dependencies
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libreoffice-writer libreoffice-impress
-      - name: Verify private Linux office dependency closure
+        with:
+          name: verified-linux-office
+          path: .build-assets
+      - name: Extract verified private Linux renderer
         if: runner.os == 'Linux'
-        run: python tools/office_bundle.py x86_64-unknown-linux-gnu --check
+        run: tar -xzf .build-assets/verified-linux-office.tar.gz -C .build-assets
       - name: Check formatting
         if: runner.os == 'Linux'
         run: cargo fmt --all --check

@@ -455,6 +455,7 @@ async fn run(cli: Cli) -> Result<u8> {
                 "INSERT INTO planned SELECT ?,ordinal,payload FROM planned WHERE job=?",
                 "INSERT INTO accepted SELECT ?,ordinal,payload,needs_review FROM accepted WHERE job=?",
                 "INSERT INTO job_metadata SELECT ?,payload FROM job_metadata WHERE job=?",
+                "INSERT INTO accessions(job,class,sequence) SELECT ?,class,sequence FROM accessions WHERE job=?",
             ] {
                 library.db.execute(sql, sql_params![new_id, id])?;
             }

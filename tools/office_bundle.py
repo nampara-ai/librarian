@@ -14,7 +14,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = "26.8.2"
-BUNDLE_REVISION = 2
+BUNDLE_REVISION = 3
 BASE = f"https://download.documentfoundation.org/libreoffice/stable/{VERSION}/"
 SPECS = {
     "aarch64-apple-darwin": (f"mac/aarch64/LibreOffice_{VERSION}_MacOS_aarch64.dmg", "9f24fe83ab1ed5c95eb3df580119f32932f713e577feeac02bf619fb00749b55"),
@@ -80,6 +80,9 @@ def bundle(target):
         # Ship the non-glibc dependency closure, scoped to this child process.
         libs = destination / "lib"
         libs.mkdir(exist_ok=True)
+        notices = destination / "system-library-notices"
+        notices.mkdir(exist_ok=True)
+        records = []
         todo = []
         for path in (destination / "program").rglob("*"):
             if path.is_file():
@@ -106,6 +109,19 @@ def bundle(target):
                 if not output.exists():
                     shutil.copy2(dependency.resolve(), output)
                     todo.append(dependency)
+                    record = {"name": output.name, "sha256": digest(output), "build_path": str(dependency)}
+                    for candidate in [dependency, dependency.resolve(), Path("/usr") / dependency.relative_to("/")]:
+                        owner = subprocess.run(["dpkg-query", "-S", str(candidate)], capture_output=True, text=True)
+                        if owner.returncode == 0 and ": " in owner.stdout:
+                            package = owner.stdout.splitlines()[0].split(": ", 1)[0]
+                            record["package"] = package
+                            record["source"] = subprocess.check_output(["dpkg-query", "-W", "-f=${source:Package} ${source:Version}", package], text=True)
+                            copyright = Path("/usr/share/doc") / package.split(":")[0] / "copyright"
+                            if copyright.is_file():
+                                shutil.copy2(copyright, notices / (package.replace(":", "_") + "-copyright.txt"))
+                            break
+                    records.append(record)
+        (notices / "libraries.json").write_text(json.dumps(records, indent=2))
     marker.write_text(json.dumps({"version": VERSION, "bundle_revision": BUNDLE_REVISION, "url": BASE + relative, "archive_sha256": expected}, indent=2))
     return destination
 
@@ -125,6 +141,14 @@ if __name__ == "__main__":
         with tempfile.TemporaryDirectory(prefix="librarian-office-") as folder:
             folder = Path(folder)
             for source in documents(folder):
-                subprocess.run([str(executable), "--headless", "--nologo", "--nodefault", "--norestore", f"-env:UserInstallation={(folder / 'profile').as_uri()}", "--convert-to", "pdf", "--outdir", str(folder), str(source)], env=environment, check=True, timeout=120)
+                command = [str(executable), "--headless", "--nologo", "--nodefault", "--norestore", f"-env:UserInstallation={(folder / 'profile').as_uri()}", "--convert-to", "pdf", "--outdir", str(folder), str(source)]
+                try:
+                    subprocess.run(command, env=environment, check=True, timeout=120)
+                except subprocess.CalledProcessError:
+                    if "linux" in args.target:
+                        diagnostic = subprocess.run(command, env=dict(environment, LD_DEBUG="libs", SAL_LOG="+WARN"), capture_output=True, text=True, timeout=120)
+                        relevant = [line for line in diagnostic.stderr.splitlines() if any(term in line.lower() for term in ["error", "warn", "softokn", "freebl", "nss", "pdf", "not found"]) ]
+                        print("\n".join(relevant[-100:]), flush=True)
+                    raise
                 if not source.with_suffix(".pdf").is_file():
                     raise RuntimeError(f"Office renderer did not convert {source.name}")
