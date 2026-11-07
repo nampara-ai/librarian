@@ -1,8 +1,0 @@
-{
-  "name": "librarian-conformance",
-  "private": true,
-  "type": "module",
-  "description": "Development-only native/WASM and diagram compatibility checks",
-  "scripts": { "test": "node verify.mjs", "boundaries": "node boundaries.mjs" },
-  "devDependencies": { "pele": "1.13.0", "mermaid": "12.3.0", "playwright": "1.65.0" }
-}

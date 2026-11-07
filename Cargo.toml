@@ -22,6 +22,33 @@ blake3 = { version = "1", features = ["pure"] }
 clap = { version = "4", features = ["derive"] }
 tempfile = "3"
 wasm-bindgen = "0.2"
+anyhow = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal", "sync", "process", "io-util"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+toml = "0.9"
+directories = "6"
+fs2 = "0.4"
+futures = "0.3"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "bmp", "webp", "gif"] }
+zip = { version = "4", default-features = false, features = ["deflate"] }
+roxmltree = "0.21"
+scraper = "0.24"
+ego-tree = "0.10"
+pdfium-render = { version = "0.9.5", default-features = false, features = ["pdfium_7881", "image_025", "thread_safe"] }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29"] }
+crossterm = "0.29"
+sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
+# The pinned 1.22 CPU runtime supports API 21 without API 22's automatic EP discovery.
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "load-dynamic", "api-21"] }
+serde_yaml = "0.9"
+indicatif = "0.18"
+schemars = "1"
+csv = "1.4"
+tiff = "0.11"
 
 [profile.release]
 lto = "thin"

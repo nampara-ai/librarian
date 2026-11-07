@@ -1,75 +1,132 @@
-# Rust foundation: implemented scope
+# Librarian terminal guide
 
-The rebuild has a working CLI and a shared Rust/WASM document assembly engine. This is the first implementation slice, not a replacement release for the legacy application. The full pipeline design is in [Terminal rebuild architecture](TERMINAL_REBUILD.md).
+The CLI and TUI share one Rust processing engine. Native targets are Apple Silicon macOS, Intel macOS, Windows x64, and Linux x64. The portable document core also compiles to WASM. Graphical application work is deferred.
 
-## Try the CLI
+## Install
 
-From the repository root, with Rust installed:
+Unpack the platform archive and keep the executable beside its `engines` directory. Run `./librarian` on macOS/Linux or `.\librarian.exe` in PowerShell. No Python, Node, Homebrew, or system OCR installation is required for a bundled distribution. Linux targets glibc 2.35 or newer, including current Arch/Omarchy; musl distributions are not a supported binary target.
+
+For a source build:
 
 ```sh
-cargo run --locked -p librarian-cli -- convert source.txt -o result.md
-cargo run --locked -p librarian-cli -- convert source.md
-cargo run --locked -p librarian-cli -- inspect source.md
+cargo build --release --locked -p librarian-cli
+./target/release/librarian setup
+./target/release/librarian engines install
+./target/release/librarian
 ```
 
-`convert` accepts UTF-8 `.txt`, `.md`, and `.markdown` files. Text becomes literal Markdown paragraphs; punctuation that would introduce Markdown syntax is escaped. Existing Markdown is preserved, with a final newline added if missing. Tables, footnotes, math, and Mermaid source in existing Markdown remain intact. This does not yet normalize an existing document into typed table/list blocks or copyedit its prose.
+`engines install` verifies pinned archive SHA-256 hashes and installs PDFium, CPU ONNX Runtime, and PaddleOCR models under the selected library. Bundled distributions already contain them. `doctor --load-engines` diagnoses actual library loading and OCR model-session construction without importing documents or calling a provider.
 
-The default output is stdout. `-o` writes a new `.md` file, using a temporary file in the destination directory and refusing to replace an existing file. The destination directory must exist. File contents are synced before publication; Unix hosts also sync the directory afterward and distinguish a post-publication durability failure. This is a single-file export contract, not yet a recoverable corpus transaction.
+Default data lives in the platform application-data location for **librarian-terminal**, separate from the legacy app. Global `--library PATH` and `--config PATH` select another library/configuration. `config path` prints the active TOML path. Import, cancellation, and retry do not delete originals or Keychain entries.
 
-`inspect` reports syntax counts as JSON. Counting a Mermaid fence does not validate its syntax or confirm that a diagram matches its source material.
+## Dashboard
 
-## Shared implementation
+Press `,` for setup, then `n` for an import. Enter source and destination; `Ctrl+B` opens the filesystem browser. Enter opens folders/selects a file, Space selects the current folder, Backspace moves up. Tab moves through options. Explicitly choose whether to create a missing destination. Writability is checked before queueing.
 
-| Crate | Responsibility |
+Files run one at a time. Within-file model requests have bounded concurrency.
+
+| Key | Action |
 | --- | --- |
-| `librarian-core` | Source spans, coverage validation, explicit block assembly, deterministic Markdown rendering, BLAKE3 source fingerprints |
-| `librarian-app` | Text/Markdown import and versioned JSON commands; no host I/O |
-| `librarian-native` | Bounded UTF-8 file reads and publication of new Markdown files |
-| `librarian-cli` | clap commands over the native adapter |
-| `librarian-wasm` | wasm-bindgen entry point over the same application implementation |
+| `s` | Start queued work |
+| `p` / `r` / `c` | Pause / resume / cancel selected job |
+| `v` / Enter | Preview output or diagnostics |
+| Arrows / PgUp / PgDn | Navigate or scroll a preview |
+| `/` | Search accepted document text |
+| `,` | Configure new jobs |
+| `?` | Help |
+| `q` | Close dashboard; background worker continues |
+| Ctrl+C | Pause active/queued work and close |
 
-Source spans use half-open UTF-8 byte offsets. Every source byte must belong to exactly one block fragment or an explicit exclusion. Invalid character boundaries, missing coverage, overlapping ownership, and inconsistent whitespace exclusions fail before rendering. Source identities distinguish occurrences; a content fingerprint never merges repeated passages or pages.
+The dashboard shows stages, progress, calls, local cache hits, tokens, configured-price cost estimates, outputs, and review/failure status. Preview is capped at 64 KiB; `print` streams the complete file. Background diagnostics also go to `worker.log` in the library directory.
 
-A logical paragraph can own fragments from multiple pages. The caller explicitly chooses a join: no inserted character, a space, or a line break. The current engine verifies and assembles those decisions; automatic reading order, boundary inference, and model-assisted decisions are future work. Byte accounting alone does not prove that an interpretation or exclusion is correct.
-
-The result includes Markdown, output byte ranges for each block, originating source spans, source fingerprints, and syntax counts. These are block-level mappings, not character-level alignments after copyediting. Source offsets refer to the supplied UTF-8 observation, not coordinates in a PDF or image.
-
-The JSON interface accepts `schema_version: 1` with `convert` or `assemble` actions and returns a versioned `ok` or `error` response. Unknown fields and unsupported versions are rejected. See the independently authored [conformance fixtures](../tools/conformance/fixtures.mjs) for examples. Each batch currently allows 16 MiB of source text; streaming and durable checkpoints for long documents are not implemented yet.
-
-## Verify the foundation
-
-The repository pins Rust 1.96.0, Cargo dependencies, and JavaScript development dependencies. Native checks:
+## Commands
 
 ```sh
-cargo fmt --all --check
-cargo test --workspace --locked
-cargo clippy --workspace --all-targets --locked -- -D warnings
+librarian clean document.pdf -o results --create-output
+librarian clean source-folder -o results --recursive --queue-only
+librarian run
+librarian status --watch
+librarian show 12
+librarian pause 12
+librarian resume 12 --start
+librarian retry 12 --start
+librarian cancel 12
+librarian search 'climate adaptation'
+librarian print 12
+librarian export 12 -o another-folder --create-output
 ```
 
-For native/WASM equivalence and diagram compatibility, install Node.js 24 and wasm-pack 0.15.0, then run:
+`clean` without paths prompts interactively. Scripts must supply a destination. `--extract-only` disables editing, classification, and vision calls. `--no-vision` keeps text editing/classification but prohibits image requests. `--body-only` omits frontmatter, generated title/synopsis, page comments, and review notes; review status remains in the library. Global `--json` emits machine-readable results without animation.
+
+`resume` retains saved configuration and accepted work. `retry` creates a new job using current configuration and the retained original. `export` applies current presentation settings to accepted content without model calls. Existing files are never overwritten; collisions receive a filename suffix.
+
+Processing exit codes: `0` complete, `1` failure/budget exhausted, `2` review needed, `3` paused/cancelled. A failed file does not discard the remaining queue.
+
+## Configuration
 
 ```sh
-cargo install wasm-pack --version 0.15.0 --locked
-npm ci --prefix tools/conformance --ignore-scripts --no-audit --no-fund
-node tools/conformance/boundaries.mjs
-wasm-pack build crates/librarian-wasm --target nodejs --out-dir pkg --release -- --locked
+librarian config show
+librarian config schema
+librarian config set provider.model MODEL_NAME
+librarian config set provider.vision_model VISION_MODEL_NAME
+librarian config set provider.concurrency 3
+librarian config set processing.chunk_bytes 6000
+librarian config set output.page_markers true
+librarian config set output.filename '{class} - {title} - {number}.md'
+librarian config edit
+```
+
+`schema` prints JSON Schema. `set` accepts dotted keys and JSON values or ordinary strings. `edit` uses `$VISUAL`/`$EDITOR`; `reset` backs up the prior file. Unknown fields and invalid settings are rejected.
+
+| Provider kind | Base endpoint convention | Prompt caching |
+| --- | --- | --- |
+| `responses` | `/v1`; appends `/responses` | `implicit`, `explicit`, `off` |
+| `chat` | OpenAI-compatible `/v1`; appends `/chat/completions` | `implicit`, `off` |
+| `anthropic` | Anthropic-compatible `/v1`; appends `/messages` | `ephemeral`, `off` |
+
+Choose models explicitly. `provider.key_env` names the environment variable holding credentials; the configuration stores its name, never the secret value. Localhost endpoints may omit credentials. Remote endpoints require HTTPS. Hosted providers receive material needed by enabled operations. Extraction-only mode stays local after engine installation.
+
+Stable instruction prefixes enable provider caching. The separate local exact-response cache includes endpoint, namespace, model, prompt, schema, input/images, and output limit. Identical concurrent requests are coalesced. Change `provider.namespace` when changing accounts or trust contexts. `cache_ttl_hours` sets reuse duration.
+
+Provider controls include requests/minute, conservative tokens/minute, concurrency, timeout, and bounded retries. Rate limits span sequential files in one worker. Per-job budgets cover request count, generated tokens, and optional estimated cost. A cost ceiling requires input/output prices; a different vision model requires its own prices. These are estimates from configuration, not invoices. In-flight allowances are reserved transactionally. Unknown billing after timeout/crash remains reserved; a request already running remotely may still be billed after cancellation.
+
+`processing.style` and `glossary` control copyediting. Defaults follow Chicago conventions while preserving facts, quotations, numbers, names, citations, meaning, and voice. `preserve_original_on_review` retains source content when protected-material checks fail. Those checks do not prove semantic correctness.
+
+`taxonomy` maps codes to descriptions. Defaults are ten broad Dewey-style classes, not a licensed full Dewey implementation. `output.fields` maps semantic metadata to frontmatter keys; omit a mapping to omit its field. Switches control title, synopsis, frontmatter, review notes, and page comments. Filename variables: `{title}`, `{class}`, `{id}`, `{number}`; names are sanitized for Windows and Unix.
+
+## Extraction and output
+
+- UTF-8 text uses streaming windows with continuation across transport boundaries. Long documents are journaled incrementally, not placed in one prompt.
+- Markdown retains source structure, code, links, math, and Mermaid. An oversized Markdown structure is preserved with a review finding rather than split through its syntax.
+- SRT/VTT retain timing and identifiers separately from editable speech.
+- CSV/TSV retain quoted/multiline cells in bounded table batches; the first row is not silently declared a header.
+- HTML preserves body text, lists, code, tables, local images, and TeX math annotations. Remote image URLs are not fetched automatically; missing assets are reported.
+- DOCX preserves paragraphs, common emphasis, lists, merged cells, links, footnote placement/definitions, images, and common equation structures. Complex layouts/uncommon equations require review against the retained original.
+- PDFium supplies PDF text, geometry, images, and page renders. Usable ordinary text takes the native route. Scans use OCR; complex pages/figures can use vision. Repeated native-text margin furniture can be excluded, with records retained.
+- PNG, JPEG, BMP, WebP, GIF frames, and supported multi-page TIFF encodings are handled as image observations. Unsupported encodings fail explicitly.
+
+The default OCR engine is PaddleOCRv5 mobile detection/recognition on CPU ONNX Runtime, with English/Chinese/Japanese recognition. `ocr=tesseract` uses an installed executable and `ocr_language` data. `ocr=vision` uses the selected vision model; `ocr=off` disables OCR. Uncertain local OCR can escalate to configured vision when enabled. OCR confidence is an engine estimate, not an accuracy guarantee.
+
+Logical paragraphs can continue across physical pages. Neighboring context is read-only; edits commit only owned blocks. Fidelity findings retain questionable content for review. Native-text/vision discrepancies preserve native text by default. Page comments sit at logical boundaries to avoid breaking sentences.
+
+Simple tables use GFM; merged/irregular tables use escaped HTML in Markdown. Equations use TeX. Supported flowcharts serialize to Mermaid fences with generated identifiers and quoted labels. Figures remain linked local assets, with generated descriptions labeled. Pele is preferred; common flowchart syntax is usable by other Mermaid renderers.
+
+Encrypted PDFs require an unencrypted copy. Unsupported formats fail with diagnostics and retained originals. HTML, DOCX XML parts, and Markdown have explicit whole-parser size ceilings; plain-text streaming has separate limits. Handwriting, difficult scans, reading order, chart semantics, and copyediting quality require document-level evaluation.
+
+## Durability and builds
+
+SQLite WAL/full synchronization and an OS worker lock protect queue state. Content-addressed originals/assets remain immutable. Observations, plans, accepted blocks, inference cache, request attempts, usage reservations, and publication records are persisted. Model output never rewrites a source file.
+
+Export stages/syncs Markdown in the destination and publishes without replacing a file. Its digest supports recovery after rename but before database completion/indexing. Pause/cancel blocks new publication and accepted-block commits. Local search uses SQLite FTS5. Back up the library and exports; originals/caches can contain sensitive source material even when output omits it.
+
+```sh
 wasm-pack build crates/librarian-wasm --target web --out-dir pkg-web --release -- --locked
-cd tools/conformance
-npx playwright install chromium
-npm test
+wasm-pack build crates/librarian-wasm --target nodejs --out-dir pkg --release -- --locked
+python3 tools/package.py aarch64-apple-darwin --binary target/release/librarian
 ```
 
-On Linux, Playwright may also require `npx playwright install --with-deps chromium`. To use an existing Chromium executable, set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` when running the test harness.
+WASM exposes `execute_json`: `schema_version: 1` with actions `convert`, `assemble`, `render_corpus`, `plan_text`, `inspect_edit`, and `filename`. Native/WASM share document rules. Browser hosts supply storage, PDF/OCR adapters, and provider transport; the native terminal and FFI runtimes are not browser modules.
 
-The harness runs independently authored golden cases through native Rust, Node-loaded WASM, and WASM in a real Chromium worker. It compares the full responses between hosts as well as expected Markdown/error outcomes. It also parses and renders two Mermaid samples with Pele 1.13.0 and Mermaid.js 12.3.0, checking SVG validity and expected labels. These samples establish an executable compatibility test; they do not establish support for every diagram type, layout, or Mermaid renderer. JavaScript packages and Chromium are development tools, not dependencies of the native executable.
+The build matrix produces four native archives with engines/models/licenses and SHA-256 sidecars, plus web/Node WASM bindings. These remain development artifacts until release signing/publication is arranged. Local builds do not establish other-platform or real-document success.
 
-[Rust foundation CI](../.github/workflows/rust-foundation.yml) is configured to test and build on Apple Silicon, Intel macOS, Windows x86-64, and Linux x86-64, plus run the WASM/browser harness. Local verification on the development Mac does not establish that the other native jobs have passed. Uploaded CI artifacts are development builds; signed releases and complete build-input/model manifests remain future work.
-
-## Next implementation gates
-
-1. Qualify pinned PDFium and OCR/layout model assets across all four native targets and the browser, including preprocessing, decoding, licenses, redistribution, and model manifests. Measure extraction quality and resource use on representative documents.
-2. Add persistent jobs and artifacts, cancellation, crash recovery, incremental processing, and exact-result caching. Keep source evidence authoritative; indexes and exports must be rebuildable.
-3. Implement document adapters, reading order and paragraph continuity, structured tables/equations/figures, and provider adapters with budgets, prompt caching, retries, and validation.
-4. Add configurable copyediting/classification/export policy, SQLite FTS5 search, and the TUI. Establish quality, speed, memory, and cost baselines before making performance claims.
-
-There is currently no PDF/DOCX/HTML extraction, OCR, model call, copyediting, automatic classification, search index, TUI, or GUI in the Rust implementation. The Python/Swift application remains available as reference during migration.
+Verification stays narrow: formatting, Clippy, compilation, and critical checks for byte preservation/publication recovery and concurrent durable budget reservations. Jake owns hands-on evaluation with real documents/API keys. A passing check covers only its stated invariant.

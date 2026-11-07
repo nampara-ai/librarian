@@ -24,6 +24,8 @@ pub enum AppError {
     Document(#[from] DocumentError),
     #[error("Input contains no document content")]
     EmptyInput,
+    #[error("{0}")]
+    Corpus(String),
 }
 
 impl AppError {
@@ -31,6 +33,7 @@ impl AppError {
         match self {
             Self::Document(error) => error.code(),
             Self::EmptyInput => "empty_input",
+            Self::Corpus(_) => "invalid_corpus",
         }
     }
 }
@@ -116,6 +119,23 @@ enum Action {
     Assemble {
         document: Document,
     },
+    RenderCorpus {
+        segments: Vec<librarian_core::corpus::Segment>,
+    },
+    PlanText {
+        content: String,
+        chunk_bytes: usize,
+    },
+    InspectEdit {
+        source: String,
+        candidate: String,
+    },
+    Filename {
+        template: String,
+        metadata: librarian_core::corpus::Metadata,
+        id: String,
+        accession: u64,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -123,7 +143,7 @@ enum Action {
 enum Response {
     Ok {
         schema_version: u32,
-        result: RenderedDocument,
+        result: serde_json::Value,
     },
     Error {
         schema_version: u32,
@@ -132,7 +152,7 @@ enum Response {
     },
 }
 
-/// Versioned boundary shared by WASM and the native conformance runner.
+/// Versioned boundary shared by WASM and native hosts.
 /// Invalid requests are explicit outcomes, not empty successful documents.
 pub fn execute_json(input: &str) -> String {
     let error = |code: &str, message: String| Response::Error {
@@ -157,8 +177,15 @@ pub fn execute_json(input: &str) -> String {
             ),
             Ok(request) => {
                 let result = match request.action {
-                    Action::Convert { format, content } => convert(format, content),
-                    Action::Assemble { document } => render(&document).map_err(AppError::from),
+                    Action::Convert { format, content } => convert(format, content).map(|v|serde_json::json!(v)),
+                    Action::Assemble { document } => render(&document).map(|v|serde_json::json!(v)).map_err(AppError::from),
+                    Action::RenderCorpus { segments } => librarian_core::corpus::render_segments(&segments).map(|markdown|serde_json::json!({"stats":librarian_core::inspect_markdown(&markdown),"markdown":markdown,"segments":segments})).map_err(AppError::Corpus),
+                    Action::PlanText {content,chunk_bytes} => {
+                        if !(4..=32000).contains(&chunk_bytes) {Err(AppError::Corpus("chunk_bytes must be 4..32000".into()))}
+                        else {Ok(serde_json::json!({"ranges":librarian_core::corpus::split_text(&content,chunk_bytes)}))}
+                    }
+                    Action::InspectEdit {source,candidate} => Ok(serde_json::json!({"findings":librarian_core::corpus::edit_findings(&source,&candidate)})),
+                    Action::Filename {template,metadata,id,accession} => librarian_core::corpus::safe_filename(&template,&metadata,&id,accession).map(|name|serde_json::json!({"filename":name})).map_err(AppError::Corpus),
                 };
                 match result {
                     Ok(result) => Response::Ok {

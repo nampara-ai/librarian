@@ -1,6 +1,15 @@
 //! Native filesystem boundary. Existing files are never replaced by this slice.
 #![forbid(unsafe_code)]
 
+pub mod assets;
+pub mod config;
+pub mod export;
+pub mod extract;
+pub mod ocr;
+pub mod pipeline;
+pub mod provider;
+pub mod store;
+
 use librarian_app::{AppError, InputFormat, convert};
 use librarian_core::{MAX_SOURCE_BYTES, RenderedDocument};
 use std::{

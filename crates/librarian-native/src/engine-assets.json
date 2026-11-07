@@ -1,0 +1,84 @@
+{
+  "platforms": {
+    "macos-aarch64": [
+      {
+        "name": "PDFium 8066",
+        "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F8066/pdfium-mac-arm64.tgz",
+        "sha256": "336219e80580b93c6523f44db7dc1de59cc497b13a7390ddac84223f68ca162b",
+        "archive": "tgz",
+        "folder": "pdfium"
+      },
+      {
+        "name": "ONNX Runtime 1.22.0 CPU",
+        "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-osx-arm64-1.22.0.tgz",
+        "sha256": "cab6dcbd77e7ec775390e7b73a8939d45fec3379b017c7cb74f5b204c1a1cc07",
+        "archive": "tgz",
+        "folder": "onnxruntime"
+      }
+    ],
+    "macos-x86_64": [
+      {
+        "name": "PDFium 8066",
+        "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F8066/pdfium-mac-x64.tgz",
+        "sha256": "841ecac278cdd46288dd065873522cf72f3996560d8978f473d336f01d59942c",
+        "archive": "tgz",
+        "folder": "pdfium"
+      },
+      {
+        "name": "ONNX Runtime 1.22.0 CPU",
+        "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-osx-x86_64-1.22.0.tgz",
+        "sha256": "e4ec94a7696de74fb1b12846569aa94e499958af6ffa186022cfde16c9d617f0",
+        "archive": "tgz",
+        "folder": "onnxruntime"
+      }
+    ],
+    "linux-x86_64": [
+      {
+        "name": "PDFium 8066",
+        "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F8066/pdfium-linux-x64.tgz",
+        "sha256": "0b43f405477cf2cfc4dbff06905093c3309756c6bca1fb9da99234a2ca97fed2",
+        "archive": "tgz",
+        "folder": "pdfium"
+      },
+      {
+        "name": "ONNX Runtime 1.22.0 CPU",
+        "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-x64-1.22.0.tgz",
+        "sha256": "8344d55f93d5bc5021ce342db50f62079daf39aaafb5d311a451846228be49b3",
+        "archive": "tgz",
+        "folder": "onnxruntime"
+      }
+    ],
+    "windows-x86_64": [
+      {
+        "name": "PDFium 8066",
+        "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F8066/pdfium-win-x64.tgz",
+        "sha256": "739a57d597d864297909cc40a2411eba728490c76a0fa25e3ea299c7f6b07020",
+        "archive": "tgz",
+        "folder": "pdfium"
+      },
+      {
+        "name": "ONNX Runtime 1.22.0 CPU",
+        "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip",
+        "sha256": "174c616efc0271194488642a72f1a514e01487da4dfe84c49296d66e40ebe0da",
+        "archive": "zip",
+        "folder": "onnxruntime"
+      }
+    ]
+  },
+  "common": [
+    {
+      "name": "PP-OCRv5 mobile detector",
+      "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv5_mobile_det_onnx_infer.tar",
+      "sha256": "781056046c9ed77a15c94681605db6a0f62317c2e9cce6931c71da2478d4bc30",
+      "archive": "tar",
+      "folder": "det"
+    },
+    {
+      "name": "PP-OCRv5 mobile recognizer",
+      "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv5_mobile_rec_onnx_infer.tar",
+      "sha256": "f7e792bc836f36e7ef895ad47c426d75b0b75b1650caa6d63fe9418441ffba8c",
+      "archive": "tar",
+      "folder": "rec"
+    }
+  ]
+}

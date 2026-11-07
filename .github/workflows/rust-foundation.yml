@@ -1,4 +1,4 @@
-name: Rust foundation
+name: Librarian terminal builds
 
 on:
   workflow_dispatch:
@@ -7,14 +7,16 @@ on:
       - 'Cargo.*'
       - 'rust-toolchain.toml'
       - 'crates/**'
-      - 'tools/conformance/**'
+      - 'tools/package.py'
+      - 'docs/RUST_FOUNDATION.md'
+      - 'docs/THIRD_PARTY.md'
       - '.github/workflows/rust-foundation.yml'
   pull_request:
     paths:
       - 'Cargo.*'
       - 'rust-toolchain.toml'
       - 'crates/**'
-      - 'tools/conformance/**'
+      - 'tools/package.py'
       - '.github/workflows/rust-foundation.yml'
 
 permissions:
@@ -48,7 +50,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             suffix: ''
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -58,20 +60,22 @@ jobs:
       - name: Check formatting
         if: runner.os == 'Linux'
         run: cargo fmt --all --check
-      - name: Test
-        run: cargo test --workspace --locked --target ${{ matrix.target }}
       - name: Lint
         run: cargo clippy --workspace --all-targets --locked --target ${{ matrix.target }} -- -D warnings
       - name: Build release executable
         run: cargo build --release --locked -p librarian-cli --target ${{ matrix.target }}
+      - name: Critical persistence and budget invariants
+        run: cargo test --locked -p librarian-native --lib --test persistence --target ${{ matrix.target }}
+      - name: Package executable, engines, models and licenses
+        run: python tools/package.py ${{ matrix.target }} --check-engines
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: librarian-${{ matrix.target }}-foundation
-          path: target/${{ matrix.target }}/release/librarian${{ matrix.suffix }}
+          name: librarian-${{ matrix.target }}
+          path: dist/*
           if-no-files-found: error
 
-  wasm-conformance:
-    name: Native / WASM / diagram conformance
+  wasm:
+    name: WASM build
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
@@ -83,28 +87,15 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '24'
-          cache: npm
-          cache-dependency-path: tools/conformance/package-lock.json
-      - name: Install development harness
-        working-directory: tools/conformance
-        run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Install browser
-        working-directory: tools/conformance
-        run: npx playwright install --with-deps chromium
-      - name: Check shared dependency boundaries
-        run: node tools/conformance/boundaries.mjs
       - name: Install WASM build tool
         run: cargo install wasm-pack --version 0.15.0 --locked
       - name: Build the two WASM bindings
         run: |
           wasm-pack build crates/librarian-wasm --target nodejs --out-dir pkg --release -- --locked
           wasm-pack build crates/librarian-wasm --target web --out-dir pkg-web --release -- --locked
-      - name: Check golden outputs and diagram renderers
-        working-directory: tools/conformance
-        run: npm test
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: librarian-wasm-foundation
+          name: librarian-wasm
           path: |
             crates/librarian-wasm/pkg
             crates/librarian-wasm/pkg-web

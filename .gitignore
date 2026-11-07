@@ -38,5 +38,6 @@ tmp/
 
 # Rust rebuild artifacts
 /target/
+/.build-assets/
 /crates/librarian-wasm/pkg/
 /crates/librarian-wasm/pkg-web/
