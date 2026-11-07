@@ -491,7 +491,13 @@ pub fn inspect(library: &Library, job: i64) -> Result<Value> {
             .map(|s| serde_json::from_str(&s).map_err(Into::into))
             .collect()
     };
+    let mut reviewed = query(
+        "SELECT json_object('segment_id','review:'||unit,'markdown',json_extract(payload,'$.emitted'),'pending_unpublished',json_extract(payload,'$.pending')) FROM editorial_stages WHERE job=? AND stage='review' AND CAST(unit AS INTEGER)>0 ORDER BY CAST(unit AS INTEGER)",
+    )?;
+    for segment in &mut reviewed {
+        segment["sha256"] = json!(digest(segment["markdown"].as_str().unwrap_or_default()));
+    }
     Ok(
-        json!({"job":job,"contract":saved::<Value>(library,job,"contract","roles")?,"request_packets":query("SELECT payload FROM editorial_packets WHERE job=? ORDER BY stage,unit,round")?,"responses":query("SELECT response FROM editorial_results WHERE job=? ORDER BY stage,unit")?,"revisions":query("SELECT payload FROM editorial_revisions WHERE job=? ORDER BY id")?,"interventions":query("SELECT payload FROM editorial_interventions WHERE job=? ORDER BY id")?,"expert_feedback":query("SELECT json_object('id',id,'segment',segment,'original_source',json(original_source),'model_text',model_text,'expert_correction',corrected_text,'reason',reason,'created',created) FROM editorial_feedback WHERE job=? ORDER BY id")?}),
+        json!({"job":job,"contract":saved::<Value>(library,job,"contract","roles")?,"reviewed_segments":reviewed,"request_packets":query("SELECT payload FROM editorial_packets WHERE job=? ORDER BY stage,unit,round")?,"responses":query("SELECT json_object('stage',stage,'unit',unit,'input_hash',input_hash,'restored_markdown',markdown,'response',json(response)) FROM editorial_results WHERE job=? ORDER BY stage,unit")?,"revisions":query("SELECT payload FROM editorial_revisions WHERE job=? ORDER BY id")?,"interventions":query("SELECT payload FROM editorial_interventions WHERE job=? ORDER BY id")?,"expert_feedback":query("SELECT json_object('id',id,'segment',segment,'original_source',json(original_source),'model_text',model_text,'expert_correction',corrected_text,'reason',reason,'created',created) FROM editorial_feedback WHERE job=? ORDER BY id")?}),
     )
 }
