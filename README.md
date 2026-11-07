@@ -4,6 +4,10 @@ A local-first document cleaner and organizer. Import files or folders, extract t
 
 This branch implements the Rust CLI/TUI rebuild. Graphical application work is deferred. The previous Python/Swift implementation remains available as reference; its documentation is in [LEGACY_README.md](docs/LEGACY_README.md).
 
+Native archives are available from successful [Librarian terminal builds](https://github.com/nampara-ai/librarian/actions/workflows/rust-foundation.yml) runs for this branch. Download the artifact matching your platform, unpack the artifact ZIP and the platform archive inside it, and keep `librarian` beside its `engines` folder. Run `./librarian setup`, then `./librarian` (`.\librarian.exe` in PowerShell). The bundled distribution already includes its OCR/PDF engines.
+
+To build from source:
+
 ```sh
 cargo build --release --locked -p librarian-cli
 ./target/release/librarian setup
