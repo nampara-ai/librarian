@@ -456,13 +456,24 @@ fn start_worker(app: &mut App, library: &Library, config: &Path) -> Result<()> {
             .query_map([], |row| row.get::<_, String>(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?
     };
+    let mut missing = 0usize;
     for json in providers {
         let config: Config = serde_json::from_str(&json)?;
-        credentials::attach_session(&mut command, &config.provider)?;
+        if (config.processing.edit || config.processing.classify || config.processing.vision)
+            && credentials::attach_session(&mut command, &config.provider).is_err()
+        {
+            missing += 1;
+        }
     }
     let child = command.spawn().context("Could not start worker")?;
     app.child = Some(child);
-    app.message = "Worker started. Files run one at a time.".into();
+    app.message = if missing == 0 {
+        "Worker started. Files run one at a time.".into()
+    } else {
+        format!(
+            "Worker started; {missing} saved profile(s) need a session key. Affected jobs will report a credential error; other files can proceed."
+        )
+    };
     Ok(())
 }
 

@@ -326,7 +326,10 @@ fn step(
                 .find(|v| v.id == p.catalog_id);
             let help = preset.as_ref().map(|p| p.key_url.as_str()).unwrap_or("");
             let mut labels = vec!["Paste a new API key".to_string()];
-            let saved = p.credential.is_some();
+            let saved = p
+                .credential
+                .as_ref()
+                .is_some_and(|r| !r.session_only || credentials::resolve(p).is_ok());
             if saved {
                 labels.push("Use the saved credential".into());
             }
@@ -389,12 +392,26 @@ fn step(
             if secret.is_empty() {
                 return Ok(Action::Go(4));
             }
-            let Some(index) = choice(
+            let previous = d
+                .config
+                .provider
+                .credential
+                .clone()
+                .filter(|r| r.session_only);
+            let mut options = vec![
+                "Remember securely on this device".to_string(),
+                "New session only".to_string(),
+            ];
+            if previous.is_some() {
+                options
+                    .push("Reconnect the previous session key, including its queued jobs".into());
+            }
+            let Some(index) = ui::choose(
                 t,
                 title,
-                "Remember this key on this device?\n\nThe system credential store uses Keychain on macOS, Credential Manager on Windows, and Secret Service on Linux. Existing entries are never deleted.\nIf a secure store is unavailable or locked, use this session only. That mode works for background workers, but asks for the key again on a future launch.",
-                &["Remember securely on this device", "This session only"],
-                0,
+                "Remember this key on this device?\n\nThe system credential store uses Keychain on macOS, Credential Manager on Windows, and Secret Service on Linux. Existing entries are never deleted.\nIf a secure store is unavailable or locked, use a session key. Reconnecting a previous session makes the entered key available to jobs already queued under that reference.",
+                &options,
+                if previous.is_some() { 2 } else { 0 },
             )?
             else {
                 return Ok(Action::Back);
@@ -406,7 +423,15 @@ fn step(
                 title,
                 "Saving the credential separately from your runtime configuration.",
                 move |progress, _| {
-                    let reference = credentials::save(&endpoint, &key, index == 0)?;
+                    let reference = if index == 2 {
+                        credentials::reconnect_session(
+                            previous.as_ref().context("No prior session credential")?,
+                            &endpoint,
+                            &key,
+                        )?
+                    } else {
+                        credentials::save(&endpoint, &key, index == 0)?
+                    };
                     let _ = progress.send(
                         if index == 0 {
                             "Credential saved and read back from the system store"

@@ -122,3 +122,25 @@ pub fn attach_session(command: &mut Command, provider: &crate::config::Provider)
     }
     Ok(())
 }
+
+/// Reconnect an explicitly selected session reference without changing queued
+/// job snapshots or touching any persistent credential-store entry.
+pub fn reconnect_session(
+    reference: &CredentialRef,
+    endpoint: &str,
+    secret: &str,
+) -> Result<CredentialRef> {
+    reference.check_endpoint(endpoint)?;
+    if !reference.session_only {
+        bail!("Only session credentials can be reconnected in memory");
+    }
+    let secret = secret.trim();
+    if secret.is_empty() || secret.chars().any(char::is_whitespace) {
+        bail!("Enter an API key without spaces or line breaks");
+    }
+    SESSION
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Session credential store unavailable"))?
+        .insert(reference.account.clone(), Zeroizing::new(secret.to_owned()));
+    Ok(reference.clone())
+}

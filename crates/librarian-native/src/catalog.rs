@@ -552,6 +552,9 @@ pub fn select(config: &mut Config, model: &Model) -> Result<()> {
     config.provider.vision_input_price_per_million = None;
     config.provider.vision_output_price_per_million = None;
     config.provider.vision_cached_input_price_per_million = None;
+    if model.input_price.is_none() || model.output_price.is_none() {
+        config.processing.max_cost = None;
+    }
     config.validate()?;
     Ok(())
 }
