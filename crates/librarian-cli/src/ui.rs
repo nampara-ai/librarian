@@ -188,6 +188,44 @@ fn choose_impl(
     }
 }
 
+// Keep the insertion point visible even for long paths and editorial prompts.
+// The underlying value is unchanged; this only chooses the visible window.
+fn input_window(text: &str, cursor: usize, width: usize) -> String {
+    let mut start = cursor;
+    let mut used = 0;
+    let left_budget = width.saturating_sub(4);
+    for (i, c) in text[..cursor].char_indices().rev() {
+        let cells = ratatui::text::Span::raw(c.to_string()).width();
+        if used + cells > left_budget {
+            break;
+        }
+        used += cells;
+        start = i;
+    }
+    let mut result = if start > 0 {
+        "…".to_owned()
+    } else {
+        String::new()
+    };
+    result.extend(
+        text[start..cursor]
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c }),
+    );
+    result.push('▏');
+    used += 1 + usize::from(start > 0);
+    for c in text[cursor..].chars() {
+        let c = if c.is_control() { ' ' } else { c };
+        let cells = ratatui::text::Span::raw(c.to_string()).width();
+        if used + cells > width {
+            break;
+        }
+        result.push(c);
+        used += cells;
+    }
+    result
+}
+
 pub fn input(
     terminal: &mut ratatui::DefaultTerminal,
     title: &str,
@@ -202,7 +240,7 @@ pub fn input(
             let areas=Layout::vertical([Constraint::Length(3),Constraint::Min(3),Constraint::Length(4),Constraint::Length(3)]).split(f.area());
             f.render_widget(Paragraph::new(format!("  LIBRARIAN · {title}")).style(Style::default().fg(Color::Cyan)),areas[0]);
             f.render_widget(Paragraph::new(description).wrap(Wrap{trim:false}),areas[1]);
-            let display=if secret {format!("{}▏{}","•".repeat(text[..cursor].chars().count().min(80)),"•".repeat(text[cursor..].chars().count().min(80)))}else{format!("{}▏{}",&text[..cursor],&text[cursor..])};
+            let display=if secret {format!("{}▏{}","•".repeat(text[..cursor].chars().count().min(areas[2].width.saturating_sub(4) as usize)),"•".repeat(text[cursor..].chars().count().min(20)))}else{input_window(&text,cursor,areas[2].width.saturating_sub(2) as usize)};
             f.render_widget(Paragraph::new(display).wrap(Wrap{trim:false}).block(Block::default().borders(Borders::ALL).title(if secret{" API key · hidden "}else{" Value "})),areas[2]);
             f.render_widget(Paragraph::new("Enter accepts · Esc back · Left/Right moves cursor\nPaste supported · Ctrl+S saves accepted answers and exits (unaccepted text is discarded)."),areas[3]);
         })?;

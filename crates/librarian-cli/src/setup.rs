@@ -5,14 +5,29 @@ use std::{
 };
 
 pub fn expand_path(value: &str) -> PathBuf {
-    let value = value.trim().trim_matches(['\'', '"']);
-    if let Some(rest) = value.strip_prefix("~/")
+    // Only paired outer quotes are syntax. Apostrophes and spaces in a path
+    // selected by the browser belong to the actual filename.
+    let value = if value.len() >= 2
+        && ((value.starts_with('\"') && value.ends_with('\"'))
+            || (value.starts_with('\'') && value.ends_with('\'')))
+    {
+        &value[1..value.len() - 1]
+    } else {
+        value
+    };
+    if (value == "~" || value.starts_with("~/") || value.starts_with("~\\"))
         && let Some(home_dir) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
     {
-        return PathBuf::from(home_dir).join(rest);
+        let root = PathBuf::from(home_dir);
+        return if value == "~" {
+            root
+        } else {
+            root.join(&value[2..])
+        };
     }
     PathBuf::from(value)
 }
+
 pub fn configure(
     location: librarian_native::profile::Location,
 ) -> Result<Option<librarian_native::profile::Location>> {
