@@ -296,7 +296,22 @@ jobs:
             fi
             exit 1
           fi
-          xcrun stapler staple "$DMG"
+          # Stapling fetches the ticket from Apple's CloudKit, which can drop
+          # the connection in the minute after a submission is accepted
+          # ("The network connection was lost", error 68). The ticket exists
+          # by then; retry rather than fail a notarized build.
+          for attempt in 1 2 3 4 5 6; do
+            if xcrun stapler staple "$DMG"; then
+              break
+            fi
+            if [ "$attempt" -eq 6 ]; then
+              echo "::error::Stapling failed after $attempt attempts"
+              exit 1
+            fi
+            echo "Staple attempt $attempt failed; retrying in 30s..."
+            sleep 30
+          done
+          xcrun stapler validate "$DMG"
 
       # Releases are immutable once published, so DMGs cannot be attached
       # after the fact. Tag builds publish the DMG as a workflow artifact;
