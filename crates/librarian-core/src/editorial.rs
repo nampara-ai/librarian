@@ -56,7 +56,10 @@ pub fn ranges(text: &str, limit: usize) -> Vec<(usize, usize)> {
                 .map(|(i, c)| i + c.len_utf8());
             end = start + paragraph.or(sentence).or(space).unwrap_or(slice.len());
         }
-        if let Some(marker) = text[start..end].rfind("⟪LIBRARIAN_ARTIFACT_") {
+        if let Some(marker) = text[start..end]
+            .rfind('⟪')
+            .filter(|offset| text[start + offset..].starts_with("⟪LIBRARIAN_ARTIFACT_"))
+        {
             let marker = start + marker;
             if !text[marker..end].contains('⟫') {
                 if marker > start {
@@ -129,7 +132,7 @@ pub fn handoff(text: &str) -> Handoff {
         if matches!(ch, '`' | '~') && n >= 3 {
             match fence {
                 None => fence = Some((ch, n)),
-                Some((c, k)) if c == ch && n >= k => {
+                Some((c, k)) if c == ch && n >= k && trimmed[n..].trim().is_empty() => {
                     fence = None;
                     boundary = offset + line.len();
                 }
@@ -183,7 +186,14 @@ pub fn protect(markdown: &str) -> (String, Vec<(String, String)>) {
             continue;
         }
         text.push_str(&markdown[position..span.start]);
-        let marker = format!("⟪LIBRARIAN_ARTIFACT_{}⟫", artifacts.len());
+        let mut number = artifacts.len();
+        let marker = loop {
+            let candidate = format!("⟪LIBRARIAN_ARTIFACT_{number}⟫");
+            if !markdown.contains(&candidate) && !artifacts.iter().any(|(id, _)| id == &candidate) {
+                break candidate;
+            }
+            number += 1;
+        };
         text.push_str(&marker);
         artifacts.push((marker, markdown[span.clone()].into()));
         position = span.end;
@@ -220,11 +230,21 @@ mod tests {
             let plan = ranges(&masked, limit);
             let mut position = 0;
             let mut joined = String::new();
-            for (start, end) in plan {
+            for (start, end) in &plan {
+                let (start, end) = (*start, *end);
                 assert_eq!(start, position);
                 assert!(end > start);
                 joined.push_str(&masked[start..end]);
                 position = end;
+            }
+            for (marker, _) in &artifacts {
+                assert_eq!(
+                    plan.iter()
+                        .filter(|(a, b)| masked[*a..*b].contains(marker))
+                        .count(),
+                    1,
+                    "A protected artifact must be owned by one complete model request, even at limit {limit}"
+                );
             }
             assert_eq!(position, masked.len());
             assert_eq!(restore(&joined, &artifacts).unwrap(), source);
@@ -237,5 +257,13 @@ mod tests {
         let split = handoff(&huge);
         assert!(split.pending.len() <= 4100);
         assert_eq!(format!("{}{}", split.emitted, split.pending), huge);
+        let fenced =
+            "Introduction.\n\n```text\n```not-a-closing-fence\n\nMore code\n```\n\nFollowing prose";
+        let split = handoff(fenced);
+        assert!(split.emitted.contains("More code\n```"));
+        assert_eq!(format!("{}{}", split.emitted, split.pending), fenced);
+        let collision = "Literal ⟪LIBRARIAN_ARTIFACT_0⟫ in source.\n\n```csv\na,b\n```";
+        let (masked, artifacts) = protect(collision);
+        assert_eq!(restore(&masked, &artifacts).unwrap(), collision);
     }
 }
