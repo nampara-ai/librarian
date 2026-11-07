@@ -80,7 +80,12 @@ def bundle(target):
         # Ship the non-glibc dependency closure, scoped to this child process.
         libs = destination / "lib"
         libs.mkdir(exist_ok=True)
-        todo = [p for p in (destination / "program").rglob("*") if p.is_file() and (".so" in p.name or p.name == "soffice.bin")]
+        todo = []
+        for path in (destination / "program").rglob("*"):
+            if path.is_file():
+                with path.open("rb") as stream:
+                    if stream.read(4) == b"\x7fELF":
+                        todo.append(path)
         seen = set()
         environment = dict(os.environ, LD_LIBRARY_PATH=os.pathsep.join([str(destination / "program"), str(libs)]))
         excluded = re.compile(r"^(?:ld-linux|libc\.|libm\.|libpthread\.|librt\.|libdl\.|libresolv\.|libutil\.|libnss_)")

@@ -41,74 +41,6 @@ fn cancelled() -> bool {
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Force the pause/resume race: the old producer wakes after the database
-    // already says running again. Its scoped cancellation must still prevent
-    // publishing stale pages, without poisoning a subsequent producer.
-    #[test]
-    fn cancelled_producer_cannot_publish_into_resumed_job() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("library");
-        let source = temp.path().join("source.txt");
-        std::fs::write(&source, "Reader continuity.").unwrap();
-        let library = Library::open(&root).unwrap();
-        let mut config = Config::default();
-        config.processing.prepare_only = true;
-        let job = crate::pipeline::queue(
-            &library,
-            &source,
-            &temp.path().join("output"),
-            &config,
-            false,
-            true,
-        )
-        .unwrap()[0];
-        library
-            .db
-            .execute("UPDATE jobs SET status='running' WHERE id=?", [job])
-            .unwrap();
-        image::RgbImage::from_pixel(8, 8, image::Rgb([255, 255, 255]))
-            .save(root.join("assets/page.png"))
-            .unwrap();
-        let cancel = Arc::new(AtomicBool::new(false));
-        let flag = cancel.clone();
-        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
-        let worker = std::thread::spawn(move || {
-            let library = Library::open(&root).unwrap();
-            let guard = Cancellation::enter(flag);
-            ready_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
-            assert!(insert(&library, job, 0, 0, "page.png", "stale", &config).is_err());
-            drop(guard);
-            insert(&library, job, 0, 0, "page.png", "fresh", &config).unwrap();
-        });
-        ready_rx.recv().unwrap();
-        library
-            .db
-            .execute("UPDATE jobs SET status='paused' WHERE id=?", [job])
-            .unwrap();
-        cancel.store(true, Ordering::Relaxed);
-        library
-            .db
-            .execute("UPDATE jobs SET status='running' WHERE id=?", [job])
-            .unwrap();
-        release_tx.send(()).unwrap();
-        worker.join().unwrap();
-        let pages: Vec<String> = library
-            .db
-            .prepare("SELECT native FROM editorial_pages WHERE job=?")
-            .unwrap()
-            .query_map([job], |row| row.get(0))
-            .unwrap()
-            .collect::<std::result::Result<_, _>>()
-            .unwrap();
-        assert_eq!(pages, ["fresh"]);
-    }
-}
 pub(crate) fn checkpoint(library: &Library, job: i64) -> Result<()> {
     if cancelled() || !library.active(job)? {
         bail!("Page producer stopped; committed work retained");
@@ -469,4 +401,73 @@ fn print_window(
         part = 1;
     }
     Ok(part)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Force the pause/resume race: the old producer wakes after the database
+    // already says running again. Its scoped cancellation must still prevent
+    // publishing stale pages, without poisoning a subsequent producer.
+    #[test]
+    fn cancelled_producer_cannot_publish_into_resumed_job() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("library");
+        let source = temp.path().join("source.txt");
+        std::fs::write(&source, "Reader continuity.").unwrap();
+        let library = Library::open(&root).unwrap();
+        let mut config = Config::default();
+        config.processing.prepare_only = true;
+        let job = crate::pipeline::queue(
+            &library,
+            &source,
+            &temp.path().join("output"),
+            &config,
+            false,
+            true,
+        )
+        .unwrap()[0];
+        library
+            .db
+            .execute("UPDATE jobs SET status='running' WHERE id=?", [job])
+            .unwrap();
+        image::RgbImage::from_pixel(8, 8, image::Rgb([255, 255, 255]))
+            .save(root.join("assets/page.png"))
+            .unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let library = Library::open(&root).unwrap();
+            let guard = Cancellation::enter(flag);
+            ready_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            assert!(insert(&library, job, 0, 0, "page.png", "stale", &config).is_err());
+            drop(guard);
+            insert(&library, job, 0, 0, "page.png", "fresh", &config).unwrap();
+        });
+        ready_rx.recv().unwrap();
+        library
+            .db
+            .execute("UPDATE jobs SET status='paused' WHERE id=?", [job])
+            .unwrap();
+        cancel.store(true, Ordering::Relaxed);
+        library
+            .db
+            .execute("UPDATE jobs SET status='running' WHERE id=?", [job])
+            .unwrap();
+        release_tx.send(()).unwrap();
+        worker.join().unwrap();
+        let pages: Vec<String> = library
+            .db
+            .prepare("SELECT native FROM editorial_pages WHERE job=?")
+            .unwrap()
+            .query_map([job], |row| row.get(0))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert_eq!(pages, ["fresh"]);
+    }
 }

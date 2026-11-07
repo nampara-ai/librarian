@@ -188,7 +188,7 @@ def main():
         shutil.copytree(ROOT / "docs/licenses", folder / "licenses")
         shutil.copy2(ROOT / "crates/librarian-native/resources/NotoSans-LICENSE.txt",folder / "licenses/NotoSans-LICENSE.txt")
         shutil.copy2(ROOT / "Cargo.lock", folder / "Cargo.lock")
-        (folder / "build.json").write_text(json.dumps({"target": args.target, "git": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(), "rust": subprocess.check_output(["rustc", "--version"], text=True).strip(), "binary_sha256": digest(folder / executable), "engines": assets,"windows_runtime":runtime}, indent=2), encoding="utf-8")
+        (folder / "build.json").write_text(json.dumps({"target": args.target, "git": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(), "rust": subprocess.check_output(["rustc", "--version"], text=True).strip(), "binary_sha256": digest(folder / executable), "engines": assets,"office":json.loads((office / "librarian-office.json").read_text()),"windows_runtime":runtime}, indent=2), encoding="utf-8")
         if args.check_engines:
             subprocess.run([str(folder/executable),"--library",str(Path(staging)/"engine-check"),"doctor","--load-engines"],check=True,stdout=subprocess.DEVNULL)
             print("Initialized bundled PDFium and both OCR model sessions",flush=True)
