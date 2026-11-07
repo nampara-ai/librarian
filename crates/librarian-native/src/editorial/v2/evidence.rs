@@ -182,6 +182,9 @@ pub fn ledger(library: &Library, job: i64, stage: &str, passage: &str) -> Result
         if !included.insert((category.clone(), key.clone())) {
             continue;
         }
+        if value.is_empty() {
+            continue;
+        } // Explicitly forgotten, including upstream entries.
         let entry = json!({"category":category,"key":key,"value":value,"basis_unit":unit});
         if lower.contains(&key.to_lowercase()) && relevant.len() < 24 {
             relevant.push(entry);

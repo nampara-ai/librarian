@@ -68,6 +68,7 @@ fn validate_response(value: &Value, owned: &[String]) -> Result<()> {
         || response.ledger_updates.len() > 32
         || response.interventions.len() > 32
         || response.artifact_repairs.len() > 16
+        || response.evidence_requests.iter().any(|r| r.length > 6000)
     {
         bail!("Editorial contract: too many operations in one response");
     }
@@ -175,6 +176,7 @@ pub async fn edit(
         seen.insert(id.clone());
     }
     let mut evidence_rounds = 0;
+    let mut retrieval_bytes = 18000usize;
     let mut corrections = 0;
     let mut compacted = false;
     loop {
@@ -238,8 +240,16 @@ pub async fn edit(
                         fetched.push(json!({"id":request.id,"available":false,"reason":"At most one image per request; image inspection is disabled for the native Copyeditor."}));
                     }
                 } else {
-                    match evidence::fetch(library, job, unit.page, request) {
+                    if retrieval_bytes == 0 {
+                        fetched.push(json!({"id":request.id,"available":false,"reason":"The bounded source retrieval allowance is exhausted; preserve the strongest supportable reading and record remaining uncertainty."}));
+                        continue;
+                    }
+                    let mut bounded = request.clone();
+                    bounded.length = request.length.clamp(1, 6000).min(retrieval_bytes);
+                    match evidence::fetch(library, job, unit.page, &bounded) {
                         Ok(value) => {
+                            retrieval_bytes = retrieval_bytes
+                                .saturating_sub(value["text"].as_str().map_or(0, str::len));
                             seen.insert(request.id.clone());
                             fetched.push(value);
                         }
@@ -507,9 +517,10 @@ fn commit(
             continue;
         }
         if update.operation == "forget" {
+            // A tombstone also suppresses an obsolete upstream role's value.
             library.db.execute(
-                "DELETE FROM editorial_ledger WHERE job=? AND stage=? AND category=? AND key=?",
-                params![job, unit.stage, update.category, update.key],
+                "INSERT OR REPLACE INTO editorial_ledger(job,stage,category,key,value,unit,updated) VALUES(?,?,?,?,'',?,?)",
+                params![job, unit.stage, update.category, update.key,unit.id,crate::store::now()],
             )?;
         } else {
             library.db.execute("INSERT OR REPLACE INTO editorial_ledger(job,stage,category,key,value,unit,updated) VALUES(?,?,?,?,?,?,?)",params![job,unit.stage,update.category,update.key,update.value,unit.id,crate::store::now()])?;

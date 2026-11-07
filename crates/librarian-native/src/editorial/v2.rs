@@ -492,6 +492,6 @@ pub fn inspect(library: &Library, job: i64) -> Result<Value> {
             .collect()
     };
     Ok(
-        json!({"job":job,"contract":saved::<Value>(library,job,"contract","roles")?,"request_packets":query("SELECT payload FROM editorial_packets WHERE job=? ORDER BY stage,unit,round")?,"responses":query("SELECT response FROM editorial_results WHERE job=? ORDER BY stage,unit")?,"revisions":query("SELECT payload FROM editorial_revisions WHERE job=? ORDER BY id")?,"interventions":query("SELECT payload FROM editorial_interventions WHERE job=? ORDER BY id")?}),
+        json!({"job":job,"contract":saved::<Value>(library,job,"contract","roles")?,"request_packets":query("SELECT payload FROM editorial_packets WHERE job=? ORDER BY stage,unit,round")?,"responses":query("SELECT response FROM editorial_results WHERE job=? ORDER BY stage,unit")?,"revisions":query("SELECT payload FROM editorial_revisions WHERE job=? ORDER BY id")?,"interventions":query("SELECT payload FROM editorial_interventions WHERE job=? ORDER BY id")?,"expert_feedback":query("SELECT json_object('id',id,'segment',segment,'original_source',json(original_source),'model_text',model_text,'expert_correction',corrected_text,'reason',reason,'created',created) FROM editorial_feedback WHERE job=? ORDER BY id")?}),
     )
 }
