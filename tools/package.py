@@ -17,6 +17,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+from office_bundle import bundle as office_bundle
 
 ROOT = Path(__file__).resolve().parents[1]
 PLATFORMS = {
@@ -179,15 +180,20 @@ def main():
             except Exception as error:
                 raise RuntimeError(f"Cannot package {spec['name']}: {error}") from error
         runtime=windows_runtime(folder) if "windows" in args.target else []
+        office = office_bundle(args.target)
+        shutil.copytree(office, folder / "engines" / "office", symlinks=True)
         for source, target in [("LICENSE", "LICENSE"), ("docs/RUST_FOUNDATION.md", "README.md"), ("docs/THIRD_PARTY.md", "THIRD_PARTY.md")]:
             shutil.copy2(ROOT / source, folder / target)
         rust_licenses(folder / "RUST-LICENSES.txt")
         shutil.copytree(ROOT / "docs/licenses", folder / "licenses")
+        shutil.copy2(ROOT / "crates/librarian-native/resources/NotoSans-LICENSE.txt",folder / "licenses/NotoSans-LICENSE.txt")
         shutil.copy2(ROOT / "Cargo.lock", folder / "Cargo.lock")
         (folder / "build.json").write_text(json.dumps({"target": args.target, "git": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(), "rust": subprocess.check_output(["rustc", "--version"], text=True).strip(), "binary_sha256": digest(folder / executable), "engines": assets,"windows_runtime":runtime}, indent=2), encoding="utf-8")
         if args.check_engines:
             subprocess.run([str(folder/executable),"--library",str(Path(staging)/"engine-check"),"doctor","--load-engines"],check=True,stdout=subprocess.DEVNULL)
             print("Initialized bundled PDFium and both OCR model sessions",flush=True)
+            from check_layout import check
+            check(folder / executable)
         archive_format = "zip" if "windows" in args.target else "gztar"
         archive = Path(shutil.make_archive(str(args.output / name), archive_format, staging, name))
         archive.with_suffix(archive.suffix + ".sha256").write_text(f"{digest(archive)}  {archive.name}\n")

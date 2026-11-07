@@ -3,6 +3,7 @@
 
 pub mod corpus;
 mod document;
+pub mod editorial;
 mod markdown;
 
 pub use document::*;

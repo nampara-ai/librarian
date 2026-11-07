@@ -149,7 +149,7 @@ pub(super) fn extract(
             .filter(|b| b.0 > width * 0.47 && !b.4.trim().is_empty())
             .count();
         let complex = paths > 12 || (left > 4 && right > 4);
-        if !usable || complex {
+        if config.processing.pipeline == "editorial" || !usable || complex {
             let bitmap = page.render_with_config(
                 &PdfRenderConfig::new()
                     .set_target_width(config.processing.render_width as i32)

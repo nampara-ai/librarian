@@ -267,6 +267,7 @@ pub fn persist(
         ],
     )?;
     library.progress(job, "extracting", ordinal + 1, 0)?;
+    crate::editorial::pages::record(library, job, ordinal, observation)?;
     Ok(())
 }
 
@@ -290,6 +291,15 @@ pub fn extract_file(
     extension: &str,
     config: &Config,
 ) -> Result<()> {
+    if config.processing.pipeline == "editorial"
+        && matches!(
+            extension,
+            "docx" | "pptx" | "ppt" | "doc" | "odt" | "odp" | "rtf" | "xlsx" | "ods"
+        )
+    {
+        let pdf = crate::editorial::pages::office_pdf(library, job, path, config)?;
+        return pdf::extract(library, job, document, &pdf, config);
+    }
     match extension {
         "txt" | "text" | "log" => text_file(library, job, document, path, extension, config),
         "csv" | "tsv" => structured::delimited(

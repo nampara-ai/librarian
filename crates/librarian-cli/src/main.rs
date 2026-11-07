@@ -103,6 +103,18 @@ enum Command {
     },
     /// Show job details, diagnostics and metadata.
     Show { id: i64 },
+    /// Render the source and run local OCR only; no paid calls or document export.
+    Prepare { source: PathBuf },
+    /// Inspect the ordered image/OCR/visual/copyeditor matrix for a run.
+    Pages {
+        id: i64,
+        #[arg(long)]
+        page: Option<i64>,
+    },
+    /// Browse the document catalog and category accession numbers.
+    Catalog,
+    /// Show library totals by status and classification.
+    Stats,
     /// Print the resulting Markdown to stdout.
     Print { id: i64 },
     /// Re-export with current presentation settings, without model calls.
@@ -323,21 +335,8 @@ async fn run(cli: Cli) -> Result<u8> {
             }
         }
         Command::Retry { id, start } => {
-            let source = library.job(id)?;
-            if source.status == "running" {
-                bail!("Pause the existing job before retrying with changed configuration");
-            }
             let config = Config::load(&config_path)?;
-            let transaction = library.db.unchecked_transaction()?;
-            let new_id = library.enqueue(
-                std::path::Path::new(&source.source),
-                std::path::Path::new(&source.destination),
-                &config,
-            )?;
-            if let Some(document) = source.document {
-                library.db.execute("INSERT INTO job_inputs(job,digest,original,format) SELECT ?,digest,original,format FROM documents WHERE id=?",sql_params![new_id,document])?;
-            }
-            transaction.commit()?;
+            let new_id = pipeline::retry(&library, id, &config)?;
             println!("{}", serde_json::json!({"queued":new_id,"retry_of":id}));
             if start {
                 worker(&library, cli.json, false).await?;
@@ -369,7 +368,52 @@ async fn run(cli: Cli) -> Result<u8> {
             println!(
                 "{}",
                 serde_json::to_string_pretty(
-                    &serde_json::json!({"job":job,"metadata":metadata,"events":library.events(Some(id),100)?})
+                    &serde_json::json!({"job":job,"metadata":metadata,"editorial":librarian_native::editorial::progress(&library,id)?,"events":library.events(Some(id),100)?})
+                )?
+            );
+        }
+        Command::Prepare { source } => {
+            let mut config = Config::load(&config_path)?;
+            config.processing.pipeline = "editorial".into();
+            config.processing.prepare_only = true;
+            config.processing.edit = false;
+            config.processing.vision = false;
+            config.processing.classify = false;
+            let destination = library.root.join("prepared");
+            let jobs = pipeline::queue(&library, &source, &destination, &config, false, true)?;
+            println!(
+                "{}",
+                serde_json::json!({"queued":jobs,"mode":"page images and local OCR only"})
+            );
+            worker(&library, cli.json, false).await?;
+            return result_code(&library, &jobs);
+        }
+        Command::Pages { id, page } => {
+            let mut query=library.db.prepare("SELECT page,image,native,ocr,reading,cleaned FROM editorial_pages WHERE job=? AND (? IS NULL OR page=?) ORDER BY page")?;
+            let rows=query.query_map(sql_params![id,page,page],|r|{
+                let number:i64=r.get(0)?;let image:String=r.get(1)?;let native:String=r.get(2)?;
+                let ocr:Option<String>=r.get(3)?;let reading:Option<String>=r.get(4)?;let cleaned:Option<String>=r.get(5)?;
+                Ok(if page.is_some(){serde_json::json!({"page":number,"A_image":image,"native":native,"B_ocr":ocr.and_then(|s|serde_json::from_str::<serde_json::Value>(&s).ok()),"C_visual":reading,"copyeditor":cleaned})}
+                else{serde_json::json!({"page":number,"image":image,"native_bytes":native.len(),"ocr_done":ocr.is_some(),"visual_done":reading.is_some(),"copyedit_done":cleaned.is_some()})})
+            })?.collect::<Result<Vec<_>,_>>()?;
+            println!("{}", serde_json::to_string_pretty(&rows)?);
+        }
+        Command::Catalog => {
+            let mut query=library.db.prepare("SELECT j.id,j.source,j.output,j.status,m.payload,a.class,a.sequence FROM jobs j LEFT JOIN job_metadata m ON m.job=j.id LEFT JOIN accessions a ON a.job=j.id WHERE j.status IN ('complete','needs_review') ORDER BY COALESCE(a.class,''),j.id")?;
+            let rows=query.query_map([],|r|{let metadata:Option<String>=r.get(4)?;Ok(serde_json::json!({"job":r.get::<_,i64>(0)?,"source":r.get::<_,String>(1)?,"output":r.get::<_,Option<String>>(2)?,"status":r.get::<_,String>(3)?,"metadata":metadata.and_then(|s|serde_json::from_str::<serde_json::Value>(&s).ok()),"class":r.get::<_,Option<String>>(5)?,"sequence":r.get::<_,Option<i64>>(6)?}))})?.collect::<Result<Vec<_>,_>>()?;
+            println!("{}", serde_json::to_string_pretty(&rows)?);
+        }
+        Command::Stats => {
+            let mut query=library.db.prepare("SELECT status,count(*),sum(requests),sum(input_tokens),sum(output_tokens) FROM jobs GROUP BY status")?;
+            let statuses=query.query_map([],|r|Ok(serde_json::json!({"status":r.get::<_,String>(0)?,"documents":r.get::<_,i64>(1)?,"requests":r.get::<_,i64>(2)?,"input_tokens":r.get::<_,i64>(3)?,"output_tokens":r.get::<_,i64>(4)?})))?.collect::<Result<Vec<_>,_>>()?;
+            let mut query = library
+                .db
+                .prepare("SELECT class,count(*) FROM accessions GROUP BY class ORDER BY class")?;
+            let categories=query.query_map([],|r|Ok(serde_json::json!({"class":r.get::<_,String>(0)?,"documents":r.get::<_,i64>(1)?})))?.collect::<Result<Vec<_>,_>>()?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &serde_json::json!({"statuses":statuses,"categories":categories})
                 )?
             );
         }
@@ -427,7 +471,7 @@ async fn run(cli: Cli) -> Result<u8> {
             println!(
                 "{}",
                 serde_json::to_string_pretty(
-                    &serde_json::json!({"library":library.root,"config":config_path,"platform":format!("{}-{}",std::env::consts::OS,std::env::consts::ARCH),"provider":config.provider.kind,"model_configured":!config.provider.model.is_empty(),"credential_storage":config.provider.credential.as_ref().map(|r|if r.session_only{"session"}else{"system"}),"credential_environment_present":!config.provider.key_env.is_empty()&&std::env::var_os(&config.provider.key_env).is_some(),"engines":engines,"engine_sessions_loaded":load_engines})
+                    &serde_json::json!({"library":library.root,"config":config_path,"platform":format!("{}-{}",std::env::consts::OS,std::env::consts::ARCH),"provider":config.provider.kind,"model_configured":!config.provider.model.is_empty(),"credential_storage":config.provider.credential.as_ref().map(|r|if r.session_only{"session"}else{"system"}),"credential_environment_present":!config.provider.key_env.is_empty()&&std::env::var_os(&config.provider.key_env).is_some(),"engines":engines,"engine_sessions_loaded":load_engines,"office_renderer":librarian_native::editorial::pages::office_executable(&library.root,&config)})
                 )?
             );
         }
@@ -573,7 +617,16 @@ fn configure(action: ConfigCommand, path: &std::path::Path) -> Result<()> {
             {
                 bail!("Unknown configuration field {key}");
             }
-            let parsed = serde_json::from_str(&value).unwrap_or(serde_json::Value::String(value));
+            let string_field = object.get(*field).is_some_and(serde_json::Value::is_string)
+                || matches!(
+                    key.as_str(),
+                    "processing.classification_override" | "processing.office_renderer"
+                );
+            let parsed = if string_field && value != "null" {
+                serde_json::Value::String(serde_json::from_str::<String>(&value).unwrap_or(value))
+            } else {
+                serde_json::from_str(&value).unwrap_or(serde_json::Value::String(value))
+            };
             object.insert((*field).into(), parsed);
             let config: Config = serde_json::from_value(config)?;
             config.save(path)?;

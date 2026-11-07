@@ -766,13 +766,24 @@ fn preferences(
                     check(config.processing.classify)
                 ),
                 format!(
-                    "{} Vision for complex pages and figures",
+                    "{} Visual reading of every page",
                     check(config.processing.vision)
                 ),
                 format!("OCR: {}", config.processing.ocr),
                 format!("OCR language: {}", config.processing.ocr_language),
                 "Copyediting style…".into(),
                 "Continue".into(),
+                format!("Pipeline: {}", config.processing.pipeline),
+                format!("Page concurrency: {}", config.processing.page_concurrency),
+                format!(
+                    "Classification override: {}",
+                    config
+                        .processing
+                        .classification_override
+                        .as_deref()
+                        .unwrap_or("automatic")
+                ),
+                "Office renderer…".into(),
             ]
         };
         let Some(index) = ui::choose(
@@ -854,6 +865,64 @@ fn preferences(
                         false,
                     )? {
                         config.processing.style = v.to_string();
+                    }
+                }
+                7 => {
+                    if let Some(i) = choice(
+                        t,
+                        "Processing pipeline",
+                        "Editorial reads every page, reconciles visual information and polishes the assembled document. Archival is retained for compatibility with older jobs.",
+                        &["Editorial synthesis", "Archival compatibility"],
+                        usize::from(config.processing.pipeline == "archival"),
+                    )? {
+                        config.processing.pipeline =
+                            if i == 0 { "editorial" } else { "archival" }.into();
+                    }
+                }
+                8 => {
+                    if let Some(v) = ui::input(
+                        t,
+                        "Parallel page readings",
+                        "Maximum simultaneous page tasks (1–16). The provider's concurrency and rate limits still apply.",
+                        &config.processing.page_concurrency.to_string(),
+                        false,
+                    )? && let Ok(n) = v.parse::<usize>()
+                        && (1..=16).contains(&n)
+                    {
+                        config.processing.page_concurrency = n;
+                    }
+                }
+                9 => {
+                    if let Some(v) = ui::input(
+                        t,
+                        "Classification override",
+                        "Leave empty for automatic classification.",
+                        config
+                            .processing
+                            .classification_override
+                            .as_deref()
+                            .unwrap_or(""),
+                        false,
+                    )? {
+                        config.processing.classification_override =
+                            (!v.trim().is_empty()).then(|| v.trim().to_owned());
+                    }
+                }
+                10 => {
+                    if let Some(v) = ui::input(
+                        t,
+                        "Office renderer",
+                        "Leave empty to use the bundled LibreOffice engine; otherwise enter the soffice executable path.",
+                        &config
+                            .processing
+                            .office_renderer
+                            .as_ref()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_default(),
+                        false,
+                    )? {
+                        config.processing.office_renderer =
+                            (!v.trim().is_empty()).then(|| std::path::PathBuf::from(v.trim()));
                     }
                 }
                 _ => {}

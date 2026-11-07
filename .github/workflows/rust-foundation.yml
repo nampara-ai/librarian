@@ -8,6 +8,8 @@ on:
       - 'rust-toolchain.toml'
       - 'crates/**'
       - 'tools/package.py'
+      - 'tools/office_bundle.py'
+      - 'tools/check_layout.py'
       - 'docs/RUST_FOUNDATION.md'
       - 'docs/THIRD_PARTY.md'
       - '.github/workflows/rust-foundation.yml'
@@ -17,6 +19,8 @@ on:
       - 'rust-toolchain.toml'
       - 'crates/**'
       - 'tools/package.py'
+      - 'tools/office_bundle.py'
+      - 'tools/check_layout.py'
       - '.github/workflows/rust-foundation.yml'
 
 permissions:
@@ -80,6 +84,9 @@ jobs:
           path: .build-assets
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
+      - name: Install office renderer build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libreoffice-writer libreoffice-impress
       - name: Check formatting
         if: runner.os == 'Linux'
         run: cargo fmt --all --check
@@ -88,7 +95,7 @@ jobs:
       - name: Build release executable
         run: cargo build --release --locked -p librarian-cli --target ${{ matrix.target }}
       - name: Critical persistence and budget invariants
-        run: cargo test --locked -p librarian-native --lib --test persistence --target ${{ matrix.target }}
+        run: cargo test --locked -p librarian-core -p librarian-native --lib --test persistence --target ${{ matrix.target }}
       - name: Package executable, engines, models and licenses
         run: python tools/package.py ${{ matrix.target }} --check-engines
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

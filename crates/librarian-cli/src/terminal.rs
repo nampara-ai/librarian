@@ -119,7 +119,7 @@ pub fn run(root: &Path, config_path: &Path) -> Result<()> {
     })
 }
 
-const HELP: &str = "HOME\nn  New Import\nq  Start queue (one file at a time)\np  Pause selected job\nr  Resume selected job and start queue\nc  Cancel selected job; originals and committed work remain\ns  Search\nf  Setup\nh  Help\nEnter / Space  Preview selected job\n\nEVERY SCREEN\nArrows / Tab / Shift+Tab  Navigate lists and forms\nEnter / Space  Activate a button, toggle, or browsable field\nEsc  Back; at Home, close the dashboard (worker continues)\nCtrl+S  Save accepted answers/drafts, pause work in this workspace, and exit\nx  Continue a completed automatic setup step\n\nFILE BROWSER\nEnter  Open folder / select file\nSpace  Select the folder you are currently inside\nEsc  Return through folder history, then back to the form\nBackspace  Parent folder\n/  Type a path\nn  Create folder when selecting a destination or workspace\nCtrl+B  Additional browse shortcut on source/destination fields\ne  Type a path on source/destination fields\n\nTEXT FIELDS\nEnter accepts; Esc discards the current edit. Spaces are ordinary text.\nHome shortcuts do not fire inside fields. Ctrl+S keeps previously accepted\nanswers; an unaccepted edit or unsaved API key is discarded.\n\nCOPY / PASTE\nUse your terminal's copy/paste commands (often Ctrl+Shift+C/V on Windows\nand Linux; Cmd+C/V on macOS). Librarian does not bind Ctrl+C in the TUI.\nMouse selection and clipboard shortcuts belong to your terminal.\n\nRUNTIME\nSetup establishes the active workspace, provider, secure credential, model,\nengines and defaults. Workers load it automatically. Existing queued jobs\nkeep their saved configuration. API keys are never written into config.\n\nCLI\nconfig schema · config edit · doctor · status --json\nshow ID · print ID · export ID --output FOLDER\nSee the bundled README for the complete terminal guide.";
+const HELP: &str = "HOME\nn  New Import\nq  Start queue (one file at a time)\np  Pause selected job\nr  Resume paused work; retry finished/failed jobs with current settings\nc  Cancel selected job; originals and committed work remain\ns  Search\nf  Setup\nh  Help\nEnter / Space  Preview selected job\n\nEVERY SCREEN\nArrows / Tab / Shift+Tab  Navigate lists and forms\nEnter / Space  Activate a button, toggle, or browsable field\nEsc  Back; at Home, close the dashboard (worker continues)\nCtrl+S  Save accepted answers/drafts, pause work in this workspace, and exit\nx  Continue a completed automatic setup step\n\nFILE BROWSER\nEnter  Open folder / select file\nSpace  Select the folder you are currently inside\nEsc  Return through folder history, then back to the form\nBackspace  Parent folder\n/  Type a path\nn  Create folder when selecting a destination or workspace\nCtrl+B  Additional browse shortcut on source/destination fields\ne  Type a path on source/destination fields\n\nTEXT FIELDS\nEnter accepts; Esc discards the current edit. Spaces are ordinary text.\nHome shortcuts do not fire inside fields. Ctrl+S keeps previously accepted\nanswers; an unaccepted edit or unsaved API key is discarded.\n\nCOPY / PASTE\nUse your terminal's copy/paste commands (often Ctrl+Shift+C/V on Windows\nand Linux; Cmd+C/V on macOS). Librarian does not bind Ctrl+C in the TUI.\nMouse selection and clipboard shortcuts belong to your terminal.\n\nRUNTIME\nSetup establishes the active workspace, provider, secure credential, model,\nengines and defaults. Workers load it automatically. Existing queued jobs\nkeep their saved configuration. API keys are never written into config.\n\nCLI\nconfig schema · config edit · doctor · status --json\nshow ID · pages ID · prepare FILE · catalog · stats\nprint ID · export ID --output FOLDER\nSee the bundled README for the complete terminal guide.";
 
 fn dashboard(
     terminal: &mut ratatui::DefaultTerminal,
@@ -169,7 +169,22 @@ fn dashboard(
                 }
                 KeyCode::Char('r') => {
                     if let Some(id) = selected {
-                        library.control(Some(id), "resume")?;
+                        let state = library.job(id)?;
+                        if matches!(
+                            state.status.as_str(),
+                            "complete" | "needs_review" | "prepared" | "failed"
+                        ) {
+                            let new_id = librarian_native::pipeline::retry(
+                                library,
+                                id,
+                                &Config::load(config_path)?,
+                            )?;
+                            app.message = format!(
+                                "Queued #{new_id} from #{id} with current settings; original result preserved"
+                            );
+                        } else {
+                            library.control(Some(id), "resume")?;
+                        }
                         start_worker(&mut app, library, config_path)?;
                     }
                 }
@@ -559,12 +574,31 @@ fn draw(frame: &mut Frame<'_>, jobs: &[Job], app: &App, library: &Library) {
         &mut state,
     );
     let detail = if let Some(job) = jobs.get(app.selected) {
+        let editorial = librarian_native::editorial::progress(library, job.id).unwrap_or_default();
+        let stages = if editorial["pages"]["rendered"].as_i64().unwrap_or(0) > 0 {
+            format!(
+                "\nPAGES {} · OCR {} · VISION {}\nCOPYEDIT {} · ASSEMBLED {} · POLISHED {}\n",
+                editorial["pages"]["rendered"],
+                editorial["pages"]["ocr"],
+                editorial["pages"]["visual"],
+                editorial["pages"]["copyedited"],
+                editorial["assembled"],
+                editorial["reviewed"]
+            )
+        } else {
+            String::new()
+        };
         format!(
-            "SOURCE\n{}\n\nDESTINATION\n{}\n\nSTAGE  {}\nSTATUS  {}\n\nREQUESTS  {}   CACHE HITS  {}\nTOKENS  {} in / {} out\nCACHED INPUT  {}\nCOST  {}\n\n{}",
-            job.source,
-            job.destination,
+            "{}STAGE  {}\nSTATUS  {}\n{}\nSOURCE\n{}\n\nDESTINATION\n{}\n\nREQUESTS  {}   CACHE HITS  {}\nTOKENS  {} in / {} out\nCACHED INPUT  {}\nCOST  {}\n\n{}",
+            job.error
+                .as_ref()
+                .map(|e| format!("ERROR\n{e}\n\n"))
+                .unwrap_or_default(),
             job.stage,
             job.status,
+            stages,
+            job.source,
+            job.destination,
             job.requests,
             job.cache_hits,
             job.input_tokens,

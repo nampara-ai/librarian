@@ -5,6 +5,7 @@ pub mod assets;
 pub mod catalog;
 pub mod config;
 pub mod credentials;
+pub mod editorial;
 pub mod export;
 pub mod extract;
 pub mod ocr;

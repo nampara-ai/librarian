@@ -18,6 +18,7 @@ pub struct ModelClient {
     config: Config,
     rate: Arc<Mutex<Rate>>,
     pending: Arc<Mutex<HashMap<String, Weak<Mutex<()>>>>>,
+    slots: Arc<tokio::sync::Semaphore>,
 }
 struct Rate {
     next: Instant,
@@ -30,6 +31,7 @@ static HTTP_POOLS: OnceLock<std::sync::Mutex<HashMap<u64, reqwest::Client>>> = O
 pub struct Request<'a> {
     pub task: &'a str,
     pub instructions: &'a str,
+    pub context: Option<&'a str>,
     pub input: Value,
     pub schema: Value,
     pub image: Option<(&'a [u8], &'a str)>,
@@ -77,6 +79,7 @@ impl ModelClient {
             config: config.clone(),
             rate,
             pending: Arc::new(Mutex::new(HashMap::new())),
+            slots: Arc::new(tokio::sync::Semaphore::new(config.provider.concurrency)),
         })
     }
     pub fn configured(&self, vision: bool) -> bool {
@@ -148,8 +151,17 @@ impl ModelClient {
         if model.trim().is_empty() {
             bail!("No model configured. Use librarian setup or config set provider.model MODEL");
         }
-        let input = serde_json::to_string(&request.input)?;
-        let instructions = if p.structured_output == "schema" {
+        let plain = request.schema.is_null();
+        let input = if plain {
+            request
+                .input
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or(serde_json::to_string(&request.input)?)
+        } else {
+            serde_json::to_string(&request.input)?
+        };
+        let instructions = if plain || p.structured_output == "schema" {
             request.instructions.to_owned()
         } else {
             format!(
@@ -168,9 +180,15 @@ impl ModelClient {
                     content.push(json!({"type":"input_image","image_url":format!("data:{mime};base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes)),"detail":"high"}));
                 }
                 let mut body = json!({"model":model,"store":false,"input":[{"role":"developer","content":[prefix]},{"role":"user","content":content}],"max_output_tokens":p.max_output_tokens});
-                if p.structured_output == "schema" {
+                if let Some(context) = request.context {
+                    body["input"][0]["content"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!({"type":"input_text","text":context}));
+                }
+                if !plain && p.structured_output == "schema" {
                     body["text"] = json!({"format":{"type":"json_schema","name":request.task,"strict":true,"schema":request.schema}});
-                } else if p.structured_output == "json" {
+                } else if !plain && p.structured_output == "json" {
                     body["text"] = json!({"format":{"type":"json_object"}});
                 }
                 body
@@ -185,7 +203,13 @@ impl ModelClient {
                     content.push(json!({"type":"image","source":{"type":"base64","media_type":mime,"data":base64::engine::general_purpose::STANDARD.encode(bytes)}}));
                 }
                 let mut body = json!({"model":model,"max_tokens":p.max_output_tokens,"system":[prefix],"messages":[{"role":"user","content":content}]});
-                if p.structured_output == "schema" {
+                if let Some(context) = request.context {
+                    body["system"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!({"type":"text","text":context}));
+                }
+                if !plain && p.structured_output == "schema" {
                     body["output_config"] =
                         json!({"format":{"type":"json_schema","schema":request.schema}});
                 }
@@ -197,9 +221,15 @@ impl ModelClient {
                     content.push(json!({"type":"image_url","image_url":{"url":format!("data:{mime};base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes))}}));
                 }
                 let mut body = json!({"model":model,"messages":[{"role":"system","content":instructions},{"role":"user","content":content}],"max_tokens":p.max_output_tokens});
-                if p.structured_output == "schema" {
+                if let Some(context) = request.context {
+                    body["messages"]
+                        .as_array_mut()
+                        .unwrap()
+                        .insert(1, json!({"role":"system","content":context}));
+                }
+                if !plain && p.structured_output == "schema" {
                     body["response_format"] = json!({"type":"json_schema","json_schema":{"name":request.task,"strict":true,"schema":request.schema}});
-                } else if p.structured_output == "json" {
+                } else if !plain && p.structured_output == "json" {
                     body["response_format"] = json!({"type":"json_object"});
                 }
                 body
@@ -323,9 +353,11 @@ impl ModelClient {
                 "Discarded a cached response that failed the current content contract",
             )?;
         }
+        let _slot = self.slots.acquire().await?;
         // UTF-8 bytes conservatively bound byte-BPE text tokenization. Image allowance
         // is separate and deliberately explicit; providers return actual billed usage.
         let input_estimate = (request.instructions.len()
+            + request.context.map_or(0, str::len)
             + serde_json::to_vec(&request.input)?.len()
             + serde_json::to_vec(&request.schema)?.len()
             + 1024) as u64
@@ -516,7 +548,11 @@ impl ModelClient {
                     ],
                 )?;
                 accounting.commit()?;
-                let result = decode(&value, &p.kind)?;
+                let result = if request.schema.is_null() {
+                    Value::String(decode_text(&value, &p.kind)?)
+                } else {
+                    decode(&value, &p.kind)?
+                };
                 validate_schema(&result, &request.schema, "$", 0)?;
                 if let Err(error) = (request.validate)(&result) {
                     library.db.execute(
@@ -553,6 +589,21 @@ impl ModelClient {
 }
 
 fn decode(value: &Value, kind: &str) -> Result<Value> {
+    serde_json::from_str(&decode_text(value, kind)?)
+        .context("Provider output does not match the required JSON contract")
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("Provider output limit reached; subdivide the source and continue")]
+pub struct OutputLimit;
+
+fn decode_text(value: &Value, kind: &str) -> Result<String> {
+    if value["incomplete_details"]["reason"] == "max_output_tokens"
+        || value["stop_reason"] == "max_tokens"
+        || value["choices"][0]["finish_reason"] == "length"
+    {
+        return Err(OutputLimit.into());
+    }
     let text = match kind {
         "responses" => {
             if value["status"].as_str() != Some("completed") {
@@ -590,7 +641,7 @@ fn decode(value: &Value, kind: &str) -> Result<Value> {
                 .to_owned()
         }
     };
-    serde_json::from_str(&text).context("Provider output does not match the required JSON contract")
+    Ok(text)
 }
 
 pub fn object_schema(properties: Value, required: &[&str]) -> Value {

@@ -72,8 +72,18 @@ pub fn publish(library: &Library, job: i64, config: &Config) -> Result<PathBuf> 
         .as_deref()
         .context("Missing document identity")?;
     let short = &id[..12.min(id.len())];
-    let filename = safe_filename(&config.output.filename, &metadata, short, job as u64)
-        .map_err(anyhow::Error::msg)?;
+    let sequence: Option<i64> = library
+        .db
+        .query_row("SELECT sequence FROM accessions WHERE job=?", [job], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    let template = config
+        .output
+        .filename
+        .replace("{sequence}", &format!("{:06}", sequence.unwrap_or(job)));
+    let filename =
+        safe_filename(&template, &metadata, short, job as u64).map_err(anyhow::Error::msg)?;
     let mut target = destination.join(filename);
     let prior: Option<(String, String, String)> = library
         .db
@@ -112,7 +122,7 @@ pub fn publish(library: &Library, job: i64, config: &Config) -> Result<PathBuf> 
     }
     let mut temp = tempfile::NamedTempFile::new_in(&destination)?;
     if config.output.frontmatter {
-        let values = json!({"id":id,"title":metadata.title,"summary":metadata.summary,"tags":metadata.tags,"class_code":metadata.class_code,"taxonomy":metadata.taxonomy,"source":state.source,"status":status});
+        let values = json!({"id":id,"title":metadata.title,"summary":metadata.summary,"tags":metadata.tags,"class_code":metadata.class_code,"taxonomy":metadata.taxonomy,"source":state.source,"status":status,"sequence":sequence});
         writeln!(temp, "---")?;
         for (field, key) in &config.output.fields {
             writeln!(temp, "{key}: {}", serde_json::to_string(&values[field])?)?;
@@ -150,7 +160,27 @@ pub fn publish(library: &Library, job: i64, config: &Config) -> Result<PathBuf> 
         let block = library
             .accepted(job, ordinal as u64)?
             .context("Missing accepted block")?;
-        if let Content::Figure { asset, .. } = &block.content {
+        let mut assets = Vec::new();
+        match &block.content {
+            Content::Figure { asset, .. } => assets.push(asset.clone()),
+            Content::Markdown { text } | Content::MarkdownProse { text } => {
+                for event in
+                    pulldown_cmark::Parser::new_ext(text, librarian_core::markdown_options())
+                {
+                    if let pulldown_cmark::Event::Start(pulldown_cmark::Tag::Image {
+                        dest_url, ..
+                    }) = event
+                        && dest_url.starts_with("assets/")
+                        && !dest_url.contains(['\\', ':'])
+                        && !dest_url.split('/').any(|p| p == "..")
+                    {
+                        assets.push(dest_url.into_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+        for asset in &assets {
             let name = Path::new(asset)
                 .file_name()
                 .context("Invalid asset filename")?;

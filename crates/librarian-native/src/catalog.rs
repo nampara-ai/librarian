@@ -604,7 +604,7 @@ pub async fn verify(config: &Config, root: &std::path::Path) -> Result<Value> {
     );
     let expected = order.iter().map(|i| colors[*i].0).collect::<Vec<_>>();
     let client = ModelClient::new(&probe)?;
-    client.request(&library,job,Request {task:"setup_vision_check",instructions:"Identify the solid color of each of the four equal squares in this image. Return JSON with colors in this order: top left, top right, bottom left, bottom right. Do not guess from the instructions; use the image.",input:json!({"operation":"connection_check"}),schema,image:Some((png.get_ref(),"image/png")),validate:&|value| {
+    client.request(&library,job,Request { context: None,task:"setup_vision_check",instructions:"Identify the solid color of each of the four equal squares in this image. Return JSON with colors in this order: top left, top right, bottom left, bottom right. Do not guess from the instructions; use the image.",input:json!({"operation":"connection_check"}),schema,image:Some((png.get_ref(),"image/png")),validate:&|value| {
         let actual=value["colors"].as_array().context("Missing colors")?.iter().filter_map(Value::as_str).collect::<Vec<_>>();
         if actual!=expected {bail!("The model's image response did not match the connection-check image. Choose a different model or retry.");}Ok(())
     }}).await?;

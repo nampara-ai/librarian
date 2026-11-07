@@ -126,6 +126,14 @@ enum Action {
         content: String,
         chunk_bytes: usize,
     },
+    EditorialPlan {
+        content: String,
+        chunk_bytes: usize,
+    },
+    EditorialHandoff {
+        content: String,
+    },
+    EditorialContract,
     InspectEdit {
         source: String,
         candidate: String,
@@ -185,6 +193,12 @@ pub fn execute_json(input: &str) -> String {
                         else {Ok(serde_json::json!({"ranges":librarian_core::corpus::split_text(&content,chunk_bytes)}))}
                     }
                     Action::InspectEdit {source,candidate} => Ok(serde_json::json!({"findings":librarian_core::corpus::edit_findings(&source,&candidate)})),
+                    Action::EditorialPlan {content,chunk_bytes} => {
+                        if !(4..=32000).contains(&chunk_bytes){Err(AppError::Corpus("chunk_bytes must be 4..32000".into()))}
+                        else{Ok(serde_json::json!({"ranges":librarian_core::editorial::ranges(&content,chunk_bytes)}))}
+                    },
+                    Action::EditorialHandoff {content} => Ok(serde_json::json!(librarian_core::editorial::handoff(&content))),
+                    Action::EditorialContract => Ok(serde_json::json!({"version":librarian_core::editorial::VERSION,"copyeditor":librarian_core::editorial::COPYEDITOR,"visual_reader":librarian_core::editorial::VISION,"typesetter":librarian_core::editorial::TYPESETTER})),
                     Action::Filename {template,metadata,id,accession} => librarian_core::corpus::safe_filename(&template,&metadata,&id,accession).map(|name|serde_json::json!({"filename":name})).map_err(AppError::Corpus),
                 };
                 match result {

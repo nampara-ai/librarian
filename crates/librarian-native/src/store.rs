@@ -79,6 +79,12 @@ impl Library {
             CREATE TABLE IF NOT EXISTS request_reservations(attempt INTEGER PRIMARY KEY REFERENCES attempts(id), job INTEGER NOT NULL REFERENCES jobs(id), output_tokens INTEGER NOT NULL, cost REAL, settled INTEGER NOT NULL DEFAULT 0);
             CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(job UNINDEXED, ordinal UNINDEXED, title, body, tokenize='unicode61 remove_diacritics 2');")?;
         let version: i64 = db.query_row("SELECT version FROM schema_version", [], |r| r.get(0))?;
+        db.execute_batch("CREATE TABLE IF NOT EXISTS editorial_runs(job INTEGER PRIMARY KEY REFERENCES jobs(id), version TEXT NOT NULL, extraction_done INTEGER NOT NULL DEFAULT 0, extraction_error TEXT, provisional TEXT);
+            CREATE TABLE IF NOT EXISTS editorial_pages(job INTEGER NOT NULL REFERENCES jobs(id), page INTEGER NOT NULL, observation INTEGER NOT NULL, part INTEGER NOT NULL, image TEXT NOT NULL, native TEXT NOT NULL, ocr TEXT, reading TEXT, cleaned TEXT, PRIMARY KEY(job,page), UNIQUE(job,observation,part));
+            CREATE TABLE IF NOT EXISTS editorial_observations(job INTEGER NOT NULL, ordinal INTEGER NOT NULL, PRIMARY KEY(job,ordinal));
+            CREATE TABLE IF NOT EXISTS editorial_stages(job INTEGER NOT NULL REFERENCES jobs(id), stage TEXT NOT NULL, unit TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(job,stage,unit));
+            CREATE TABLE IF NOT EXISTS category_sequences(class TEXT PRIMARY KEY, next INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS accessions(job INTEGER PRIMARY KEY REFERENCES jobs(id), class TEXT NOT NULL, sequence INTEGER NOT NULL);")?;
         if version != 1 {
             bail!("Library schema {version} is unsupported by this binary");
         }
@@ -135,7 +141,12 @@ impl Library {
         let s: String = self
             .db
             .query_row("SELECT config FROM jobs WHERE id=?", [id], |r| r.get(0))?;
-        Ok(serde_json::from_str(&s)?)
+        let value: serde_json::Value = serde_json::from_str(&s)?;
+        let mut config: crate::config::Config = serde_json::from_value(value.clone())?;
+        if value["processing"].get("pipeline").is_none() {
+            config.processing.pipeline = "archival".into();
+        }
+        Ok(config)
     }
     pub fn jobs(&self, limit: usize) -> Result<Vec<Job>> {
         let mut q = self.db.prepare("SELECT id,source,destination,status,stage,done,total,document,output,error,requests,cache_hits,input_tokens,output_tokens,cached_tokens,cost,created,updated FROM jobs ORDER BY id DESC LIMIT ?")?;

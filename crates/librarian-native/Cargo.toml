@@ -40,3 +40,4 @@ csv.workspace = true
 tiff.workspace = true
 keyring.workspace = true
 zeroize.workspace = true
+fontdue = "0.9.3"
