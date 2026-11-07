@@ -859,12 +859,12 @@ fn preferences(
                 5 => {
                     if let Some(v) = ui::input(
                         t,
-                        "Copyediting style",
-                        "Describe the copyediting rules. The existing CMOS instructions are shown below.",
-                        &config.processing.style,
+                        "Editorial house style",
+                        "Set preferences for spelling, punctuation, register and formatting. The Copyeditor and Reviewer have separate built-in roles.",
+                        &config.processing.house_style,
                         false,
                     )? {
-                        config.processing.style = v.to_string();
+                        config.processing.house_style = v.to_string();
                     }
                 }
                 7 => {

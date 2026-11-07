@@ -134,6 +134,17 @@ enum Action {
         content: String,
     },
     EditorialContract,
+    ProtectEditorial {
+        content: String,
+    },
+    RestoreEditorial {
+        content: String,
+        artifacts: Vec<librarian_core::editorial::protection::Artifact>,
+    },
+    ReviseEditorial {
+        content: String,
+        revision: librarian_core::editorial::contract::Revision,
+    },
     InspectEdit {
         source: String,
         candidate: String,
@@ -198,7 +209,10 @@ pub fn execute_json(input: &str) -> String {
                         else{Ok(serde_json::json!({"ranges":librarian_core::editorial::ranges(&content,chunk_bytes)}))}
                     },
                     Action::EditorialHandoff {content} => Ok(serde_json::json!(librarian_core::editorial::handoff(&content))),
-                    Action::EditorialContract => Ok(serde_json::json!({"version":librarian_core::editorial::VERSION,"copyeditor":librarian_core::editorial::COPYEDITOR,"visual_reader":librarian_core::editorial::VISION,"typesetter":librarian_core::editorial::TYPESETTER})),
+                    Action::EditorialContract => Ok(serde_json::json!({"version":librarian_core::editorial::VERSION,"copyeditor":librarian_core::editorial::COPYEDITOR,"copyeditor_version":librarian_core::editorial::COPYEDITOR_VERSION,"reviewer":librarian_core::editorial::REVIEWER,"reviewer_version":librarian_core::editorial::REVIEWER_VERSION,"protocol":librarian_core::editorial::contract::PROTOCOL,"response_schema":librarian_core::editorial::contract::schema(),"visual_reader":librarian_core::editorial::VISION,"typesetter":librarian_core::editorial::TYPESETTER_V2})),
+                    Action::ProtectEditorial {content}=>Ok(serde_json::json!(librarian_core::editorial::protection::protect(&content))),
+                    Action::RestoreEditorial {content,artifacts}=>librarian_core::editorial::protection::restore(&content,&artifacts).map(|text|serde_json::json!({"markdown":text})).map_err(AppError::Corpus),
+                    Action::ReviseEditorial {content,revision}=>librarian_core::editorial::contract::revised(&content,&revision).map(|text|serde_json::json!({"markdown":text})).map_err(AppError::Corpus),
                     Action::Filename {template,metadata,id,accession} => librarian_core::corpus::safe_filename(&template,&metadata,&id,accession).map(|name|serde_json::json!({"filename":name})).map_err(AppError::Corpus),
                 };
                 match result {

@@ -153,6 +153,11 @@ pub fn publish(library: &Library, job: i64, config: &Config) -> Result<PathBuf> 
     let mut previous_page = 0;
     let mut previous_list = false;
     let mut review_notes = Vec::new();
+    let continuous_editorial: bool = library.db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM editorial_runs WHERE job=? AND version='editorial-v2')",
+        [job],
+        |r| r.get(0),
+    )?;
     for ordinal in 0..count {
         if !library.active(job)? {
             bail!("Job paused or cancelled before publication");
@@ -212,7 +217,7 @@ pub fn publish(library: &Library, job: i64, config: &Config) -> Result<PathBuf> 
         }
         let content = render_content(&block.content).map_err(anyhow::Error::msg)?;
         let is_list = matches!(block.content, Content::ListItem { .. });
-        if ordinal > 0 {
+        if ordinal > 0 && !continuous_editorial {
             write!(
                 temp,
                 "{}",
@@ -225,7 +230,17 @@ pub fn publish(library: &Library, job: i64, config: &Config) -> Result<PathBuf> 
                 }
             )?;
         }
-        write!(temp, "{}", content.trim_end_matches('\n'))?;
+        // V2 passages are already continuous, source-owned Markdown. Rejoining
+        // them as independent blocks can change literal data or page continuity.
+        write!(
+            temp,
+            "{}",
+            if continuous_editorial {
+                &content
+            } else {
+                content.trim_end_matches('\n')
+            }
+        )?;
         previous_list = is_list;
         if config.output.review_notes && !block.findings.is_empty() {
             review_notes.push(format!(

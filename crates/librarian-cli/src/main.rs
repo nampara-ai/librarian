@@ -111,6 +111,20 @@ enum Command {
         #[arg(long)]
         page: Option<i64>,
     },
+    /// Print an immutable role prompt; omit the role to list versions and hashes.
+    Prompts { role: Option<String> },
+    /// Inspect editorial request packets, evidence, interventions and revisions.
+    Editorial { id: i64 },
+    /// Save an expert correction privately for later calibration; does not re-export.
+    Feedback {
+        id: i64,
+        #[arg(long)]
+        segment: String,
+        #[arg(long)]
+        replacement: PathBuf,
+        #[arg(long)]
+        reason: String,
+    },
     /// Browse the document catalog and category accession numbers.
     Catalog,
     /// Show library totals by status and classification.
@@ -200,6 +214,39 @@ async fn run(cli: Cli) -> Result<u8> {
     let config_path = location.config.clone();
     let command = cli.command.unwrap_or(Command::Tui);
     match command {
+        Command::Prompts { ref role } => {
+            use librarian_core::editorial;
+            let roles = [
+                (
+                    "copyeditor",
+                    editorial::COPYEDITOR_VERSION,
+                    editorial::COPYEDITOR,
+                ),
+                ("reviewer", editorial::REVIEWER_VERSION, editorial::REVIEWER),
+                (
+                    "protocol",
+                    "editorial-protocol-v2",
+                    editorial::contract::PROTOCOL,
+                ),
+            ];
+            if let Some(name) = role {
+                let (_, version, text) = roles
+                    .iter()
+                    .find(|(r, v, _)| r == name || v == name)
+                    .context("Role must be copyeditor, reviewer or protocol")?;
+                if cli.json {
+                    println!(
+                        "{}",
+                        serde_json::json!({"version":version,"sha256":editorial::contract::digest(text),"text":text})
+                    );
+                } else {
+                    print!("{text}");
+                }
+            } else {
+                println!("{}",serde_json::to_string_pretty(&roles.iter().map(|(role,version,text)|serde_json::json!({"role":role,"version":version,"sha256":editorial::contract::digest(text)})).collect::<Vec<_>>())?);
+            }
+            return Ok(0);
+        }
         Command::Convert { source, output } => {
             let doc = convert_file(&source)?;
             if let Some(path) = output {
@@ -397,6 +444,25 @@ async fn run(cli: Cli) -> Result<u8> {
                 else{serde_json::json!({"page":number,"image":image,"native_bytes":native.len(),"ocr_done":ocr.is_some(),"visual_done":reading.is_some(),"copyedit_done":cleaned.is_some()})})
             })?.collect::<Result<Vec<_>,_>>()?;
             println!("{}", serde_json::to_string_pretty(&rows)?);
+        }
+        Command::Editorial { id } => println!(
+            "{}",
+            serde_json::to_string_pretty(&librarian_native::editorial::v2::inspect(&library, id)?)?
+        ),
+        Command::Feedback {
+            id,
+            segment,
+            replacement,
+            reason,
+        } => {
+            let text = std::fs::read_to_string(&replacement)
+                .with_context(|| format!("Read expert correction {}", replacement.display()))?;
+            let record =
+                librarian_native::editorial::v2::feedback(&library, id, &segment, &text, &reason)?;
+            println!(
+                "{}",
+                serde_json::json!({"feedback_id":record,"job":id,"segment":segment,"publication_changed":false})
+            );
         }
         Command::Catalog => {
             let mut query=library.db.prepare("SELECT j.id,j.source,j.output,j.status,m.payload,a.class,a.sequence FROM jobs j LEFT JOIN job_metadata m ON m.job=j.id LEFT JOIN accessions a ON a.job=j.id WHERE j.status IN ('complete','needs_review') ORDER BY COALESCE(a.class,''),j.id")?;

@@ -1,5 +1,6 @@
 //! Durable parallel readings followed by ordered editorial synthesis.
 pub mod pages;
+pub mod v2;
 use crate::{
     config::Config,
     extract::{self, Observation},
@@ -210,12 +211,22 @@ pub async fn run(
         // These futures share one request semaphore and one rate/budget gateway.
         // Native copyediting and page vision proceed independently; synthesis can
         // consume the next ready page without waiting for the rest of the book.
-        tokio::try_join!(
-            copyeditor(library, job, config, client),
-            visual_reader(library, job, config, client),
-            typesetter(library, job, config, client)
-        )?;
-        reviewer(library, job, config, client).await?;
+        if v2::enabled(library, job)? {
+            v2::freeze_contract(library, job, config)?;
+            tokio::try_join!(
+                v2::copyeditor(library, job, config, client),
+                visual_reader(library, job, config, client),
+                v2::typesetter(library, job, config, client)
+            )?;
+            v2::reviewer(library, job, config, client).await?;
+        } else {
+            tokio::try_join!(
+                copyeditor(library, job, config, client),
+                visual_reader(library, job, config, client),
+                typesetter(library, job, config, client)
+            )?;
+            reviewer(library, job, config, client).await?;
+        }
         final_metadata(library, job, config, client).await?;
         if stop.load(Ordering::Relaxed) {
             bail!("Processing stopped; editorial work retained");
@@ -1023,6 +1034,10 @@ async fn reviewer(
         save(library, job, "review", &index.to_string(), &next)?;
         handoff = next;
     }
+    materialize_review(library, job, count)
+}
+
+fn materialize_review(library: &Library, job: i64, count: i64) -> Result<()> {
     // Materialize only complete reviewed passages. No numeric/quote rollback gate.
     let tx = library.db.unchecked_transaction()?;
     checkpoint(library, job)?;

@@ -85,6 +85,18 @@ impl Library {
             CREATE TABLE IF NOT EXISTS editorial_stages(job INTEGER NOT NULL REFERENCES jobs(id), stage TEXT NOT NULL, unit TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(job,stage,unit));
             CREATE TABLE IF NOT EXISTS category_sequences(class TEXT PRIMARY KEY, next INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS accessions(job INTEGER PRIMARY KEY REFERENCES jobs(id), class TEXT NOT NULL, sequence INTEGER NOT NULL);")?;
+        db.execute_batch("CREATE TABLE IF NOT EXISTS editorial_sources(job INTEGER NOT NULL REFERENCES jobs(id), id TEXT NOT NULL, page INTEGER NOT NULL, kind TEXT NOT NULL, parent TEXT NOT NULL, start INTEGER NOT NULL, end INTEGER NOT NULL, sha256 TEXT NOT NULL, content TEXT NOT NULL, PRIMARY KEY(job,id));
+            CREATE INDEX IF NOT EXISTS editorial_sources_page ON editorial_sources(job,page,kind);
+            CREATE TABLE IF NOT EXISTS editorial_source_links(job INTEGER NOT NULL,child TEXT NOT NULL,parent TEXT NOT NULL,relation TEXT NOT NULL,PRIMARY KEY(job,child,parent,relation));
+            CREATE TABLE IF NOT EXISTS editorial_packets(job INTEGER NOT NULL, stage TEXT NOT NULL, unit TEXT NOT NULL, round INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(job,stage,unit,round));
+            CREATE TABLE IF NOT EXISTS editorial_results(job INTEGER NOT NULL, stage TEXT NOT NULL, unit TEXT NOT NULL, input_hash TEXT NOT NULL, markdown TEXT NOT NULL, response TEXT NOT NULL, PRIMARY KEY(job,stage,unit));
+            CREATE TABLE IF NOT EXISTS editorial_ledger(job INTEGER NOT NULL, stage TEXT NOT NULL, category TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, unit TEXT NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY(job,stage,category,key));
+            CREATE TABLE IF NOT EXISTS editorial_coverage(job INTEGER NOT NULL, stage TEXT NOT NULL, unit TEXT NOT NULL, source_id TEXT NOT NULL, disposition TEXT NOT NULL, reason TEXT NOT NULL, PRIMARY KEY(job,stage,unit,source_id));
+            CREATE TABLE IF NOT EXISTS editorial_owned(job INTEGER NOT NULL, stage TEXT NOT NULL, unit TEXT NOT NULL, source_id TEXT NOT NULL, is_primary INTEGER NOT NULL, status TEXT NOT NULL, PRIMARY KEY(job,stage,unit,source_id));
+            CREATE UNIQUE INDEX IF NOT EXISTS editorial_unique_ownership ON editorial_owned(job,stage,source_id) WHERE status='complete' AND is_primary=1;
+            CREATE TABLE IF NOT EXISTS editorial_revisions(id INTEGER PRIMARY KEY, job INTEGER NOT NULL, unit TEXT NOT NULL, target TEXT NOT NULL, before_hash TEXT NOT NULL, after_hash TEXT NOT NULL, payload TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS editorial_interventions(id INTEGER PRIMARY KEY, job INTEGER NOT NULL, stage TEXT NOT NULL, unit TEXT NOT NULL, payload TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS editorial_feedback(id INTEGER PRIMARY KEY, job INTEGER NOT NULL REFERENCES jobs(id), segment TEXT NOT NULL, original_source TEXT NOT NULL, model_text TEXT NOT NULL, corrected_text TEXT NOT NULL, reason TEXT NOT NULL, created INTEGER NOT NULL);")?;
         if version != 1 {
             bail!("Library schema {version} is unsupported by this binary");
         }
