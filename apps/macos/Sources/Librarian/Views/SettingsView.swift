@@ -197,102 +197,7 @@ struct SettingsView: View {
 
             Divider()
 
-            DisclosureGroup("Advanced") {
-                VStack(alignment: .leading, spacing: 10) {
-                    Picker("Cleaning style", selection: $coherenceMode) {
-                        Text("Fastest").tag("fast")
-                        Text("Balanced").tag("balanced")
-                        Text("Most careful").tag("max-coherence")
-                    }
-                    .onChange(of: coherenceMode) {
-                        guard engineOptionsLoaded else { return }
-                        Task { await applyEngineOptions() }
-                    }
-                    .help(
-                        "How much surrounding context each part of a document "
-                            + "gets while cleaning. Most careful reads strictly in "
-                            + "order; Fastest cleans parts in parallel."
-                    )
-                    Picker("PDF reading", selection: $pdfEngine) {
-                        Text("Text layer (recommended)").tag("auto")
-                        Text("Layout engine (liteparse)").tag("liteparse")
-                        Text("Legacy text layer").tag("legacy")
-                    }
-                    .onChange(of: pdfEngine) {
-                        guard engineOptionsLoaded else { return }
-                        Task { await applyEngineOptions() }
-                    }
-                    .help(
-                        "How PDF pages are read. The text layer keeps every word "
-                            + "of a PDF's own text and uses OCR only on scanned pages. "
-                            + "The layout engine rebuilds tables and headings as "
-                            + "Markdown; any page where it drops words is taken from "
-                            + "the text layer instead."
-                    )
-                    if pdfEngine == "auto" {
-                        Toggle("Rebuild tables and headings with the layout engine", isOn: $layoutEnhancer)
-                            .onChange(of: layoutEnhancer) {
-                                guard engineOptionsLoaded else { return }
-                                Task { await applyEngineOptions() }
-                            }
-                            .help(
-                                "Runs the layout engine on top of the text layer and keeps "
-                                    + "its Markdown only for pages that retain at least 95% "
-                                    + "of the text. Slower; off by default."
-                            )
-                    }
-                    Toggle("Read figures, tables and equations with AI vision", isOn: $figureVisionEnabled)
-                        .onChange(of: figureVisionEnabled) {
-                            guard engineOptionsLoaded else { return }
-                            Task { await applyEngineOptions() }
-                        }
-                        .help(
-                            "Sends PDF pages that carry images, charts, diagrams, "
-                                + "tables, math, or no text layer to your AI provider's "
-                                + "vision model, which returns figure descriptions, "
-                                + "Markdown tables, and LaTeX equations. The page text is "
-                                + "replaced only when the reply keeps the PDF's own words. "
-                                + "Needs a vision-capable model; costs extra tokens per page."
-                        )
-                    if figureVisionEnabled {
-                        TextField(
-                            "Vision model (blank = cleaning model)",
-                            text: $figureVisionModel,
-                            prompt: Text("optional")
-                        )
-                        .textFieldStyle(.roundedBorder)
-                        .autocorrectionDisabled()
-                        .onSubmit {
-                            Task { await applyEngineOptions() }
-                        }
-                    }
-                    Divider()
-                    Toggle("Also keep original files in the destination", isOn: $keepOriginals)
-                    Toggle("Use the built-in engine", isOn: $useEmbedded)
-                        .onChange(of: useEmbedded) {
-                            // External mode needs an address; never allow the
-                            // unreachable "off + empty URL" state.
-                            if !useEmbedded && externalURL.trimmingCharacters(
-                                in: .whitespacesAndNewlines
-                            ).isEmpty {
-                                externalURL = AppModel.defaultBaseURL
-                            }
-                            Task { await model.applyBackendPreference() }
-                        }
-                    TextField(
-                        "Remote Librarian server URL",
-                        text: $externalURL,
-                        prompt: Text(AppModel.defaultBaseURL)
-                    )
-                    .textFieldStyle(.roundedBorder)
-                    .autocorrectionDisabled()
-                    .disabled(useEmbedded)
-                    SecureField("Remote server API key", text: $externalKey)
-                        .textFieldStyle(.roundedBorder)
-                        .disabled(useEmbedded)
-                }
-                .padding(.top, 8)
-            }
+            advancedSection
         }
         .padding(20)
         .frame(width: 480)
@@ -300,6 +205,126 @@ struct SettingsView: View {
     }
 
     // MARK: - Pieces
+
+    // Kept as separate properties: one large ViewBuilder closure with every
+    // control inline exceeds what the Swift type checker will resolve.
+    private static let cleaningStyleHelp = """
+        How much surrounding context each part of a document gets while cleaning. \
+        Most careful reads strictly in order; Fastest cleans parts in parallel.
+        """
+    private static let pdfReadingHelp = """
+        How PDF pages are read. The text layer keeps every word of a PDF's own text and \
+        uses OCR only on scanned pages. The layout engine rebuilds tables and headings as \
+        Markdown; any page where it drops words is taken from the text layer instead.
+        """
+    private static let layoutEnhancerHelp = """
+        Runs the layout engine on top of the text layer and keeps its Markdown only for \
+        pages that retain at least 95% of the text. Slower; off by default.
+        """
+    private static let visionHelp = """
+        Sends PDF pages that carry images, charts, diagrams, tables, math, or no text \
+        layer to your AI provider's vision model, which returns figure descriptions, \
+        Markdown tables, and LaTeX equations. The page text is replaced only when the \
+        reply keeps the PDF's own words. Needs a vision-capable model; costs extra tokens \
+        per page.
+        """
+
+    private var advancedSection: some View {
+        DisclosureGroup("Advanced") {
+            VStack(alignment: .leading, spacing: 10) {
+                cleaningStyleControls
+                pdfReadingControls
+                visionControls
+                Divider()
+                backendControls
+            }
+            .padding(.top, 8)
+        }
+    }
+
+    private var cleaningStyleControls: some View {
+        Picker("Cleaning style", selection: $coherenceMode) {
+            Text("Fastest").tag("fast")
+            Text("Balanced").tag("balanced")
+            Text("Most careful").tag("max-coherence")
+        }
+        .onChange(of: coherenceMode) {
+            guard engineOptionsLoaded else { return }
+            Task { await applyEngineOptions() }
+        }
+        .help(Self.cleaningStyleHelp)
+    }
+
+    @ViewBuilder
+    private var pdfReadingControls: some View {
+        Picker("PDF reading", selection: $pdfEngine) {
+            Text("Text layer (recommended)").tag("auto")
+            Text("Layout engine (liteparse)").tag("liteparse")
+            Text("Legacy text layer").tag("legacy")
+        }
+        .onChange(of: pdfEngine) {
+            guard engineOptionsLoaded else { return }
+            Task { await applyEngineOptions() }
+        }
+        .help(Self.pdfReadingHelp)
+        if pdfEngine == "auto" {
+            Toggle("Rebuild tables and headings with the layout engine", isOn: $layoutEnhancer)
+                .onChange(of: layoutEnhancer) {
+                    guard engineOptionsLoaded else { return }
+                    Task { await applyEngineOptions() }
+                }
+                .help(Self.layoutEnhancerHelp)
+        }
+    }
+
+    @ViewBuilder
+    private var visionControls: some View {
+        Toggle("Read figures, tables and equations with AI vision", isOn: $figureVisionEnabled)
+            .onChange(of: figureVisionEnabled) {
+                guard engineOptionsLoaded else { return }
+                Task { await applyEngineOptions() }
+            }
+            .help(Self.visionHelp)
+        if figureVisionEnabled {
+            TextField(
+                "Vision model (blank = cleaning model)",
+                text: $figureVisionModel,
+                prompt: Text("optional")
+            )
+            .textFieldStyle(.roundedBorder)
+            .autocorrectionDisabled()
+            .onSubmit {
+                Task { await applyEngineOptions() }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var backendControls: some View {
+        Toggle("Also keep original files in the destination", isOn: $keepOriginals)
+        Toggle("Use the built-in engine", isOn: $useEmbedded)
+            .onChange(of: useEmbedded) {
+                // External mode needs an address; never allow the
+                // unreachable "off + empty URL" state.
+                if !useEmbedded && externalURL.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                ).isEmpty {
+                    externalURL = AppModel.defaultBaseURL
+                }
+                Task { await model.applyBackendPreference() }
+            }
+        TextField(
+            "Remote Librarian server URL",
+            text: $externalURL,
+            prompt: Text(AppModel.defaultBaseURL)
+        )
+        .textFieldStyle(.roundedBorder)
+        .autocorrectionDisabled()
+        .disabled(useEmbedded)
+        SecureField("Remote server API key", text: $externalKey)
+            .textFieldStyle(.roundedBorder)
+            .disabled(useEmbedded)
+    }
 
     @ViewBuilder
     private var statusLabel: some View {
