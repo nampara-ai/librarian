@@ -273,7 +273,14 @@ async fn run(cli: Cli) -> Result<u8> {
             let n = library.control(id, "resume")?;
             println!("{}", serde_json::json!({"resumed":n}));
             if start {
+                let jobs = library
+                    .jobs(100000)?
+                    .into_iter()
+                    .filter(|j| matches!(j.status.as_str(), "queued" | "running"))
+                    .map(|j| j.id)
+                    .collect::<Vec<_>>();
                 worker(&library, cli.json, false).await?;
+                return result_code(&library, &jobs);
             }
         }
         Command::Retry { id, start } => {
