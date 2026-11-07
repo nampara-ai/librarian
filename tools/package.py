@@ -12,6 +12,8 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
@@ -38,6 +40,19 @@ def download(spec, cache):
     archive = cache / filename
     if archive.is_file() and digest(archive) == spec["sha256"]:
         return archive
+    for attempt in range(3):
+        try:
+            return download_once(spec, cache, archive)
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+            if isinstance(error, urllib.error.HTTPError) and error.code not in (403, 408, 429, 500, 502, 503, 504):
+                raise
+            if attempt == 2:
+                raise
+            print(f"Retrying {spec['name']} after download failure: {error}", flush=True)
+            time.sleep(2 ** attempt)
+
+
+def download_once(spec, cache, archive):
     pending = None
     try:
         with tempfile.NamedTemporaryFile(dir=cache, delete=False) as output:
@@ -129,19 +144,26 @@ def windows_runtime(folder):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("target", choices=PLATFORMS)
+    parser.add_argument("target", nargs="?", choices=PLATFORMS)
+    parser.add_argument("--fetch-common", action="store_true", help="Download and verify the shared OCR model archives without building a package")
     parser.add_argument("--binary", type=Path)
     parser.add_argument("--output", type=Path, default=ROOT / "dist")
     parser.add_argument("--check-engines",action="store_true",help="Initialize the packaged native libraries and real OCR sessions before archiving")
     args = parser.parse_args()
+    specs = json.loads((ROOT / "crates/librarian-native/src/engine-assets.json").read_text())
+    cache = ROOT / ".build-assets"
+    cache.mkdir(exist_ok=True)
+    if args.fetch_common:
+        for spec in specs["common"]:
+            print(download(spec, cache))
+        return
+    if args.target is None:
+        parser.error("target is required unless --fetch-common is specified")
     executable = "librarian.exe" if "windows" in args.target else "librarian"
     binary = args.binary or ROOT / "target" / args.target / "release" / executable
     if not binary.is_file():
         raise SystemExit(f"Build the release executable first: {binary}")
-    specs = json.loads((ROOT / "crates/librarian-native/src/engine-assets.json").read_text())
     assets = specs["platforms"][PLATFORMS[args.target]] + specs["common"]
-    cache = ROOT / ".build-assets"
-    cache.mkdir(exist_ok=True)
     args.output.mkdir(parents=True, exist_ok=True)
     name = f"librarian-{args.target}"
     with tempfile.TemporaryDirectory(dir=args.output) as staging:

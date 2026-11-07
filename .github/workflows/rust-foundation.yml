@@ -31,8 +31,27 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  models:
+    name: Verified shared OCR models
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Fetch pinned common model archives
+        run: python tools/package.py --fetch-common
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: verified-ocr-models
+          path: .build-assets/*_onnx_infer.tar
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
+
   native:
     name: Native (${{ matrix.target }})
+    needs: models
     strategy:
       fail-fast: false
       matrix:
@@ -55,6 +74,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: verified-ocr-models
+          path: .build-assets
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
       - name: Check formatting
