@@ -11,11 +11,110 @@ use fontdue::{
 use image::{DynamicImage, Rgb, RgbImage};
 use rusqlite::{OptionalExtension, params};
 use std::{
+    cell::RefCell,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::OnceLock,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
+
+thread_local! {static CANCELLATION:RefCell<Option<Arc<AtomicBool>>>=const {RefCell::new(None)};}
+pub(super) struct Cancellation(Option<Arc<AtomicBool>>);
+impl Cancellation {
+    pub(super) fn enter(flag: Arc<AtomicBool>) -> Self {
+        Self(CANCELLATION.with(|slot| slot.replace(Some(flag))))
+    }
+}
+impl Drop for Cancellation {
+    fn drop(&mut self) {
+        CANCELLATION.with(|slot| slot.replace(self.0.take()));
+    }
+}
+fn cancelled() -> bool {
+    CANCELLATION.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Force the pause/resume race: the old producer wakes after the database
+    // already says running again. Its scoped cancellation must still prevent
+    // publishing stale pages, without poisoning a subsequent producer.
+    #[test]
+    fn cancelled_producer_cannot_publish_into_resumed_job() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("library");
+        let source = temp.path().join("source.txt");
+        std::fs::write(&source, "Reader continuity.").unwrap();
+        let library = Library::open(&root).unwrap();
+        let mut config = Config::default();
+        config.processing.prepare_only = true;
+        let job = crate::pipeline::queue(
+            &library,
+            &source,
+            &temp.path().join("output"),
+            &config,
+            false,
+            true,
+        )
+        .unwrap()[0];
+        library
+            .db
+            .execute("UPDATE jobs SET status='running' WHERE id=?", [job])
+            .unwrap();
+        image::RgbImage::from_pixel(8, 8, image::Rgb([255, 255, 255]))
+            .save(root.join("assets/page.png"))
+            .unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let library = Library::open(&root).unwrap();
+            let guard = Cancellation::enter(flag);
+            ready_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            assert!(insert(&library, job, 0, 0, "page.png", "stale", &config).is_err());
+            drop(guard);
+            insert(&library, job, 0, 0, "page.png", "fresh", &config).unwrap();
+        });
+        ready_rx.recv().unwrap();
+        library
+            .db
+            .execute("UPDATE jobs SET status='paused' WHERE id=?", [job])
+            .unwrap();
+        cancel.store(true, Ordering::Relaxed);
+        library
+            .db
+            .execute("UPDATE jobs SET status='running' WHERE id=?", [job])
+            .unwrap();
+        release_tx.send(()).unwrap();
+        worker.join().unwrap();
+        let pages: Vec<String> = library
+            .db
+            .prepare("SELECT native FROM editorial_pages WHERE job=?")
+            .unwrap()
+            .query_map([job], |row| row.get(0))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert_eq!(pages, ["fresh"]);
+    }
+}
+pub(crate) fn checkpoint(library: &Library, job: i64) -> Result<()> {
+    if cancelled() || !library.active(job)? {
+        bail!("Page producer stopped; committed work retained");
+    }
+    Ok(())
+}
 
 pub fn work(library: &Library, job: i64) -> PathBuf {
     library
@@ -63,6 +162,8 @@ pub fn office_executable(root: &Path, config: &Config) -> Option<PathBuf> {
 }
 
 pub fn office_pdf(library: &Library, job: i64, source: &Path, config: &Config) -> Result<PathBuf> {
+    checkpoint(library, job)?;
+    library.progress(job, "laying out office pages", 0, 0)?;
     let folder = work(library, job).join("office");
     std::fs::create_dir_all(&folder)?;
     let target = folder
@@ -98,7 +199,7 @@ pub fn office_pdf(library: &Library, job: i64, source: &Path, config: &Config) -
     if let Some(program) = executable.parent() {
         let libs = program.parent().unwrap_or(program).join("lib");
         if libs.is_dir() {
-            cmd.env("LD_LIBRARY_PATH", libs);
+            cmd.env("LD_LIBRARY_PATH", std::env::join_paths([program, &libs])?);
         }
     }
     let mut child = cmd.spawn().context("Cannot start Office layout engine")?;
@@ -107,13 +208,14 @@ pub fn office_pdf(library: &Library, job: i64, source: &Path, config: &Config) -
         if let Some(status) = child.try_wait()? {
             if !status.success() {
                 bail!(
-                    "Office conversion failed; see {}",
+                    "Office conversion failed ({status}): {}. Full log: {}",
+                    conversion_error(&folder),
                     folder.join("conversion.log").display()
                 );
             }
             break;
         }
-        if !library.active(job)? || started.elapsed() > Duration::from_secs(600) {
+        if cancelled() || !library.active(job)? || started.elapsed() > Duration::from_secs(600) {
             let _ = child.kill();
             let _ = child.wait();
             bail!("Office conversion stopped or exceeded its ten-minute deadline; source retained");
@@ -123,7 +225,8 @@ pub fn office_pdf(library: &Library, job: i64, source: &Path, config: &Config) -
     let rendered = staging.path().join(target.file_name().unwrap());
     if !rendered.is_file() {
         bail!(
-            "Office produced no PDF; see {}",
+            "Office produced no PDF: {}. Full log: {}",
+            conversion_error(&folder),
             folder.join("conversion.log").display()
         );
     }
@@ -131,7 +234,13 @@ pub fn office_pdf(library: &Library, job: i64, source: &Path, config: &Config) -
     Ok(target)
 }
 
+fn conversion_error(folder: &Path) -> String {
+    let log = std::fs::read_to_string(folder.join("conversion.log")).unwrap_or_default();
+    librarian_core::editorial::tail(&log, 3000)
+}
+
 pub fn record(library: &Library, job: i64, ordinal: u64, observation: &Observation) -> Result<()> {
+    checkpoint(library, job)?;
     let enabled = library
         .db
         .query_row(
@@ -217,9 +326,7 @@ fn insert(
         return Ok(());
     }
     loop {
-        if !library.active(job)? {
-            bail!("Job paused or cancelled");
-        }
+        checkpoint(library, job)?;
         let ahead: i64 = library.db.query_row(
             "SELECT count(*) FROM editorial_pages WHERE job=? AND reading IS NULL",
             [job],
@@ -317,6 +424,10 @@ fn print_window(
         };
         let mut image = RgbImage::from_pixel(width, height, Rgb([255, 255, 255]));
         for g in &glyphs[first..end] {
+            // Layout retains control characters for byte ownership; they have no ink.
+            if g.parent.is_control() || g.parent.is_whitespace() {
+                continue;
+            }
             let (metrics, bitmap) = font.rasterize_config(g.key);
             for y in 0..metrics.height {
                 for x in 0..metrics.width {

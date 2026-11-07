@@ -17,4 +17,3 @@ Markdown diagrams use the common Mermaid flowchart syntax. [Pele](https://pele.r
 Native distributions include LibreOffice 26.8.2 as a private headless office-layout engine. Its upstream archives and SHA-256 values are pinned in `tools/office_bundle.py`; bundled license/notices travel with the engine. It runs with a separate profile and disabled document macros. [Command-line interface](https://help.libreoffice.org/latest/en-US/text/shared/guide/start_parameters.html).
 
 The text print-layout renderer embeds Noto Sans Regular under the SIL Open Font License 1.1. The font and license are in `crates/librarian-native/resources/`; packages include the license. Source: [Noto fonts](https://github.com/notofonts/noto-fonts). Font rasterization uses fontdue. This basic print adapter does not implement complex-script shaping; native text is retained independently of the page image.
-

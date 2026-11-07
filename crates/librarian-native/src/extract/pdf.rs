@@ -20,6 +20,7 @@ pub(super) fn extract(
         .load_pdf_from_file(path, None)
         .context("Cannot open PDF (encrypted documents require an unencrypted copy)")?;
     let total = pdf.pages().len();
+    library.progress(job, "extracting and rendering PDF", 0, total as u64)?;
     let key = |text: &str| {
         let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
         if text

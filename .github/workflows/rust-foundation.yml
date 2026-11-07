@@ -87,6 +87,9 @@ jobs:
       - name: Install office renderer build dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libreoffice-writer libreoffice-impress
+      - name: Verify private Linux office dependency closure
+        if: runner.os == 'Linux'
+        run: python tools/office_bundle.py x86_64-unknown-linux-gnu --check
       - name: Check formatting
         if: runner.os == 'Linux'
         run: cargo fmt --all --check

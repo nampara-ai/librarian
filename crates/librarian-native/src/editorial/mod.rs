@@ -111,7 +111,9 @@ pub async fn run(
     let document = document.to_owned();
     let format = format.to_owned();
     let cfg = config.clone();
-    let preparing = tokio::task::spawn_blocking(move || -> Result<()> {
+    let producer_cancel = cancelled.clone();
+    let mut preparing = tokio::task::spawn_blocking(move || -> Result<()> {
+        let _cancellation = pages::Cancellation::enter(producer_cancel);
         let library = Library::open(&root)?;
         let operation = (|| -> Result<()> {
             // Recover a crash between committing an observation and its page rows.
@@ -150,7 +152,7 @@ pub async fn run(
                     &format,
                     &cfg,
                 )?;
-                checkpoint(&library, job)?;
+                pages::checkpoint(&library, job)?;
                 library.db.execute(
                     "UPDATE documents SET extraction_complete=1 WHERE id=?",
                     [&document],
@@ -173,7 +175,8 @@ pub async fn run(
     let root = library.root.clone();
     let cfg = config.clone();
     let cancel = cancelled.clone();
-    let recognizing = tokio::task::spawn_blocking(move || ocr_worker(&root, job, &cfg, &cancel));
+    let mut recognizing =
+        tokio::task::spawn_blocking(move || ocr_worker(&root, job, &cfg, &cancel));
     let execution = async {
         if config.processing.prepare_only {
             loop {
@@ -213,17 +216,44 @@ pub async fn run(
         checkpoint(library, job)?;
         crate::export::publish(library, job, config)?;
         Ok(())
-    }
-    .await;
+    };
+    tokio::pin!(execution);
+    let mut prepared = false;
+    let mut recognized = false;
+    let result = loop {
+        tokio::select! {
+            result=&mut execution=>break result,
+            result=&mut preparing,if !prepared=>{prepared=true;if let Err(error)=result.context("Page preparation worker stopped unexpectedly").and_then(|r|r){break Err(error);}},
+            result=&mut recognizing,if !recognized=>{recognized=true;if let Err(error)=result.context("OCR worker stopped unexpectedly").and_then(|r|r){break Err(error);}},
+        }
+    };
     cancelled.store(true, Ordering::Relaxed);
-    if execution.is_ok() {
-        preparing.await??;
-        recognizing.await??;
+    // Stop both native producers before this worker can resume/retry the job.
+    // An API error must release a producer waiting for page backpressure too.
+    let preparation = if !prepared {
+        preparing
+            .await
+            .context("Page worker join failed")
+            .and_then(|r| r)
+    } else {
+        Ok(())
+    };
+    let recognition = if !recognized {
+        recognizing
+            .await
+            .context("OCR worker join failed")
+            .and_then(|r| r)
+    } else {
+        Ok(())
+    };
+    if result.is_ok() {
+        preparation?;
+        recognition?;
         if config.processing.prepare_only {
             library.finish(job, "prepared", None, None)?;
         }
     }
-    execution
+    result
 }
 
 fn ocr_worker(root: &Path, job: i64, config: &Config, cancel: &AtomicBool) -> Result<()> {
@@ -262,10 +292,20 @@ fn ocr_worker(root: &Path, job: i64, config: &Config, cancel: &AtomicBool) -> Re
                         checkpoint(&library, job)
                     })
                 }
-                "tesseract" => tokio::runtime::Handle::current().block_on(crate::ocr::tesseract(
-                    Path::new(&path),
-                    &config.processing.ocr_language,
-                )),
+                "tesseract" => tokio::runtime::Handle::current().block_on(async {
+                    let recognition =
+                        crate::ocr::tesseract(Path::new(&path), &config.processing.ocr_language);
+                    tokio::pin!(recognition);
+                    loop {
+                        tokio::select! {
+                            result = &mut recognition => return result,
+                            _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                                if cancel.load(Ordering::Relaxed) { bail!("OCR worker cancelled"); }
+                                checkpoint(&library, job)?;
+                            }
+                        }
+                    }
+                }),
                 _ => Ok(crate::ocr::OcrResult {
                     lines: vec![],
                     findings: vec!["Local OCR disabled by profile; read the image directly".into()],
@@ -273,6 +313,9 @@ fn ocr_worker(root: &Path, job: i64, config: &Config, cancel: &AtomicBool) -> Re
                 }),
             }
         })();
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(());
+        }
         let result = match result {
             Ok(result) => result,
             Err(error) => {
@@ -497,7 +540,7 @@ async fn copyeditor(
                     "{}\nRead-only preceding passage:\n{preceding}",
                     document_context(library, job)?
                 ),
-                false,
+                true,
             )
             .await?
         };
@@ -557,7 +600,9 @@ async fn read_page(
     native: &str,
     ocr: &crate::ocr::OcrResult,
 ) -> Result<String> {
-    let image = image::open(path)?;
+    let original_height = image::image_dimensions(path)?.1;
+    let image = model_image(path, config.processing.render_width)?;
+    let coordinate_scale = image.height() as f32 / original_height as f32;
     let mut regions = VecDeque::from([(0u32, image.height(), 0u8)]);
     let mut readings = Vec::new();
     while let Some((top, bottom, depth)) = regions.pop_front() {
@@ -570,7 +615,7 @@ async fn read_page(
             .lines
             .iter()
             .filter(|l| {
-                let y = l.polygon.iter().map(|p| p[1]).sum::<f32>() / 4.0;
+                let y = l.polygon.iter().map(|p| p[1]).sum::<f32>() / 4.0 * coordinate_scale;
                 y >= top as f32 && y < bottom as f32
             })
             .map(|l| l.text.as_str())
@@ -603,7 +648,7 @@ async fn read_page(
             )
             .await
         {
-            Ok(value) => readings.push(value.as_str().unwrap().to_owned()),
+            Ok(value) => readings.push(editorial::finish_markdown(value.as_str().unwrap())),
             Err(error) if error.is::<OutputLimit>() && depth < 6 && bottom - top > 128 => {
                 let middle = top + (bottom - top) / 2;
                 regions.push_front((middle, bottom, depth + 1));
@@ -638,7 +683,10 @@ async fn provisional(
     )?;
     library.progress(job, "quick look", 0, 1)?;
     let png = if native.trim().is_empty() && config.processing.vision {
-        Some(std::fs::read(image)?)
+        let image = model_image(Path::new(&image), config.processing.render_width)?;
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut bytes, image::ImageFormat::Png)?;
+        Some(bytes.into_inner())
     } else {
         None
     };
@@ -741,7 +789,10 @@ async fn typesetter(
                 .max(512);
             let mut windows = evidence_windows(&cleaned, &reading, &ocr, budget);
             let png = if config.processing.vision {
-                Some(std::fs::read(&image)?)
+                let image = model_image(Path::new(&image), config.processing.render_width)?;
+                let mut bytes = std::io::Cursor::new(Vec::new());
+                image.write_to(&mut bytes, image::ImageFormat::Png)?;
+                Some(bytes.into_inner())
             } else {
                 None
             };
@@ -801,6 +852,7 @@ async fn typesetter(
                     }
                     Err(e) => return Err(e),
                 };
+                let text = editorial::finish_markdown(&text);
                 let split = editorial::handoff(text.trim_end());
                 stable.push_str(&split.emitted);
                 assembled = split.pending;
@@ -833,6 +885,25 @@ async fn typesetter(
     save(library, job, "typeset", "final_tail", &handoff.pending)?;
     save(library, job, "typeset", "count", &(page - 1))?;
     Ok(())
+}
+
+fn model_image(path: &Path, width: u32) -> Result<image::DynamicImage> {
+    let cache = path.with_extension(format!("model-{width}.png"));
+    if cache.is_file() {
+        return Ok(image::open(cache)?);
+    }
+    let image = image::open(path)?;
+    let image = if image.width() > width || image.height() > width * 2 {
+        image.resize(width, width * 2, image::imageops::FilterType::Lanczos3)
+    } else {
+        image
+    };
+    let mut temp =
+        tempfile::NamedTempFile::new_in(path.parent().context("Page image has no directory")?)?;
+    image.write_to(&mut temp, image::ImageFormat::Png)?;
+    temp.as_file().sync_all()?;
+    temp.persist(cache)?;
+    Ok(image)
 }
 
 async fn reviewer(

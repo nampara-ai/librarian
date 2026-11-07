@@ -82,6 +82,32 @@ pub fn tail(text: &str, max_chars: usize) -> String {
     text[start..].to_owned()
 }
 
+/// A normally completed generation can forget a closing Markdown fence. Repair
+/// its delimiter without touching the data inside; output-limit responses are
+/// handled separately by continuing from smaller original-source windows.
+pub fn finish_markdown(text: &str) -> String {
+    let mut fence: Option<(char, usize)> = None;
+    for line in text.lines() {
+        let line = line.trim_start();
+        let c = line.chars().next().unwrap_or(' ');
+        let n = line.chars().take_while(|v| *v == c).count();
+        if matches!(c, '`' | '~') && n >= 3 {
+            match fence {
+                None => fence = Some((c, n)),
+                Some((ch, len)) if c == ch && n >= len && line[n..].trim().is_empty() => {
+                    fence = None
+                }
+                _ => {}
+            }
+        }
+    }
+    if let Some((ch, len)) = fence {
+        format!("{}\n{}\n", text.trim_end(), ch.to_string().repeat(len))
+    } else {
+        text.to_owned()
+    }
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Handoff {
     pub emitted: String,

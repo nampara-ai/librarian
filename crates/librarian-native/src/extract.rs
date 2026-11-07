@@ -255,6 +255,7 @@ pub fn persist(
     ordinal: u64,
     observation: &Observation,
 ) -> Result<()> {
+    crate::editorial::pages::checkpoint(library, job)?;
     if !library.active(job)? {
         bail!("Job paused or cancelled");
     }

@@ -9,10 +9,12 @@ import re
 import shutil
 import subprocess
 import tarfile
+import tempfile
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = "26.8.2"
+BUNDLE_REVISION = 2
 BASE = f"https://download.documentfoundation.org/libreoffice/stable/{VERSION}/"
 SPECS = {
     "aarch64-apple-darwin": (f"mac/aarch64/LibreOffice_{VERSION}_MacOS_aarch64.dmg", "9f24fe83ab1ed5c95eb3df580119f32932f713e577feeac02bf619fb00749b55"),
@@ -35,8 +37,10 @@ def bundle(target):
     archive = cache / Path(relative).name
     destination = cache / f"office-{target}"
     marker = destination / "librarian-office.json"
-    if marker.is_file() and json.loads(marker.read_text())["archive_sha256"] == expected:
-        return destination
+    if marker.is_file():
+        prior = json.loads(marker.read_text())
+        if prior.get("archive_sha256") == expected and prior.get("bundle_revision") == BUNDLE_REVISION:
+            return destination
     if not archive.exists() or digest(archive) != expected:
         partial = archive.with_suffix(archive.suffix + ".partial")
         print(f"Downloading LibreOffice {VERSION} for {target}", flush=True)
@@ -78,13 +82,14 @@ def bundle(target):
         libs.mkdir(exist_ok=True)
         todo = [p for p in (destination / "program").rglob("*") if p.is_file() and (".so" in p.name or p.name == "soffice.bin")]
         seen = set()
+        environment = dict(os.environ, LD_LIBRARY_PATH=os.pathsep.join([str(destination / "program"), str(libs)]))
         excluded = re.compile(r"^(?:ld-linux|libc\.|libm\.|libpthread\.|librt\.|libdl\.|libresolv\.|libutil\.|libnss_)")
         while todo:
             binary = todo.pop()
             if str(binary) in seen:
                 continue
             seen.add(str(binary))
-            result = subprocess.run(["ldd", str(binary)], capture_output=True, text=True)
+            result = subprocess.run(["ldd", str(binary)], capture_output=True, text=True, env=environment)
             for line in result.stdout.splitlines():
                 match = re.search(r"=> (/\S+)", line)
                 if not match:
@@ -96,10 +101,25 @@ def bundle(target):
                 if not output.exists():
                     shutil.copy2(dependency.resolve(), output)
                     todo.append(dependency)
-    marker.write_text(json.dumps({"version": VERSION, "url": BASE + relative, "archive_sha256": expected}, indent=2))
+    marker.write_text(json.dumps({"version": VERSION, "bundle_revision": BUNDLE_REVISION, "url": BASE + relative, "archive_sha256": expected}, indent=2))
     return destination
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("target", choices=SPECS)
-    print(bundle(parser.parse_args().target))
+    parser.add_argument("--check", action="store_true")
+    args = parser.parse_args()
+    destination = bundle(args.target)
+    print(destination, flush=True)
+    if args.check:
+        from check_layout import documents
+        executable = destination / ("LibreOffice.app/Contents/MacOS/soffice" if "apple" in args.target else "program/soffice.com" if "windows" in args.target else "program/soffice")
+        environment = dict(os.environ, SAL_USE_VCLPLUGIN="svp")
+        if "linux" in args.target:
+            environment["LD_LIBRARY_PATH"] = os.pathsep.join([str(destination / "program"), str(destination / "lib")])
+        with tempfile.TemporaryDirectory(prefix="librarian-office-") as folder:
+            folder = Path(folder)
+            for source in documents(folder):
+                subprocess.run([str(executable), "--headless", "--nologo", "--nodefault", "--norestore", f"-env:UserInstallation={(folder / 'profile').as_uri()}", "--convert-to", "pdf", "--outdir", str(folder), str(source)], env=environment, check=True, timeout=120)
+                if not source.with_suffix(".pdf").is_file():
+                    raise RuntimeError(f"Office renderer did not convert {source.name}")
