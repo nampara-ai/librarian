@@ -1,6 +1,6 @@
 # Terminal rebuild architecture
 
-Librarian is a local-first corpus cleaner and organizer. It reads documents, extracts their contents, copyedits prose to a configurable CMOS style, classifies documents using a Dewey-style taxonomy, and indexes the collection for full-text search. The first product delivers configurable UTF-8 plain text through a CLI and TUI. Markdown exports and graphical applications follow terminal acceptance.
+Librarian is a local-first corpus cleaner and organizer. It reads documents, extracts their contents, copyedits prose to a configurable CMOS style, classifies documents using a Dewey-style taxonomy, and indexes the collection for full-text search. All output documents are UTF-8 Markdown (`.md`) from the first release, delivered through a CLI and TUI. Pele is the primary diagram rendering target, with standard Mermaid source and tested compatibility with other renderers. Graphical applications follow terminal acceptance.
 
 This is the design baseline for the rebuild, not a description of implemented capabilities. Rust is the recommended shared implementation language; engine choices remain subject to the native and WASM portability experiment below. Optimize measured document quality, elapsed time, memory, and total cost together.
 
@@ -8,7 +8,9 @@ This is the design baseline for the rebuild, not a description of implemented ca
 
 | Responsibility | Starting choice |
 | --- | --- |
-| Shared document model, interpretation policies, validation, assembly, text export | Rust workspace with a platform-independent core; Serde for versioned records |
+| Shared document model, interpretation policies, validation, assembly, Markdown export | Rust workspace with a platform-independent core; Serde for versioned records |
+| Markdown syntax and formatting | Deterministic Rust serializer over structured blocks; pulldown-cmark for parsing and structural checks with explicit extension flags |
+| Diagram compatibility | Standard Mermaid fenced blocks; Pele as the primary rendering target and Mermaid.js as the reference compatibility target |
 | CLI, then TUI | clap; Ratatui with Crossterm over the same application commands and events |
 | Native scheduling and transport | Tokio; reqwest with rustls; bounded CPU/engine workers rather than blocking the async executor |
 | Native state and search | rusqlite with bundled SQLite and FTS5; local content-addressed artifact files keyed with BLAKE3 |
@@ -49,7 +51,7 @@ Use explicit crate boundaries for the initial Librarian workspace:
 
 | Crate | Owns | Dependencies permitted across this boundary |
 | --- | --- | --- |
-| `librarian-core` | Source spans, structured content, interpretation/validation rules, dependency keys, deterministic assembly and text rendering | Portable Rust libraries; no filesystem, network, database, process, clock, terminal, or JS APIs |
+| `librarian-core` | Source spans, structured content, interpretation/validation rules, dependency keys, deterministic assembly and Markdown rendering | Portable Rust libraries; no filesystem, network, database, process, clock, terminal, or JS APIs |
 | `librarian-app` | Commands, pipeline state transitions, requested effects, completion events, retry/cancellation policy | Core and platform-neutral contracts; explicit time/identity inputs from the host |
 | `librarian-native` | Files, SQLite, HTTP, timers, worker processes, PDFium/ONNX Runtime adapters | App/core plus native libraries and Tokio |
 | `librarian-wasm` | Versioned wasm-bindgen interface to core/app; compact input/output conversion | App/core plus WASM bindings; browser host executes effects through its adapters |
@@ -74,6 +76,25 @@ Cursive commits generated WASM and maintains a normalized-source manifest for a 
 
 Retain the distinction between successful computation, published output, and confirmed durability. Cursive's source writer stages content, checks the destination baseline, uses platform-specific replacement, and reports when publication occurred but durability could not be confirmed. Librarian needs equivalent tested native publication semantics plus a recovery protocol for artifact files and SQLite commits. Atomic rename alone does not make those two stores one transaction. Browser persistence needs its own explicit durability contract. [Source publication](https://github.com/nampara-ai/cursive/blob/2be3524f21c664c0a770959391bc522f9489560a/src-tauri/src/atomic_fs.rs)
 
+## HTML extraction informed by Defuddle
+
+Reviewed Defuddle at `3e8bde9f5f855bc968e95837a750c5968a9fe639`. Source inspection covered extraction, retries, math, images, tables, public response types, and fixture/performance tests; no comparative runtime measurements were made. Use it as a reference and benchmark for the HTML input adapter. Its ordinary extraction is deterministic and does not require an LLM, so an HTML cost comparison must not invent model expenses for that baseline. [Repository](https://github.com/kepano/defuddle/tree/3e8bde9f5f855bc968e95837a750c5968a9fe639)
+
+Borrow its semantic recovery work: recover embedded MathML/LaTeX before considering image interpretation; preserve footnotes and callouts before hidden-element cleanup; resolve lazy-image sources and captions; preserve code language and remove only presentation gutters; combine DOM structure with page metadata. Recognize useful non-executable data inside script elements before discarding script containers. HTML acquisition must not execute page scripts just to extract embedded data. [Math recovery](https://github.com/kepano/defuddle/blob/3e8bde9f5f855bc968e95837a750c5968a9fe639/src/elements/math.base.ts), [extraction order](https://github.com/kepano/defuddle/blob/3e8bde9f5f855bc968e95837a750c5968a9fe639/src/defuddle.ts)
+
+Extend these ideas for a corpus pipeline:
+
+- Preserve immutable input plus snapshot-bound node identities and source locations where available. Record every inclusion, exclusion, and normalization with a rule version and evidence reference. Exclusion changes the export view; it does not erase source evidence. Diagnostic verbosity must not change extraction decisions.
+- Separate the user's selection policy from normalization: article body, conversation including replies, or preservation of substantive reference material. Footnotes, captions, and appendices are substantive content. Site selectors and CSS visibility are clues, not sufficient grounds to discard a region. Preserve uncertainty when candidates disagree.
+- Capture semantic structure once and reuse candidate features rather than requiring repeated full-document cleanup just to compare candidates. Defuddle's retry logic uses word-count thresholds and cloned-document passes; Librarian should assess source-region coverage, linked notes, structural completeness, and expected content type as well. More words alone do not establish a better extraction. Full DOM parsing still needs an explicit memory/input-size budget; do not claim universal constant-memory HTML parsing.
+- Distinguish source metadata from generated summaries, classifications, and image descriptions. Record conflicting metadata candidates and their provenance instead of silently treating an inferred value as authored source text.
+- Return explicit complete, needs-review, unsupported, and failed outcomes. Defuddle can return a sanitized whole-body fallback, while caught errors appear in response diagnostics only with debug enabled. Librarian may retain such salvage output but must not silently mark it as an accepted clean extraction. [Response contract](https://github.com/kepano/defuddle/blob/3e8bde9f5f855bc968e95837a750c5968a9fe639/src/types.ts), [fallback tests](https://github.com/kepano/defuddle/blob/3e8bde9f5f855bc968e95837a750c5968a9fe639/tests/degraded-fallback.test.ts)
+- Keep fetching separate from parsing. A saved local HTML file uses the local snapshot by default; remote image, transcript, and third-party enrichment follow the selected acquisition policy and become recorded, cached source assets. Defuddle supports injected fetch and async extractors, which is a useful adapter pattern. [Extractor interface](https://github.com/kepano/defuddle/blob/3e8bde9f5f855bc968e95837a750c5968a9fe639/src/extractors/_base.ts)
+
+Defuddle already preserves merged-cell tables as HTML inside Markdown when a pipe table would be inadequate. Librarian should preserve that fidelity while also retaining a typed cell model shared by HTML, DOCX, PDF, and scanned tables. Do not mistake a different output representation for an extraction-quality improvement. [Table rendering](https://github.com/kepano/defuddle/blob/3e8bde9f5f855bc968e95837a750c5968a9fe639/src/markdown.ts)
+
+Adopt its minimal regression-fixture discipline and compare the HTML adapter on equivalent inputs, with network disabled for offline evaluation. Add independent expected region/relationship annotations, held-out sites, long inputs, and cross-format versions of the same document. Missing expected results must fail CI; baseline creation is a separate reviewed action. Test harmless wrapper/class changes, hidden footnotes, intentional repetition, code, math, merged tables, and optional replies. Report omissions, incorrect exclusions, relation preservation, latency, memory, and review burden. A tenfold improvement requires a named metric and measured baseline. Keep Defuddle as development/reference tooling unless a production host integration earns its runtime cost. [Fixture suite](https://github.com/kepano/defuddle/blob/3e8bde9f5f855bc968e95837a750c5968a9fe639/tests/fixtures.test.ts), [performance measurement](https://github.com/kepano/defuddle/blob/3e8bde9f5f855bc968e95837a750c5968a9fe639/tests/perf.test.ts)
+
 ## Central design
 
 Represent a document explicitly before asking a model to edit it. Physical pages, logical content, and inference requests are three different units. Their boundaries must be independent.
@@ -86,7 +107,7 @@ Original bytes
     -> reading order and source-linked logical blocks
     -> bounded editing jobs with explicit source ownership
     -> accepted text and unresolved passages
-    -> classification, search index, and configurable text rendering
+    -> classification, search index, and configurable Markdown rendering
 ```
 
 Persist each stage's inputs, results, and dependencies. A changed export template rebuilds rendering. A failed page retries extraction for that page and work that depends on it. Neither operation automatically reruns an entire document.
@@ -146,6 +167,7 @@ Every page is inspected locally. Inference is selected at the region level where
 | Input or region | Initial route |
 | --- | --- |
 | Plain text and transcripts | Encoding and structure parsing; text editing |
+| HTML and saved web pages | Structural extraction, semantic recovery, content selection, and linked asset handling |
 | DOCX | Structural XML extraction of paragraphs, tables, notes, and embedded media |
 | PDF with usable text | Native text and layout extraction; targeted interpretation for ambiguous regions |
 | Scan or image | OCR or a qualified vision transcription route, selected by measured quality and cost |
@@ -155,7 +177,7 @@ A nonempty text layer is not proof of a good extraction. Check for suspicious en
 
 Choose the cheapest route that meets the tested quality requirement. Do not automatically pay for OCR, full-page vision, and a second transcription on every page. Crop carefully: preserve labels, legends, surrounding units, and resolution sufficient to read the evidence. Large tables may need tiled views and a shared coordinate frame.
 
-Vision returns source-linked readings and structured content. Text from the native parser and text from vision are alternatives or complementary regions, not two strings to concatenate blindly. Keep table cells and relationships structured internally. Render them as readable aligned text or row records. Render equations as textual notation, and label inferred figure descriptions so they are distinguishable from source quotations. Preserve existing Mermaid source now; generated Mermaid and Markdown exports are later output capabilities.
+Vision returns source-linked readings and structured content. Text from the native parser and text from vision are alternatives or complementary regions, not two strings to concatenate blindly. Keep table cells and relationships structured internally. Render them as Markdown tables or faithful embedded HTML tables when necessary. Render equations as mathematical notation, and label inferred figure descriptions so they are distinguishable from source quotations. Preserve existing Mermaid source and generate supported diagram types from accepted structure as part of Markdown export.
 
 Unknown formats, encrypted documents requiring a password, and unreadable regions produce explicit outcomes. A universal front door should identify and report every input reliably; unsupported content must not masquerade as successful empty extraction.
 
@@ -163,15 +185,15 @@ Unknown formats, encrypted documents requiring a password, and unreadable region
 
 The internal representation is richer than the output file. Model responses must satisfy a versioned typed schema with valid source references. Syntactic validity alone does not establish faithful interpretation.
 
-| Material | Internal evidence and structure | First plain-text rendering |
+| Material | Internal evidence and structure | Markdown rendering |
 | --- | --- | --- |
-| Table | Cells with row/column coordinates, merged spans, header relationships, units, caption, notes, and source boxes | Aligned columns when readable; otherwise labeled row records that retain header associations |
-| Equation | Original textual/structured notation when available, accepted transcription, source crop, symbol relationships, unresolved symbols | Unicode or LaTeX-style textual notation with explicit grouping |
-| Figure or photograph | Original asset/crop, caption, observed text, and a separate generated description | Caption and an optional labeled visual description |
-| Plot | Axes, units, legend, series, explicitly labeled values, and separately identified estimates | Textual data where supported; otherwise a labeled description of visible relationships |
-| Flowchart | Nodes, directed edges, edge labels, grouping, and source evidence | Node descriptions and labeled connections |
-| Other diagram | Diagram kind and appropriate relationships, such as sequence participants/messages; retain original when unsupported | A faithful description or explicit unresolved outcome |
-| Existing Mermaid/code | Original source, language/type where known, and validation status | Literal source protected from copyediting |
+| Table | Cells with row/column coordinates, merged spans, header relationships, units, caption, notes, and source boxes | GFM pipe table for simple grids; minimal HTML table within the Markdown file for merged or complex cells |
+| Equation | Original textual/structured notation when available, accepted transcription, source crop, symbol relationships, unresolved symbols | Inline or display TeX math, preserving grouping and uncertainty |
+| Figure or photograph | Original asset/crop, caption, observed text, and a separate generated description | Relative image link, useful alt text, caption, and optional labeled description |
+| Plot | Axes, units, legend, series, explicitly labeled values, and separately identified estimates | Source image with supported data table and description; estimates remain labeled |
+| Flowchart | Nodes, directed edges, edge labels, grouping, and source evidence | Standard Mermaid fenced block for an accepted supported graph, with a concise textual description |
+| Other diagram | Diagram kind and appropriate relationships, such as sequence participants/messages; retain original when unsupported | Supported Mermaid syntax or original image with a faithful description and review status |
+| Existing Mermaid/code | Original source, language/type where known, and validation status | Language-tagged fenced block with literal contents protected from copyediting |
 
 Read DOCX table grids and native equation structures directly when supported. For PDFs, combine text coordinates and vector rules with visual interpretation where necessary. For scanned tables, infer the grid as well as the cell text. Check for overlapping spans, orphaned cells, lost units, and unmatched source regions. These checks detect problems without claiming to prove every value correct.
 
@@ -179,7 +201,7 @@ Join tables across pages only with evidence such as compatible columns, header r
 
 Preserve equation structure and exact values through the prose-editing stage. If a minus sign, exponent, subscript, or symbol cannot be read reliably, retain the uncertainty rather than inventing a plausible formula. Chart values inferred from pixel positions are estimates and must not become claimed exact source data.
 
-For a raster diagram, recover its supported relationships before producing any diagram language. Do not ask the model to generate Mermaid freely and treat parseable syntax as evidence of fidelity. A later deterministic Mermaid renderer can emit supported diagram types from accepted structure; unsupported types retain their source and description. Mermaid's official parser validates syntax, not correspondence with an image. Original Mermaid text can already live in a `.txt` export without Markdown or a rendering dependency. [Mermaid parse API](https://mermaid.js.org/config/setup/mermaid/interfaces/Mermaid.html#parse)
+For a raster diagram, recover its supported relationships before producing any diagram language. Do not ask the model to generate Mermaid freely and treat parseable syntax as evidence of fidelity. A deterministic Mermaid serializer emits supported diagram types from accepted structure; unsupported types retain their source and description. Preserve existing Mermaid source in fenced blocks and record its validation status. Pele and Mermaid parser success establishes syntax compatibility, not correspondence with the source image. [Mermaid parse API](https://mermaid.js.org/config/setup/mermaid/interfaces/Mermaid.html#parse)
 
 ## Editing and assembly
 
@@ -193,7 +215,7 @@ Retry or subdivide only the failed owned region, with the original source availa
 
 Assemble accepted blocks in the resolved logical order. Render separators from boundary decisions. A whole-document generative smoothing pass is unnecessary for ordinary assembly and risks reintroducing omissions.
 
-Track content and execution separately: a job can finish while some passages still need review. CLI exit policy, JSON reports, TUI status, and exported diagnostics must consistently distinguish complete output, output needing review, failed execution, and cancellation. A plain-text-only export may omit annotations by user choice, but the run still retains and reports unresolved work.
+Track content and execution separately: a job can finish while some passages still need review. CLI exit policy, machine-readable reports, TUI status, and exported diagnostics must consistently distinguish complete output, output needing review, failed execution, and cancellation. A body-only Markdown export may omit annotations by user choice, but the run still retains and reports unresolved work.
 
 ## Caching and incremental reuse
 
@@ -257,7 +279,7 @@ Retries share one bounded policy across layers. Honor provider delays, add jitte
 
 ## Language and platform boundary
 
-Use Rust for the shared document model, planning, validation, cache dependency calculation, and text rendering. Keep filesystem access, HTTP transport, process management, and persistence behind a small host interface. Native binaries and WASM hosts execute the same core rules.
+Use Rust for the shared document model, planning, validation, cache dependency calculation, and Markdown rendering. Keep filesystem access, HTTP transport, process management, and persistence behind a small host interface. Native binaries and WASM hosts execute the same core rules.
 
 Use established parsing engines where they outperform practical alternatives. PDFium is the initial PDF candidate: it exposes text, layout, and page rendering, and Rust bindings document native and WASM integration. It is not thread-safe; use serialized access per instance/process and bounded native worker processes where parallelism or crash isolation is needed. Verify that process startup and IPC costs are justified. [PDFium Rust bindings](https://docs.rs/pdfium-render/latest/pdfium_render/)
 
@@ -280,13 +302,35 @@ Bundle required parsing libraries and runtime data. End users should not need Py
 
 Build and execute acceptance cases on each native architecture, including Intel macOS. Run WASM fixtures in an actual host. Compile checks and emulation are useful but do not replace native release acceptance. Test final signed/packaged artifacts, then tag the validated commit; avoid introducing untested code between qualification and publication.
 
-## Configurable plain text and organization
+## Markdown output and organization
+
+Markdown is the sole document output format from the first release. Retain structure throughout extraction and editing; serialize accepted blocks into `.md` files directly. A plain-text intermediate must not discard headings, emphasis, lists, notes, table cells, links, code, or math that the renderer would then have to guess back into existence.
+
+Define a versioned output profile based on CommonMark with GFM tables, task lists, and strikethrough, plus explicitly supported footnotes, TeX math, Mermaid fences, and optional YAML frontmatter. Extensions are not uniformly supported by every Markdown viewer. Use `pulldown-cmark` with selected extension flags for parsing and structural checks; keep automatic smart-punctuation conversion disabled there because editorial policy owns punctuation. [GFM specification](https://github.github.com/gfm/), [parser extensions](https://docs.rs/pulldown-cmark/latest/pulldown_cmark/struct.Options.html)
+
+The default style uses a coherent heading hierarchy, comfortable blank-line spacing, consistent lists, readable pipe tables, language-tagged code fences, stable footnote references, useful link text, and captions attached to their figures. Join PDF line wraps into paragraphs. Preserve meaningful line breaks in poetry, code, and other structured material. Do not invent headings or rewrite code to make the document appear polished. Formatting must be deterministic and must not require an additional model pass.
+
+Choose fences and escaping according to content: embedded backticks must not terminate code, literal pipes must not create cells, and currency must not become accidental math. Validate internal references, footnote targets, links, asset paths, and block structure by reparsing the generated Markdown. For complex tables, validate the embedded table structure separately. Round-trip checks establish structural preservation; they do not prove semantic fidelity or visual quality. Qualify representative rendered output as well as raw Markdown readability.
+
+Preserve merged table cells using minimal generated HTML inside the `.md` document when pipe syntax cannot express them. A compatibility profile may instead expand header paths into ordinary pipe-table columns when that transformation preserves the relationships. Never silently flatten a table into unrelated text to avoid an output limitation. Original source evidence remains available for review.
+
+Retained figures use relative links to local assets with stable names and hashes, keeping the document and its asset directory portable and usable offline. Publish required assets before the Markdown file that references them and make interruption recovery explicit. All output documents remain `.md`; images are supporting assets, not alternate document exports. Alt text, source captions, and generated descriptions retain distinct provenance.
+
+### Pele and Mermaid compatibility
+
+Pele is the primary diagram renderer and visual qualification target. Export standard `mermaid` fenced blocks so other Mermaid-capable viewers can render the same source. Keep fonts, colors, and CSS-variable theming in the rendering host, outside document semantics. The native terminal application produces Markdown without requiring a browser or a user-installed JavaScript runtime. Use Pele and Mermaid.js in the development compatibility harness; a future graphical host can use Pele without changing stored documents. [Pele API](https://pele.run/api)
+
+Pele documents support for Mermaid's built-in diagram types, with different layout behavior and limits on features such as arbitrary HTML labels and external plugins. Target the tested intersection of Pele and pinned Mermaid.js versions; do not promise all Mermaid libraries or identical layouts. Generated diagrams default to established syntax with stable ASCII node identifiers, correctly escaped text labels, meaningful relationships, and no required custom icons, JavaScript callbacks, beta-only syntax, or renderer-specific theme directives. Preserve unsupported imported source and report its compatibility status. [Pele compatibility](https://pele.run/compatibility)
+
+Test both parsers/renderers on each supported generated diagram type, plus representative imported diagrams, Unicode labels, long labels, narrow layouts, and size limits. Compare graph or diagram relationships where parser models permit and inspect rendered results for clipping or misleading layout. A diagram that merely renders is not automatically faithful. Math in diagram labels requires a configured typesetter in Pele; prefer readable plain labels with separate Markdown equations in the portable default profile. Scope initial generated types to those we can qualify, starting with flowcharts; retain source images and descriptions for other material until its serializer passes acceptance.
+
+### Metadata and naming
 
 Keep configuration in named, validated profiles. Separate interpretation and editorial settings from presentation settings. Start with understandable choices for body-only output, page labels, title, summary, tags, source information, classification, numbering, and filename templates. Store metadata independently so changing its presentation does not require re-editing prose.
 
 Treat class codes as strings and distinguish taxonomy from accession numbering. For example, a Dewey-style class `636.1` and a local sequence `19` are separate fields; the filename may display both. Support a versioned user taxonomy and overrides. Estimate document-level classification from representative content across the document, and retain evidence locations. Summary text is metadata, never a replacement for source content in the cleaning pipeline.
 
-Preserve table relationships in a plain-text rendering and provide a clear textual representation of equations and figures. Exact original page positions cannot always be transferred to rewritten wording; page labels must describe their placement policy and the internal source mapping must remain available.
+Serialize optional frontmatter with typed, escaped values; class codes and accession identifiers remain strings. Distinguish source descriptions from generated summaries. Exact original page positions cannot always be transferred to rewritten wording; optional page markers belong at safe block boundaries and must describe their placement policy. Internal source mappings retain transitions within paragraphs without inserting artificial sentence breaks.
 
 ## Acceptance and implementation order
 
@@ -294,12 +338,12 @@ The first implementation should prove the difficult boundary and reuse behavior 
 
 Before accepting the native engine choices, run a dependency qualification experiment: load the exact PDFium and ONNX Runtime artifacts, extract/render a PDF, and run the pinned OCR models on the same fixtures across the four native targets and an actual browser WASM host. Include the layout-model export and its postprocessing. Measure cold start, peak memory, throughput, and recognition differences. A successful Rust compile is insufficient. Keep model and parser adapters replaceable if this experiment exposes unacceptable distribution or quality costs.
 
-1. Create the shared core and native/WASM build harness. Test source-span ownership, Unicode boundaries, and deterministic assembly with synthetic fixtures. Prove a paragraph can cross pages without duplicate or missing ownership.
-2. Implement text ingestion, a bounded provider adapter, durable jobs, plain-text export, and local inference-result reuse. Demonstrate interruption/resume and a zero-inference repeat run.
+1. Create the shared core and native/WASM build harness. Test source-span ownership, Unicode boundaries, and deterministic Markdown serialization with synthetic fixtures. Prove a paragraph can cross pages without duplicate or missing ownership. Establish the output dialect and Pele/Mermaid compatibility fixtures immediately.
+2. Implement text and Markdown ingestion, a bounded provider adapter, durable jobs, Markdown export, and local inference-result reuse. Demonstrate interruption/resume and a zero-inference repeat run.
 3. Add PDF text/layout extraction and region-level vision through the observation contract. Test scans, mixed pages, multiple columns, split paragraphs, tables, equations, footnotes, headers, and unreadable pages. Qualify the native and WASM parser packaging before expanding dependencies.
-4. Add DOCX and image adapters, document classification, metadata profiles, and full-text indexing. Prove formatting changes do not invalidate cleaning.
+4. Add DOCX, image, and HTML adapters, document classification, metadata profiles, and full-text indexing. Prove formatting changes do not invalidate cleaning. Qualify complex tables, math, footnotes, assets, and supported diagram serializers before advertising their support.
 5. Add the terminal dashboard over the working engine. Test cancellation, pause/resume, progress, review status, costs, and cache explanations from the real event stream.
-6. Qualify all four native packages and the WASM library. GUI and Markdown work begins after terminal acceptance.
+6. Qualify all four native packages, the WASM library, and their generated Markdown artifacts. GUI work begins after terminal acceptance.
 
 Keep a frozen evaluation set separate from development examples. Include real licensed/public documents, consented private local fixtures, and synthetic edge cases. Use public extraction benchmarks such as [olmOCR-Bench](https://github.com/allenai/olmocr) alongside independent editorial assessment and blind human checks. Extraction performance cannot substitute for editorial quality.
 
