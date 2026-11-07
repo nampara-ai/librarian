@@ -668,6 +668,10 @@ mod tests {
             },
         )?;
         let good = response.revision_requests[0].clone();
+        let mut overlapping = good.clone();
+        overlapping.expected_hash = digest("111");
+        overlapping.old_text = "11".into();
+        assert!(contract::revised("111", &overlapping).is_err());
         response.revision_requests[0].old_text = "`--count=0012`".into();
         response.revision_requests[0].replacement = "`--count=12`".into();
         assert!(prepare(&library, 1, &unit, &[], &seen, &response).is_err());

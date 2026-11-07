@@ -109,7 +109,16 @@ pub fn revised(current: &str, request: &Revision) -> Result<String, String> {
     if digest(current) != request.expected_hash {
         return Err("Revision hash is stale; fetch the current segment".into());
     }
-    if request.old_text.is_empty() || current.matches(&request.old_text).count() != 1 {
+    let at = current.find(&request.old_text);
+    // str::matches counts non-overlapping occurrences; "11" occurs ambiguously
+    // twice in "111" and must not be accepted as one exact revision target.
+    if request.old_text.is_empty()
+        || at.is_none()
+        || at.is_some_and(|at| {
+            let next = at + current[at..].chars().next().map_or(0, char::len_utf8);
+            current[next..].contains(&request.old_text)
+        })
+    {
         return Err("Revision must identify one exact, unambiguous passage".into());
     }
     Ok(current.replacen(&request.old_text, &request.replacement, 1))
