@@ -4,6 +4,43 @@ Librarian is a local-first corpus cleaner and organizer. It reads documents, ext
 
 This is the design baseline for the rebuild, not a description of implemented capabilities. Rust is the recommended shared implementation language; engine choices remain subject to the native and WASM portability experiment below. Optimize measured document quality, elapsed time, memory, and total cost together.
 
+## Concrete starting stack
+
+| Responsibility | Starting choice |
+| --- | --- |
+| Shared document model, interpretation policies, validation, assembly, text export | Rust workspace with a platform-independent core; Serde for versioned records |
+| CLI, then TUI | clap; Ratatui with Crossterm over the same application commands and events |
+| Native scheduling and transport | Tokio; reqwest with rustls; bounded CPU/engine workers rather than blocking the async executor |
+| Native state and search | rusqlite with bundled SQLite and FTS5; local content-addressed artifact files keyed with BLAKE3 |
+| PDF text, geometry, objects, and rendering | PDFium through pdfium-render; separately qualified native and WASM builds |
+| DOCX structural extraction | zip and quick-xml, with explicit handling of document relationships, tables, notes, equations, and media |
+| Image decoding | Rust image codecs for an explicitly tested format set; preserve orientation and source-to-crop coordinate transforms |
+| Local OCR inference | Pinned PaddleOCR ONNX models; ONNX Runtime through ort on native hosts and ONNX Runtime Web in browser hosts |
+| Browser integration | wasm-bindgen for the Rust core, thin JavaScript host adapters, workers, and browser persistence |
+| Model calls | Provider adapters for text editing and multimodal interpretation, with separate capabilities and budgets |
+
+These are implementation selections to qualify, not claims that the complete integration already works. Pin native libraries, model weights, character dictionaries, preprocessing, decoder settings, and runtime versions together. Record checksums, upstream provenance, and redistribution terms. Development may use Python to export models; deployed native applications do not require Python or Node.
+
+The browser host uses its own storage and networking adapters; native SQLite and filesystem calls do not enter the portable core. The browser package need not be a single WASM file. Its contract is equivalent document behavior with tested model tolerances, not bit-identical floating-point results or native throughput.
+
+### Initial OCR and layout qualification
+
+Start with `PP-OCRv5_mobile_det` and `PP-OCRv5_mobile_rec`, plus separately qualified language-specific recognition packs. This is a portability baseline, not a claim that v5 is the newest or most accurate model. PaddleOCR's browser documentation explicitly demonstrates these models with ONNX assets and a WASM backend. Compare newer models against the baseline on the same held-out documents before replacing it. [PaddleOCR browser deployment](https://www.paddleocr.ai/main/en/version3.x/inference_deployment/cross_platform/browser.html)
+
+Use ONNX Runtime's CPU execution as the required native baseline and its WASM execution as the required browser baseline. Treat GPU execution as an optional optimization after output and operator compatibility tests. Port the specified resizing, normalization, polygon processing, and character decoding carefully; loading the model successfully does not validate an OCR implementation. [ONNX export](https://www.paddleocr.ai/main/en/version3.x/inference_deployment/others/obtaining_onnx_models.html), [ONNX Runtime Web](https://onnxruntime.ai/docs/tutorials/web/), [ort](https://docs.rs/ort/latest/ort/)
+
+Qualify `PP-DocLayout-M` as the first local layout detector alongside native PDF geometry. It identifies candidate text, table, figure, formula, caption, and furniture regions; it does not establish correct reading order or prove completeness. Compare missed-region rates against larger detectors and references, particularly for unfamiliar scripts and layouts. A detector's missing box cannot be interpreted as an empty region. [PaddleOCR layout detection](https://www.paddleocr.ai/main/en/version3.x/module_usage/layout_detection.html)
+
+Use three routes, selected per region:
+
+1. Usable native text and structure: extract directly, then edit prose without image inference.
+2. Scanned ordinary text: local detection and recognition, retaining polygons, readings, diagnostics, and language-pack identity. Apply orientation correction or dewarping only when needed.
+3. Complex or uncertain content: pass the relevant image crop, labels, and surrounding context to a configured multimodal model. When complexity is known upfront, allow direct vision interpretation rather than first paying for redundant OCR. Preserve disagreements and unresolved readings.
+
+Do not treat recognizer confidence as calibrated correctness. Combine coverage, encoding, layout, and interpretation checks; preserve an explicit route for handwriting, unsupported scripts, and degraded scans. Local OCR works offline after model installation. Vision and editing require either a configured local model endpoint or a remote provider; a CPU-only installation must not imply that a large vision model will be fast locally.
+
+Do not use ocrs as the universal default: its current README describes preview accuracy and Latin-only recognition. Keep alternative engines as measured evaluation baselines rather than bundling several OCR stacks without evidence that they improve the product. [ocrs status and language support](https://github.com/robertknight/ocrs/blob/main/README.md)
+
 ## Central design
 
 Represent a document explicitly before asking a model to edit it. Physical pages, logical content, and inference requests are three different units. Their boundaries must be independent.
@@ -85,9 +122,31 @@ A nonempty text layer is not proof of a good extraction. Check for suspicious en
 
 Choose the cheapest route that meets the tested quality requirement. Do not automatically pay for OCR, full-page vision, and a second transcription on every page. Crop carefully: preserve labels, legends, surrounding units, and resolution sufficient to read the evidence. Large tables may need tiled views and a shared coordinate frame.
 
-Vision returns source-linked readings and structured content. Text from the native parser and text from vision are alternatives or complementary regions, not two strings to concatenate blindly. Keep table cells and relationships structured internally. Render them as readable aligned text or row records. Render equations as textual notation, and label inferred figure descriptions so they are distinguishable from source quotations. Mermaid and Markdown rendering are later output capabilities.
+Vision returns source-linked readings and structured content. Text from the native parser and text from vision are alternatives or complementary regions, not two strings to concatenate blindly. Keep table cells and relationships structured internally. Render them as readable aligned text or row records. Render equations as textual notation, and label inferred figure descriptions so they are distinguishable from source quotations. Preserve existing Mermaid source now; generated Mermaid and Markdown exports are later output capabilities.
 
 Unknown formats, encrypted documents requiring a password, and unreadable regions produce explicit outcomes. A universal front door should identify and report every input reliably; unsupported content must not masquerade as successful empty extraction.
+
+### Complex material stays structured
+
+The internal representation is richer than the output file. Model responses must satisfy a versioned typed schema with valid source references. Syntactic validity alone does not establish faithful interpretation.
+
+| Material | Internal evidence and structure | First plain-text rendering |
+| --- | --- | --- |
+| Table | Cells with row/column coordinates, merged spans, header relationships, units, caption, notes, and source boxes | Aligned columns when readable; otherwise labeled row records that retain header associations |
+| Equation | Original textual/structured notation when available, accepted transcription, source crop, symbol relationships, unresolved symbols | Unicode or LaTeX-style textual notation with explicit grouping |
+| Figure or photograph | Original asset/crop, caption, observed text, and a separate generated description | Caption and an optional labeled visual description |
+| Plot | Axes, units, legend, series, explicitly labeled values, and separately identified estimates | Textual data where supported; otherwise a labeled description of visible relationships |
+| Flowchart | Nodes, directed edges, edge labels, grouping, and source evidence | Node descriptions and labeled connections |
+| Other diagram | Diagram kind and appropriate relationships, such as sequence participants/messages; retain original when unsupported | A faithful description or explicit unresolved outcome |
+| Existing Mermaid/code | Original source, language/type where known, and validation status | Literal source protected from copyediting |
+
+Read DOCX table grids and native equation structures directly when supported. For PDFs, combine text coordinates and vector rules with visual interpretation where necessary. For scanned tables, infer the grid as well as the cell text. Check for overlapping spans, orphaned cells, lost units, and unmatched source regions. These checks detect problems without claiming to prove every value correct.
+
+Join tables across pages only with evidence such as compatible columns, header roles, continuation labels, and surrounding structure. Retain repeated-header observations even when the renderer displays the header once. Large tables use bounded row groups and a shared schema; they cannot require an entire table in one model response.
+
+Preserve equation structure and exact values through the prose-editing stage. If a minus sign, exponent, subscript, or symbol cannot be read reliably, retain the uncertainty rather than inventing a plausible formula. Chart values inferred from pixel positions are estimates and must not become claimed exact source data.
+
+For a raster diagram, recover its supported relationships before producing any diagram language. Do not ask the model to generate Mermaid freely and treat parseable syntax as evidence of fidelity. A later deterministic Mermaid renderer can emit supported diagram types from accepted structure; unsupported types retain their source and description. Mermaid's official parser validates syntax, not correspondence with an image. Original Mermaid text can already live in a `.txt` export without Markdown or a rendering dependency. [Mermaid parse API](https://mermaid.js.org/config/setup/mermaid/interfaces/Mermaid.html#parse)
 
 ## Editing and assembly
 
@@ -199,6 +258,8 @@ Preserve table relationships in a plain-text rendering and provide a clear textu
 ## Acceptance and implementation order
 
 The first implementation should prove the difficult boundary and reuse behavior in a small vertical slice:
+
+Before accepting the native engine choices, run a dependency qualification experiment: load the exact PDFium and ONNX Runtime artifacts, extract/render a PDF, and run the pinned OCR models on the same fixtures across the four native targets and an actual browser WASM host. Include the layout-model export and its postprocessing. Measure cold start, peak memory, throughput, and recognition differences. A successful Rust compile is insufficient. Keep model and parser adapters replaceable if this experiment exposes unacceptable distribution or quality costs.
 
 1. Create the shared core and native/WASM build harness. Test source-span ownership, Unicode boundaries, and deterministic assembly with synthetic fixtures. Prove a paragraph can cross pages without duplicate or missing ownership.
 2. Implement text ingestion, a bounded provider adapter, durable jobs, plain-text export, and local inference-result reuse. Demonstrate interruption/resume and a zero-inference repeat run.
