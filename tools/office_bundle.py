@@ -14,7 +14,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = "26.8.2"
-BUNDLE_REVISION = 3
+BUNDLE_REVISION = 4
 BASE = f"https://download.documentfoundation.org/libreoffice/stable/{VERSION}/"
 SPECS = {
     "aarch64-apple-darwin": (f"mac/aarch64/LibreOffice_{VERSION}_MacOS_aarch64.dmg", "9f24fe83ab1ed5c95eb3df580119f32932f713e577feeac02bf619fb00749b55"),
@@ -92,6 +92,30 @@ def bundle(target):
         seen = set()
         environment = dict(os.environ, LD_LIBRARY_PATH=os.pathsep.join([str(destination / "program"), str(libs)]))
         excluded = re.compile(r"^(?:ld-linux|libc\.|libm\.|libpthread\.|librt\.|libdl\.|libresolv\.|libutil\.|libnss_)")
+        def stage(dependency):
+            output = libs / dependency.name
+            if not output.exists():
+                shutil.copy2(dependency.resolve(), output)
+                todo.append(dependency)
+                record = {"name": output.name, "sha256": digest(output), "build_path": str(dependency)}
+                for candidate in [dependency, dependency.resolve(), Path("/usr") / dependency.relative_to("/")]:
+                    owner = subprocess.run(["dpkg-query", "-S", str(candidate)], capture_output=True, text=True)
+                    if owner.returncode == 0 and ": " in owner.stdout:
+                        package = owner.stdout.splitlines()[0].split(": ", 1)[0]
+                        record["package"] = package
+                        record["source"] = subprocess.check_output(["dpkg-query", "-W", "-f=${source:Package} ${source:Version}", package], text=True)
+                        copyright = Path("/usr/share/doc") / package.split(":")[0] / "copyright"
+                        if copyright.is_file():
+                            shutil.copy2(copyright, notices / (package.replace(":", "_") + "-copyright.txt"))
+                        break
+                records.append(record)
+        # NSS loads its crypto/token modules dynamically; ldd cannot see them.
+        # Ubuntu keeps them in a private nss/ directory outside ld.so's search
+        # path. Relocating libnss3 without these modules breaks PDF export.
+        for name in subprocess.check_output(["dpkg-query", "-L", "libnss3"], text=True).splitlines():
+            module = Path(name)
+            if module.is_file() and module.suffix in (".so", ".chk"):
+                stage(module)
         while todo:
             binary = todo.pop()
             if str(binary) in seen:
@@ -105,22 +129,7 @@ def bundle(target):
                 dependency = Path(match[1])
                 if excluded.match(dependency.name) or str(dependency).startswith(str(destination)):
                     continue
-                output = libs / dependency.name
-                if not output.exists():
-                    shutil.copy2(dependency.resolve(), output)
-                    todo.append(dependency)
-                    record = {"name": output.name, "sha256": digest(output), "build_path": str(dependency)}
-                    for candidate in [dependency, dependency.resolve(), Path("/usr") / dependency.relative_to("/")]:
-                        owner = subprocess.run(["dpkg-query", "-S", str(candidate)], capture_output=True, text=True)
-                        if owner.returncode == 0 and ": " in owner.stdout:
-                            package = owner.stdout.splitlines()[0].split(": ", 1)[0]
-                            record["package"] = package
-                            record["source"] = subprocess.check_output(["dpkg-query", "-W", "-f=${source:Package} ${source:Version}", package], text=True)
-                            copyright = Path("/usr/share/doc") / package.split(":")[0] / "copyright"
-                            if copyright.is_file():
-                                shutil.copy2(copyright, notices / (package.replace(":", "_") + "-copyright.txt"))
-                            break
-                    records.append(record)
+                stage(dependency)
         (notices / "libraries.json").write_text(json.dumps(records, indent=2))
     marker.write_text(json.dumps({"version": VERSION, "bundle_revision": BUNDLE_REVISION, "url": BASE + relative, "archive_sha256": expected}, indent=2))
     return destination
