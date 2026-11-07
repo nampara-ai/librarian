@@ -182,19 +182,18 @@ pub fn record(library: &Library, job: i64, ordinal: u64, observation: &Observati
         )
         .optional()?
         .is_some();
-    if !enabled
-        || library
-            .db
-            .query_row(
-                "SELECT 1 FROM editorial_observations WHERE job=? AND ordinal=?",
-                params![job, ordinal as i64],
-                |_| Ok(()),
-            )
-            .optional()?
-            .is_some()
-    {
+    if !enabled {
         return Ok(());
     }
+    let completed = library
+        .db
+        .query_row(
+            "SELECT 1 FROM editorial_observations WHERE job=? AND ordinal=?",
+            params![job, ordinal as i64],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
     let config = library.config(job)?;
     let full = observation.visuals.iter().find(|v| v.replace_page);
     if let Some(visual) = full {
@@ -224,7 +223,14 @@ pub fn record(library: &Library, job: i64, ordinal: u64, observation: &Observati
                 .collect::<Result<Vec<_>>>()?
                 .join("\n\n")
         };
+        if completed {
+            // Older builds could mark a truncated observation complete. Never
+            // trust that watermark without checking its actual source coverage.
+            verify_printed(library, job, ordinal, &text, None)?;
+            return Ok(());
+        }
         let count = print(library, job, ordinal, &text, &config)?;
+        verify_printed(library, job, ordinal, &text, Some(count))?;
         for (i, visual) in observation.visuals.iter().enumerate() {
             insert(library, job, ordinal, count + i, &visual.asset, "", &config)?;
         }
@@ -245,16 +251,20 @@ fn insert(
     native: &str,
     config: &Config,
 ) -> Result<()> {
-    if library
+    if let Some(existing) = library
         .db
         .query_row(
-            "SELECT 1 FROM editorial_pages WHERE job=? AND observation=? AND part=?",
+            "SELECT native FROM editorial_pages WHERE job=? AND observation=? AND part=?",
             params![job, observation as i64, part as i64],
-            |_| Ok(()),
+            |r| r.get::<_, String>(0),
         )
         .optional()?
-        .is_some()
     {
+        if existing != native {
+            bail!(
+                "Rendered page identity collision for observation {observation}, part {part}; source retained. Retry as a new run."
+            );
+        }
         return Ok(());
     }
     loop {
@@ -283,7 +293,50 @@ fn insert(
     if !target.exists() && std::fs::hard_link(&source, &target).is_err() {
         std::fs::copy(&source, &target)?;
     }
-    library.db.execute("INSERT INTO editorial_pages(job,page,observation,part,image,native) SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM jobs WHERE id=? AND status='running')",params![job,page,observation as i64,part as i64,target.to_string_lossy(),native,job])?;
+    let changed=library.db.execute("INSERT INTO editorial_pages(job,page,observation,part,image,native) SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM jobs WHERE id=? AND status='running')",params![job,page,observation as i64,part as i64,target.to_string_lossy(),native,job])?;
+    if changed == 0 {
+        bail!("Page producer stopped before its page was committed; source retained");
+    }
+    Ok(())
+}
+
+fn verify_printed(
+    library: &Library,
+    job: i64,
+    observation: u64,
+    text: &str,
+    expected: Option<usize>,
+) -> Result<()> {
+    let mut query=library.db.prepare("SELECT part,native FROM editorial_pages WHERE job=? AND observation=? AND (? IS NULL OR part<?) ORDER BY part")?;
+    let rows = query.query_map(
+        params![
+            job,
+            observation as i64,
+            expected.map(|n| n as i64),
+            expected.map(|n| n as i64)
+        ],
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+    )?;
+    let mut cursor = 0usize;
+    let mut count = 0usize;
+    for row in rows {
+        let (part, native) = row?;
+        if part != count as i64
+            || text.get(cursor..cursor.saturating_add(native.len())) != Some(native.as_str())
+        {
+            bail!(
+                "Rendered source coverage mismatch in observation {observation}, part {part}; source retained. Retry as a new run."
+            );
+        }
+        cursor += native.len();
+        count += 1;
+    }
+    if cursor != text.len() || expected.is_some_and(|n| n != count) {
+        bail!(
+            "Rendered source coverage incomplete in observation {observation}: {cursor}/{} bytes; source retained. Retry as a new run.",
+            text.len()
+        );
+    }
     Ok(())
 }
 
@@ -377,7 +430,7 @@ fn print_window(
             library,
             job,
             observation,
-            part,
+            base + part,
             &asset,
             &text[source_start..source_end],
             config,
@@ -406,6 +459,84 @@ fn print_window(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rendered_windows_cover_the_entire_observation_and_resume_without_duplicates() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().join("library");
+        let source = temp.path().join("source.md");
+        let text=(0..1700).map(|i|format!("Paragraph {i:04}: meaningful repetition, café e\u{301} 日本語, −0.00120 m, ID 0012.\n\n")).collect::<String>();
+        std::fs::write(&source, &text)?;
+        let library = Library::open(&root)?;
+        let mut config = Config::default();
+        config.processing.prepare_only = true;
+        config.processing.render_width = 512;
+        let job = crate::pipeline::queue(
+            &library,
+            &source,
+            &temp.path().join("output"),
+            &config,
+            false,
+            true,
+        )?[0];
+        library
+            .db
+            .execute("UPDATE jobs SET status='running' WHERE id=?", [job])?;
+        library.db.execute(
+            "INSERT INTO editorial_runs(job,version) VALUES(?,'editorial-v2')",
+            [job],
+        )?;
+        let observation = Observation {
+            page: 0,
+            method: "markdown".into(),
+            raw_text: text.clone(),
+            blocks: vec![],
+            visuals: vec![],
+            findings: vec![],
+        };
+        record(&library, job, 0, &observation)?;
+        let read = || -> Result<Vec<(i64, String)>> {
+            Ok(library.db.prepare("SELECT part,native FROM editorial_pages WHERE job=? AND observation=0 ORDER BY part")?.query_map([job],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
+        };
+        let pages = read()?;
+        let joined: String = pages.iter().map(|(_, text)| text.as_str()).collect();
+        assert!(
+            joined == text,
+            "Rendered native bytes: {} of {}",
+            joined.len(),
+            text.len()
+        );
+        assert_eq!(
+            pages.iter().map(|(part, _)| *part).collect::<Vec<_>>(),
+            (0..pages.len() as i64).collect::<Vec<_>>()
+        );
+        // Simulate an interrupted observation after several page commits, before
+        // its completion record. Resume must reuse pages and cover the same source.
+        library
+            .db
+            .execute("DELETE FROM editorial_observations WHERE job=?", [job])?;
+        library
+            .db
+            .execute("DELETE FROM editorial_pages WHERE job=? AND part>=3", [job])?;
+        record(&library, job, 0, &observation)?;
+        assert!(
+            read()? == pages,
+            "Resuming an interrupted observation changed page ownership"
+        );
+        record(&library, job, 0, &observation)?;
+        assert!(
+            read()? == pages,
+            "Replaying a complete observation changed page ownership"
+        );
+        library
+            .db
+            .execute("DELETE FROM editorial_pages WHERE job=? AND part=1", [job])?;
+        assert!(
+            record(&library, job, 0, &observation).is_err(),
+            "An old completion marker must not hide missing source pages"
+        );
+        Ok(())
+    }
 
     // Force the pause/resume race: the old producer wakes after the database
     // already says running again. Its scoped cancellation must still prevent
