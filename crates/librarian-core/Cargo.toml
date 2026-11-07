@@ -1,0 +1,13 @@
+[package]
+name = "librarian-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+pulldown-cmark.workspace = true
+blake3.workspace = true

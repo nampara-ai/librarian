@@ -1,5 +1,10 @@
 # Librarian
 
+> **Rust rebuild in progress:** this branch contains the first CLI/WASM foundation.
+> See [implemented scope and commands](docs/RUST_FOUNDATION.md) and the
+> [terminal rebuild architecture](docs/TERMINAL_REBUILD.md). The remaining README
+> describes the legacy Python/Swift application.
+
 ### Drop in messy documents. Get back a clean, classified, searchable library.
 
 Librarian is a local-first **parser + copy-editor + librarian** in one. Hand it transcripts, PDFs,

@@ -1,0 +1,111 @@
+name: Rust foundation
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'Cargo.*'
+      - 'rust-toolchain.toml'
+      - 'crates/**'
+      - 'tools/conformance/**'
+      - '.github/workflows/rust-foundation.yml'
+  pull_request:
+    paths:
+      - 'Cargo.*'
+      - 'rust-toolchain.toml'
+      - 'crates/**'
+      - 'tools/conformance/**'
+      - '.github/workflows/rust-foundation.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-foundation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  native:
+    name: Native (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            suffix: ''
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            suffix: ''
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            suffix: '.exe'
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            suffix: ''
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+      - name: Check formatting
+        if: runner.os == 'Linux'
+        run: cargo fmt --all --check
+      - name: Test
+        run: cargo test --workspace --locked --target ${{ matrix.target }}
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --locked --target ${{ matrix.target }} -- -D warnings
+      - name: Build release executable
+        run: cargo build --release --locked -p librarian-cli --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: librarian-${{ matrix.target }}-foundation
+          path: target/${{ matrix.target }}/release/librarian${{ matrix.suffix }}
+          if-no-files-found: error
+
+  wasm-conformance:
+    name: Native / WASM / diagram conformance
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: tools/conformance/package-lock.json
+      - name: Install development harness
+        working-directory: tools/conformance
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install browser
+        working-directory: tools/conformance
+        run: npx playwright install --with-deps chromium
+      - name: Check shared dependency boundaries
+        run: node tools/conformance/boundaries.mjs
+      - name: Install WASM build tool
+        run: cargo install wasm-pack --version 0.15.0 --locked
+      - name: Build the two WASM bindings
+        run: |
+          wasm-pack build crates/librarian-wasm --target nodejs --out-dir pkg --release -- --locked
+          wasm-pack build crates/librarian-wasm --target web --out-dir pkg-web --release -- --locked
+      - name: Check golden outputs and diagram renderers
+        working-directory: tools/conformance
+        run: npm test
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: librarian-wasm-foundation
+          path: |
+            crates/librarian-wasm/pkg
+            crates/librarian-wasm/pkg-web
+          if-no-files-found: error

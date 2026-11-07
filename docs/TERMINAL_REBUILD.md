@@ -2,7 +2,7 @@
 
 Librarian is a local-first corpus cleaner and organizer. It reads documents, extracts their contents, copyedits prose to a configurable CMOS style, classifies documents using a Dewey-style taxonomy, and indexes the collection for full-text search. All output documents are UTF-8 Markdown (`.md`) from the first release, delivered through a CLI and TUI. Pele is the primary diagram rendering target, with standard Mermaid source and tested compatibility with other renderers. Graphical applications follow terminal acceptance.
 
-This is the design baseline for the rebuild, not a description of implemented capabilities. Rust is the recommended shared implementation language; engine choices remain subject to the native and WASM portability experiment below. Optimize measured document quality, elapsed time, memory, and total cost together.
+This is the design baseline for the rebuild, not a description of implemented capabilities. The first shared Rust/CLI/WASM slice is implemented; see [Rust foundation status and commands](RUST_FOUNDATION.md) for its tested scope. PDF/OCR engine choices remain subject to the native and WASM portability experiment below. Optimize measured document quality, elapsed time, memory, and total cost together.
 
 ## Concrete starting stack
 

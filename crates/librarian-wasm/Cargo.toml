@@ -1,0 +1,19 @@
+[package]
+name = "librarian-wasm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Librarian document assembly and Markdown conversion for WebAssembly"
+repository = "https://github.com/nampara-ai/librarian"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+librarian-app.workspace = true
+wasm-bindgen.workspace = true
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

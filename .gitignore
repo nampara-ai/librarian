@@ -35,3 +35,8 @@ input/
 *.log
 *.tmp
 tmp/
+
+# Rust rebuild artifacts
+/target/
+/crates/librarian-wasm/pkg/
+/crates/librarian-wasm/pkg-web/
