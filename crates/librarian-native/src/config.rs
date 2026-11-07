@@ -18,6 +18,10 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Provider {
+    pub catalog_id: String,
+    pub credential: Option<crate::credentials::CredentialRef>,
+    /// schema, json, or prompt; all modes still validate output locally.
+    pub structured_output: String,
     /// responses, chat (OpenAI-compatible), or anthropic.
     pub kind: String,
     pub base_url: String,
@@ -79,6 +83,9 @@ pub struct Output {
 impl Default for Provider {
     fn default() -> Self {
         Self {
+            catalog_id: "openai".into(),
+            credential: None,
+            structured_output: "schema".into(),
             kind: "responses".into(),
             base_url: "https://api.openai.com/v1".into(),
             model: String::new(),
@@ -188,6 +195,15 @@ impl Config {
         Ok(())
     }
     pub fn validate(&self) -> Result<()> {
+        if !matches!(
+            self.provider.structured_output.as_str(),
+            "schema" | "json" | "prompt"
+        ) {
+            bail!("provider.structured_output must be schema, json or prompt");
+        }
+        if let Some(reference) = &self.provider.credential {
+            reference.check_endpoint(&self.provider.base_url)?;
+        }
         if self.version != 1 {
             bail!("Unsupported configuration version {}", self.version);
         }
@@ -207,7 +223,7 @@ impl Config {
         }
         if !url.username().is_empty() || url.password().is_some() || url.query().is_some() {
             bail!(
-                "Provider credentials belong in the configured environment variable, not the URL"
+                "Connect credentials through Setup or a configured environment variable; credentials are not allowed in the URL"
             );
         }
         if !(512..=32_000).contains(&self.processing.chunk_bytes) {

@@ -149,9 +149,17 @@ impl ModelClient {
             bail!("No model configured. Use librarian setup or config set provider.model MODEL");
         }
         let input = serde_json::to_string(&request.input)?;
+        let instructions = if p.structured_output == "schema" {
+            request.instructions.to_owned()
+        } else {
+            format!(
+                "{}\nReturn only JSON conforming to this schema:\n{}",
+                request.instructions, request.schema
+            )
+        };
         let mut body = match p.kind.as_str() {
             "responses" => {
-                let mut prefix = json!({"type":"input_text","text":request.instructions});
+                let mut prefix = json!({"type":"input_text","text":instructions});
                 if p.prompt_cache == "explicit" {
                     prefix["prompt_cache_breakpoint"] = json!({"mode":"explicit","ttl":"30m"});
                 }
@@ -159,10 +167,16 @@ impl ModelClient {
                 if let Some((bytes, mime)) = request.image {
                     content.push(json!({"type":"input_image","image_url":format!("data:{mime};base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes)),"detail":"high"}));
                 }
-                json!({"model":model,"store":false,"input":[{"role":"developer","content":[prefix]},{"role":"user","content":content}],"max_output_tokens":p.max_output_tokens,"text":{"format":{"type":"json_schema","name":request.task,"strict":true,"schema":request.schema}}})
+                let mut body = json!({"model":model,"store":false,"input":[{"role":"developer","content":[prefix]},{"role":"user","content":content}],"max_output_tokens":p.max_output_tokens});
+                if p.structured_output == "schema" {
+                    body["text"] = json!({"format":{"type":"json_schema","name":request.task,"strict":true,"schema":request.schema}});
+                } else if p.structured_output == "json" {
+                    body["text"] = json!({"format":{"type":"json_object"}});
+                }
+                body
             }
             "anthropic" => {
-                let mut prefix = json!({"type":"text","text":request.instructions});
+                let mut prefix = json!({"type":"text","text":instructions});
                 if p.prompt_cache == "ephemeral" {
                     prefix["cache_control"] = json!({"type":"ephemeral"});
                 }
@@ -170,14 +184,25 @@ impl ModelClient {
                 if let Some((bytes, mime)) = request.image {
                     content.push(json!({"type":"image","source":{"type":"base64","media_type":mime,"data":base64::engine::general_purpose::STANDARD.encode(bytes)}}));
                 }
-                json!({"model":model,"max_tokens":p.max_output_tokens,"system":[prefix],"messages":[{"role":"user","content":content}],"output_config":{"format":{"type":"json_schema","schema":request.schema}}})
+                let mut body = json!({"model":model,"max_tokens":p.max_output_tokens,"system":[prefix],"messages":[{"role":"user","content":content}]});
+                if p.structured_output == "schema" {
+                    body["output_config"] =
+                        json!({"format":{"type":"json_schema","schema":request.schema}});
+                }
+                body
             }
             _ => {
                 let mut content = vec![json!({"type":"text","text":input})];
                 if let Some((bytes, mime)) = request.image {
                     content.push(json!({"type":"image_url","image_url":{"url":format!("data:{mime};base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes))}}));
                 }
-                json!({"model":model,"messages":[{"role":"system","content":request.instructions},{"role":"user","content":content}],"max_tokens":p.max_output_tokens,"response_format":{"type":"json_schema","json_schema":{"name":request.task,"strict":true,"schema":request.schema}}})
+                let mut body = json!({"model":model,"messages":[{"role":"system","content":instructions},{"role":"user","content":content}],"max_tokens":p.max_output_tokens});
+                if p.structured_output == "schema" {
+                    body["response_format"] = json!({"type":"json_schema","json_schema":{"name":request.task,"strict":true,"schema":request.schema}});
+                } else if p.structured_output == "json" {
+                    body["response_format"] = json!({"type":"json_object"});
+                }
+                body
             }
         };
         if p.kind == "responses" && p.prompt_cache != "off" {
@@ -309,19 +334,15 @@ impl ModelClient {
             bail!("Request exceeds the configured context budget");
         }
         let estimated = input_estimate + p.max_output_tokens as u64;
-        let key_value = if p.key_env.is_empty() {
-            None
-        } else {
-            std::env::var(&p.key_env)
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-        };
+        let provider = p.clone();
+        let key_value =
+            tokio::task::spawn_blocking(move || crate::credentials::resolve(&provider)).await??;
         let local = reqwest::Url::parse(&p.base_url)?
             .host_str()
             .is_some_and(|h| matches!(h, "localhost" | "127.0.0.1" | "::1" | "[::1]"));
         if key_value.is_none() && !local {
             bail!(
-                "API credential is missing: set {} before processing",
+                "API credential is missing. Open Setup to connect your provider, or configure {} for scripted use.",
                 p.key_env
             );
         }
@@ -347,9 +368,9 @@ impl ModelClient {
             let mut req = self.http.post(&url).json(&body);
             if let Some(value) = &key_value {
                 req = if p.kind == "anthropic" {
-                    req.header("x-api-key", value)
+                    req.header("x-api-key", value.as_str())
                 } else {
-                    req.bearer_auth(value)
+                    req.bearer_auth(value.as_str())
                 };
             }
             if p.kind == "anthropic" {

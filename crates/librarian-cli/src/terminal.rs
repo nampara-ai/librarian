@@ -1,19 +1,25 @@
-use anyhow::{Context, Result, bail};
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crate::ui;
+use anyhow::{Context, Result};
+use crossterm::event::{KeyCode, KeyModifiers};
 use librarian_native::{
     config::Config,
     pipeline,
     store::{Job, Library},
 };
+use librarian_native::{
+    credentials,
+    profile::{self, Location},
+};
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, Gauge, List, ListItem, ListState, Paragraph, Wrap},
 };
+use serde::{Deserialize, Serialize};
 use std::{
-    io::{self, IsTerminal, Read},
+    io::Read,
     path::{Path, PathBuf},
     process::{Child, Stdio},
     sync::{
@@ -49,15 +55,9 @@ impl Progress {
     }
 }
 
-enum Modal {
-    None,
-    Wizard(Wizard),
-    Search(String),
-    Message(String, String),
-    Browser(Browser),
-}
-#[derive(Clone)]
-struct Wizard {
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
+struct Import {
     source: String,
     destination: String,
     recursive: bool,
@@ -67,45 +67,69 @@ struct Wizard {
     start: bool,
     field: usize,
 }
-struct Browser {
-    folder: PathBuf,
-    entries: Vec<PathBuf>,
-    selected: usize,
-    wizard: Wizard,
-    destination: bool,
+impl Default for Import {
+    fn default() -> Self {
+        Self {
+            source: String::new(),
+            destination: String::new(),
+            recursive: false,
+            create: false,
+            extract_only: false,
+            body_only: false,
+            start: true,
+            field: 0,
+        }
+    }
 }
 struct App {
     selected: usize,
-    modal: Modal,
     message: String,
     child: Option<Child>,
     tick: u64,
-    modal_scroll: u16,
 }
 
 pub fn run(root: &Path, config_path: &Path) -> Result<()> {
-    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-        bail!(
-            "The dashboard requires an interactive terminal; use clean --output or status --json"
-        );
-    }
-    let library = Library::open(root)?;
-    let mut terminal = ratatui::init();
-    let result = dashboard(&mut terminal, &library, config_path);
-    ratatui::restore();
-    result
+    let mut location = Location {
+        root: root.to_owned(),
+        config: config_path.to_owned(),
+    };
+    ui::with_terminal(|terminal| {
+        loop {
+            let result = (|| -> Result<Option<Location>> {
+                if !location.ready()? {
+                    let Some(ready) = crate::onboarding::run(terminal, location.clone())? else {
+                        return Ok(None);
+                    };
+                    location = ready;
+                }
+                let library = Library::open(&location.root)?;
+                dashboard(terminal, &library, &location.config)
+            })();
+            match result {
+                Ok(Some(next)) => location = next,
+                Ok(None) => return Ok(()),
+                Err(error) if error.is::<ui::SaveExit>() => {
+                    let library = Library::open(&location.root)?;
+                    library.control(None, "pause")?;
+                    return Ok(());
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    })
 }
+
+const HELP: &str = "HOME\nn  New Import\nq  Start queue (one file at a time)\np  Pause selected job\nr  Resume selected job and start queue\nc  Cancel selected job; originals and committed work remain\ns  Search\nf  Setup\nh  Help\nEnter / Space  Preview selected job\n\nEVERY SCREEN\nArrows / Tab / Shift+Tab  Navigate lists and forms\nEnter / Space  Activate a button, toggle, or browsable field\nEsc  Back; at Home, close the dashboard (worker continues)\nCtrl+S  Save accepted answers/drafts, pause work in this workspace, and exit\nx  Continue a completed automatic setup step\n\nFILE BROWSER\nEnter  Open folder / select file\nSpace  Select the folder you are currently inside\nEsc  Return through folder history, then back to the form\nBackspace  Parent folder\n/  Type a path\nn  Create folder when selecting a destination or workspace\nCtrl+B  Additional browse shortcut on source/destination fields\ne  Type a path on source/destination fields\n\nTEXT FIELDS\nEnter accepts; Esc discards the current edit. Spaces are ordinary text.\nHome shortcuts do not fire inside fields. Ctrl+S keeps previously accepted\nanswers; an unaccepted edit or unsaved API key is discarded.\n\nCOPY / PASTE\nUse your terminal's copy/paste commands (often Ctrl+Shift+C/V on Windows\nand Linux; Cmd+C/V on macOS). Librarian does not bind Ctrl+C in the TUI.\nMouse selection and clipboard shortcuts belong to your terminal.\n\nRUNTIME\nSetup establishes the active workspace, provider, secure credential, model,\nengines and defaults. Workers load it automatically. Existing queued jobs\nkeep their saved configuration. API keys are never written into config.\n\nCLI\nconfig schema · config edit · doctor · status --json\nshow ID · print ID · export ID --output FOLDER\nSee the bundled README for the complete terminal guide.";
 
 fn dashboard(
     terminal: &mut ratatui::DefaultTerminal,
     library: &Library,
     config_path: &Path,
-) -> Result<()> {
+) -> Result<Option<Location>> {
     let mut app = App {
         selected: 0,
-        modal: Modal::None,
-        modal_scroll: 0,
-        message: "n new import · s start queue · , setup · / search · ? help".into(),
+        message: "Arrows/Tab select · Enter/Space preview · Esc close · Ctrl+S save, pause & exit"
+            .into(),
         child: None,
         tick: 0,
     };
@@ -119,109 +143,257 @@ fn dashboard(
             app.child = None;
         }
         terminal.draw(|frame| draw(frame, &jobs, &app, library))?;
-        if !event::poll(Duration::from_millis(180))? {
-            continue;
-        }
-        let Event::Key(key) = event::read()? else {
+        let Some(key) = ui::key()? else {
             continue;
         };
-        if key.kind != KeyEventKind::Press {
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
             continue;
         }
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            library.control(None, "pause")?;
-            break;
+        if let Some(delta) = ui::movement(key.code) {
+            app.selected = ui::advance(app.selected, delta, jobs.len());
+            continue;
         }
         let selected = jobs.get(app.selected).map(|j| j.id);
-        let modal = std::mem::replace(&mut app.modal, Modal::None);
-        if !matches!(modal, Modal::Message(..)) {
-            app.modal_scroll = 0;
+        let outcome = (|| -> Result<Option<Location>> {
+            match key.code {
+                KeyCode::Char('n') => import(terminal, &mut app, library, config_path)?,
+                KeyCode::Char('q') => start_worker(&mut app, library, config_path)?,
+                KeyCode::Char('p') => {
+                    if let Some(id) = selected {
+                        library.control(Some(id), "pause")?;
+                        app.message = format!("Pause requested for #{id}; committed work retained");
+                    }
+                }
+                KeyCode::Char('r') => {
+                    if let Some(id) = selected {
+                        library.control(Some(id), "resume")?;
+                        start_worker(&mut app, library, config_path)?;
+                    }
+                }
+                KeyCode::Char('c') => {
+                    if let Some(id) = selected {
+                        library.control(Some(id), "cancel")?;
+                        app.message = format!("Cancel requested for #{id}; originals retained");
+                    }
+                }
+                KeyCode::Char('s') => {
+                    let mut query = String::new();
+                    while let Some(value) = ui::input(
+                        terminal,
+                        "Search",
+                        "Search accepted document text. Enter runs the search; Esc returns Home.",
+                        &query,
+                        false,
+                    )? {
+                        query = value.to_string();
+                        let hits = library.search(&query, 30)?;
+                        let body = hits
+                            .into_iter()
+                            .map(|r| {
+                                format!(
+                                    "#{}  {}\n{}\n",
+                                    r["job"],
+                                    r["title"].as_str().unwrap_or(""),
+                                    r["snippet"].as_str().unwrap_or("")
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        ui::notice(
+                            terminal,
+                            &format!("Search: {query}"),
+                            if body.is_empty() { "No matches" } else { &body },
+                        )?;
+                    }
+                }
+                KeyCode::Char('f') => {
+                    return crate::onboarding::run(
+                        terminal,
+                        Location {
+                            root: library.root.clone(),
+                            config: config_path.to_owned(),
+                        },
+                    );
+                }
+                KeyCode::Char('h') => ui::notice(terminal, "Librarian controls", HELP)?,
+                code if ui::activate(code) => {
+                    if let Some(job) = jobs.get(app.selected) {
+                        let (title, body) = preview(library, job)?;
+                        ui::notice(terminal, &title, &body)?;
+                    }
+                }
+                _ => {}
+            }
+            Ok(None)
+        })();
+        match outcome {
+            Ok(Some(next)) => return Ok(Some(next)),
+            Ok(None) => {}
+            Err(e) if e.is::<ui::SaveExit>() => return Err(e),
+            Err(e) => app.message = format!("{e:#}"),
         }
-        match modal{
-            Modal::Wizard(mut w)=>{
-                match key.code{
-                    KeyCode::Esc=>{},
-                    KeyCode::Tab=>{w.field=(w.field+1)%7;app.modal=Modal::Wizard(w);},
-                    KeyCode::BackTab=>{w.field=(w.field+6)%7;app.modal=Modal::Wizard(w);},
-                    KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL)&&w.field<2=>{
-                        let destination=w.field==1;let chosen=crate::setup::expand_path(if destination{&w.destination}else{&w.source});let folder=if chosen.is_dir(){chosen}else{chosen.parent().filter(|p|p.is_dir()).map(Path::to_owned).unwrap_or(std::env::current_dir()?)};
-                        open_browser(&mut app,folder,w,destination);
-                    }
-                    KeyCode::Enter if w.field==6=>{
-                        let result=(||->Result<usize>{let mut config=Config::load(config_path)?;if w.extract_only{config.processing.edit=false;config.processing.classify=false;config.processing.vision=false;}
-                            if w.body_only{config.output.frontmatter=false;config.output.title=false;config.output.summary=false;config.output.page_markers=false;config.output.review_notes=false;}
-                            let ids=pipeline::queue(library,&crate::setup::expand_path(&w.source),&crate::setup::expand_path(&w.destination),&config,w.recursive,w.create)?;if w.start{start_worker(&mut app,library,config_path)?;}Ok(ids.len())})();
-                        match result{Ok(n)=>app.message=format!("Queued {n} file(s). Processing is sequential."),Err(e)=>{app.message=format!("{e:#}");app.modal=Modal::Wizard(w);}}
-                    }
-                    KeyCode::Enter=>{w.field+=1;app.modal=Modal::Wizard(w);},
-                    KeyCode::Char(' ') if w.field>=2=>{match w.field{2=>w.recursive = !w.recursive,3=>w.create = !w.create,4=>w.extract_only = !w.extract_only,5=>w.body_only = !w.body_only,6=>w.start = !w.start,_=>{}}app.modal=Modal::Wizard(w);},
-                    KeyCode::Backspace if w.field<2=>{if w.field==0{w.source.pop();}else{w.destination.pop();}app.modal=Modal::Wizard(w);},
-                    KeyCode::Char(c) if w.field<2=>{if w.field==0{w.source.push(c);}else{w.destination.push(c);}app.modal=Modal::Wizard(w);},
-                    _=>app.modal=Modal::Wizard(w),
-                }
-            }
-            Modal::Browser(mut b)=>{
-                match key.code{
-                    KeyCode::Esc=>app.modal=Modal::Wizard(b.wizard),
-                    KeyCode::Down|KeyCode::Char('j')=>{b.selected=(b.selected+1).min(b.entries.len().saturating_sub(1));app.modal=Modal::Browser(b);},
-                    KeyCode::Up|KeyCode::Char('k')=>{b.selected=b.selected.saturating_sub(1);app.modal=Modal::Browser(b);},
-                    KeyCode::Backspace=>{let folder=b.folder.parent().map(Path::to_owned).unwrap_or_else(||b.folder.clone());open_browser(&mut app,folder,b.wizard,b.destination);},
-                    KeyCode::Char(' ')=>{let chosen=b.folder.to_string_lossy().into_owned();if b.destination{b.wizard.destination=chosen;}else{b.wizard.source=chosen;}app.modal=Modal::Wizard(b.wizard);},
-                    KeyCode::Enter=>{if let Some(path)=b.entries.get(b.selected).cloned(){if path.is_dir(){open_browser(&mut app,path,b.wizard,b.destination);}else if !b.destination{b.wizard.source=path.to_string_lossy().into_owned();app.modal=Modal::Wizard(b.wizard);}else{app.modal=Modal::Browser(b);}}else{app.modal=Modal::Browser(b);}},
-                    _=>app.modal=Modal::Browser(b),
-                }
-            }
-            Modal::Search(mut query)=>{match key.code{KeyCode::Esc=>{},KeyCode::Enter=>{match library.search(&query,30){Ok(results)=>{let body=results.into_iter().map(|r|format!("#{}  {}\n{}\n",r["job"],r["title"].as_str().unwrap_or(""),r["snippet"].as_str().unwrap_or(""))).collect::<Vec<_>>().join("\n");app.modal=Modal::Message(format!("Search: {query}"),if body.is_empty(){"No matches".into()}else{body});},Err(e)=>app.message=e.to_string()}},KeyCode::Backspace=>{query.pop();app.modal=Modal::Search(query);},KeyCode::Char(c)=>{query.push(c);app.modal=Modal::Search(query);},_=>app.modal=Modal::Search(query)}}
-            Modal::Message(title,body)=>{if !matches!(key.code,KeyCode::Esc|KeyCode::Enter|KeyCode::Char('q')){match key.code {KeyCode::Down|KeyCode::Char('j')=>app.modal_scroll=app.modal_scroll.saturating_add(1),KeyCode::Up|KeyCode::Char('k')=>app.modal_scroll=app.modal_scroll.saturating_sub(1),KeyCode::PageDown=>app.modal_scroll=app.modal_scroll.saturating_add(20),KeyCode::PageUp=>app.modal_scroll=app.modal_scroll.saturating_sub(20),KeyCode::Home=>app.modal_scroll=0,_=>{}}app.modal=Modal::Message(title,body);}}
-            Modal::None=>match key.code{
-                KeyCode::Char('q')|KeyCode::Esc=>break,
-                KeyCode::Down|KeyCode::Char('j')=>app.selected=(app.selected+1).min(jobs.len().saturating_sub(1)),
-                KeyCode::Up|KeyCode::Char('k')=>app.selected=app.selected.saturating_sub(1),
-                KeyCode::Char('n')=>app.modal=Modal::Wizard(Wizard{source:String::new(),destination:String::new(),recursive:false,create:false,extract_only:false,body_only:false,start:true,field:0}),
-                KeyCode::Char('s')=>{if let Err(e)=start_worker(&mut app,library,config_path){app.message=format!("{e:#}");}},
-                KeyCode::Char('p')=>{if let Some(id)=selected{library.control(Some(id),"pause")?;app.message=format!("Paused #{id}; committed work retained");}},
-                KeyCode::Char('r')=>{if let Some(id)=selected{library.control(Some(id),"resume")?;if let Err(e)=start_worker(&mut app,library,config_path){app.message=e.to_string();}}},
-                KeyCode::Char('c')=>{if let Some(id)=selected{library.control(Some(id),"cancel")?;app.message=format!("Cancelled #{id}; originals retained");}},
-                KeyCode::Char('/')=>app.modal=Modal::Search(String::new()),
-                KeyCode::Char(',')=>{
-                    ratatui::restore();let result=crate::setup::configure(config_path);*terminal=ratatui::init();app.message=match result{Ok(())=>"Configuration saved. New jobs use these settings.".into(),Err(e)=>format!("{e:#}")};
-                }
-                KeyCode::Char('v')|KeyCode::Enter=>{if let Some(job)=jobs.get(app.selected){match preview(library,job) {Ok((title,body))=>app.modal=Modal::Message(title,body),Err(e)=>app.message=format!("{e:#}")}}},
-                KeyCode::Char('?')=>app.modal=Modal::Message("Keyboard controls".into(),"n  New import: source → destination → options → start\nCtrl+B  Browse files/folders inside the import form\ns  Start queued files (one file at a time)\np  Pause selected job\nr  Resume selected job and start worker\nc  Cancel selected job\nv / Enter  Preview output or diagnostics\n/  Search document text\n,  Configure provider, style and output options\nj/k or arrows  Select job\nq  Close dashboard; background worker continues\nCtrl+C  Pause active/queued jobs and close\n\nCLI: config schema · config edit · engines install\n     show ID · print ID · export ID --output FOLDER\n\nFiles requiring review remain clearly marked.\nAPI credentials are read from configured environment variables.".into()),
-                _=>{},
-            },
+        if key.code == KeyCode::Esc {
+            return Ok(None);
         }
     }
-    Ok(())
 }
 
-fn browser(folder: PathBuf, wizard: Wizard, destination: bool) -> Result<Browser> {
-    let mut entries = std::fs::read_dir(&folder)?
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_type()
-                .is_ok_and(|k| !k.is_symlink() && (!destination || k.is_dir()))
-        })
-        .map(|e| e.path())
-        .collect::<Vec<_>>();
-    entries.sort_by_key(|p| (!p.is_dir(), p.file_name().map(|s| s.to_os_string())));
-    Ok(Browser {
-        folder,
-        entries,
-        selected: 0,
-        wizard,
-        destination,
-    })
-}
-fn open_browser(app: &mut App, folder: PathBuf, wizard: Wizard, destination: bool) {
-    match browser(folder, wizard.clone(), destination) {
-        Ok(browser) => app.modal = Modal::Browser(browser),
-        Err(error) => {
-            app.message = format!("Cannot open folder: {error}");
-            app.modal = Modal::Wizard(wizard);
+fn import(
+    t: &mut ratatui::DefaultTerminal,
+    app: &mut App,
+    library: &Library,
+    config_path: &Path,
+) -> Result<()> {
+    let path = library.root.join("import-draft.json");
+    let mut w = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Import>(&bytes).ok())
+        .unwrap_or_default();
+    loop {
+        profile::write_json(&path, &w)?;
+        let check = |b| if b { "[x]" } else { "[ ]" };
+        let fields = vec![
+            format!(
+                "Source       {}",
+                if w.source.is_empty() {
+                    "Select a file or folder"
+                } else {
+                    &w.source
+                }
+            ),
+            format!(
+                "Destination  {}",
+                if w.destination.is_empty() {
+                    "Select or create an output folder"
+                } else {
+                    &w.destination
+                }
+            ),
+            format!("{} Include subfolders", check(w.recursive)),
+            format!("{} Create destination if missing", check(w.create)),
+            format!("{} Extraction only (no model calls)", check(w.extract_only)),
+            format!("{} Body-only Markdown", check(w.body_only)),
+            format!("{} Start processing after queueing", check(w.start)),
+            "Queue import".into(),
+        ];
+        // This form shares navigation with setup; browse fields also expose an
+        // explicit typed-path option, so paths containing spaces work normally.
+        let Some(index) = ui::path_form(
+            t,
+            "New Import",
+            "Choose source and destination before queueing.
+Enter/Space opens a path or toggles an option; Queue import submits.
+Esc returns Home with this draft saved.",
+            &fields,
+            w.field,
+        )?
+        else {
+            return Ok(());
+        };
+        w.field = index % fields.len();
+        if index >= fields.len() {
+            let destination = w.field == 1;
+            let value = if destination {
+                &w.destination
+            } else {
+                &w.source
+            };
+            if let Some(path) = ui::input(
+                t,
+                if destination {
+                    "Destination folder"
+                } else {
+                    "Source file or folder"
+                },
+                "Enter a path. ~ expands to your home folder. Spaces are preserved.",
+                value,
+                false,
+            )? {
+                if destination {
+                    w.destination = path.to_string();
+                } else {
+                    w.source = path.to_string();
+                }
+            }
+            continue;
+        }
+        match index {
+            0 | 1 => {
+                let destination = index == 1;
+                let value = if destination {
+                    &w.destination
+                } else {
+                    &w.source
+                };
+                let start = if value.is_empty() {
+                    std::env::current_dir()?
+                } else {
+                    crate::setup::expand_path(value)
+                };
+                if let Some(chosen) = ui::browse(t, &start, destination)? {
+                    if destination {
+                        w.destination = chosen.to_string_lossy().into_owned();
+                    } else {
+                        w.source = chosen.to_string_lossy().into_owned();
+                    }
+                }
+            }
+            2 => w.recursive = !w.recursive,
+            3 => w.create = !w.create,
+            4 => w.extract_only = !w.extract_only,
+            5 => w.body_only = !w.body_only,
+            6 => w.start = !w.start,
+            7 => {
+                let result = (|| -> Result<usize> {
+                    anyhow::ensure!(
+                        !w.source.is_empty() && !w.destination.is_empty(),
+                        "Select both source and destination first"
+                    );
+                    let mut config = Config::load(config_path)?;
+                    if w.extract_only {
+                        config.processing.edit = false;
+                        config.processing.classify = false;
+                        config.processing.vision = false;
+                    }
+                    if w.body_only {
+                        config.output.frontmatter = false;
+                        config.output.title = false;
+                        config.output.summary = false;
+                        config.output.page_markers = false;
+                        config.output.review_notes = false;
+                    }
+                    let ids = pipeline::queue(
+                        library,
+                        &crate::setup::expand_path(&w.source),
+                        &crate::setup::expand_path(&w.destination),
+                        &config,
+                        w.recursive,
+                        w.create,
+                    )?;
+                    Ok(ids.len())
+                })();
+                match result {
+                    Ok(n) => {
+                        // Queue creation succeeded. Do not leave a submit-ready
+                        // draft behind if starting the worker subsequently fails.
+                        std::fs::remove_file(&path)?;
+                        app.message = format!("Queued {n} file(s). Processing is sequential.");
+                        if w.start {
+                            start_worker(app, library, config_path)?;
+                        }
+                        return Ok(());
+                    }
+                    Err(e) => ui::notice(t, "Import needs attention", &format!("{e:#}"))?,
+                }
+            }
+            _ => {}
         }
     }
 }
+
 fn preview(library: &Library, job: &Job) -> Result<(String, String)> {
     if let Some(output) = &job.output {
         let mut bytes = Vec::new();
@@ -264,7 +436,8 @@ fn start_worker(app: &mut App, library: &Library, config: &Path) -> Result<()> {
         .create(true)
         .append(true)
         .open(library.root.join("worker.log"))?;
-    let child = std::process::Command::new(std::env::current_exe()?)
+    let mut command = std::process::Command::new(std::env::current_exe()?);
+    command
         .arg("--library")
         .arg(&library.root)
         .arg("--config")
@@ -272,9 +445,22 @@ fn start_worker(app: &mut App, library: &Library, config: &Path) -> Result<()> {
         .args(["run", "--quiet"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(log)
-        .spawn()
-        .context("Could not start worker")?;
+        .stderr(log);
+    // Jobs retain their provider snapshots. Pass each required session key to
+    // this child privately, including jobs queued under an earlier profile.
+    let providers = {
+        let mut statement = library
+            .db
+            .prepare("SELECT DISTINCT config FROM jobs WHERE status IN ('queued','running')")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+    };
+    for json in providers {
+        let config: Config = serde_json::from_str(&json)?;
+        credentials::attach_session(&mut command, &config.provider)?;
+    }
+    let child = command.spawn().context("Could not start worker")?;
     app.child = Some(child);
     app.message = "Worker started. Files run one at a time.".into();
     Ok(())
@@ -295,16 +481,6 @@ fn panel(title: &str) -> Block<'_> {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
 }
-fn centered(area: Rect, width: u16, height: u16) -> Rect {
-    let width = width.min(area.width.saturating_sub(2));
-    let height = height.min(area.height.saturating_sub(2));
-    Rect::new(
-        area.x + (area.width - width) / 2,
-        area.y + (area.height - height) / 2,
-        width,
-        height,
-    )
-}
 fn draw(frame: &mut Frame<'_>, jobs: &[Job], app: &App, library: &Library) {
     let area = frame.area();
     let rows = Layout::default()
@@ -312,6 +488,7 @@ fn draw(frame: &mut Frame<'_>, jobs: &[Job], app: &App, library: &Library) {
         .constraints([
             Constraint::Length(3),
             Constraint::Min(8),
+            Constraint::Length(4),
             Constraint::Length(4),
             Constraint::Length(2),
         ])
@@ -393,7 +570,7 @@ fn draw(frame: &mut Frame<'_>, jobs: &[Job], app: &App, library: &Library) {
         )
     } else {
         format!(
-            "Your library is ready.\n\nPress n to select a file or folder and an output destination.\n\nPress , to configure your provider, OCR and Markdown preferences.\n\nLibrary:\n{}",
+            "Your library is ready.\n\nPress n to select a file or folder and an output destination.\n\nPress f to configure your provider, OCR and Markdown preferences.\n\nLibrary:\n{}",
             library.root.display()
         )
     };
@@ -429,116 +606,16 @@ fn draw(frame: &mut Frame<'_>, jobs: &[Job], app: &App, library: &Library) {
             rows[2],
         );
     } else {
-        frame.render_widget(Paragraph::new("  n New import   s Start queue   p Pause   r Resume   c Cancel   / Search   , Setup   ? Help").wrap(Wrap{trim:true}).block(panel(" Controls ")),rows[2]);
+        frame.render_widget(
+            Paragraph::new("  No active job · q starts queued work").block(panel(" Progress ")),
+            rows[2],
+        );
     }
+    frame.render_widget(Paragraph::new("  n New Import   q Start queue   p Pause   r Resume   c Cancel   s Search   f Setup   h Help").wrap(Wrap{trim:true}).block(panel(" Controls ")),rows[3]);
     frame.render_widget(
         Paragraph::new(app.message.as_str())
             .style(Style::default().fg(Color::DarkGray))
             .wrap(Wrap { trim: true }),
-        rows[3],
+        rows[4],
     );
-    match &app.modal {
-        Modal::None => {}
-        Modal::Wizard(w) => {
-            let popup = centered(area, 88, 23);
-            frame.render_widget(Clear, popup);
-            let check = |b| if b { "[x]" } else { "[ ]" };
-            let fields = [
-                format!("Source       {}", w.source),
-                format!("Destination  {}", w.destination),
-                format!("{} Include subfolders", check(w.recursive)),
-                format!("{} Create destination if missing", check(w.create)),
-                format!("{} Extraction only (no model calls)", check(w.extract_only)),
-                format!("{} Body-only Markdown", check(w.body_only)),
-                format!("{} Start processing after queueing", check(w.start)),
-            ];
-            let mut lines = vec![
-                Line::from(""),
-                Line::from("  Select the source and destination before processing."),
-                Line::from(""),
-            ];
-            for (i, line) in fields.iter().enumerate() {
-                lines.push(Line::from(Span::styled(
-                    format!(" {} {line}", if i == w.field { "›" } else { " " }),
-                    if i == w.field {
-                        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default()
-                    },
-                )));
-                lines.push(Line::from(""));
-            }
-            lines.push(Line::from("  Tab next · Shift+Tab previous · Space toggle"));
-            lines.push(Line::from(
-                "  Ctrl+B browse · Enter on last field queues · Esc cancel",
-            ));
-            frame.render_widget(
-                Paragraph::new(lines)
-                    .block(panel(" New import "))
-                    .wrap(Wrap { trim: false }),
-                popup,
-            );
-        }
-        Modal::Browser(b) => {
-            let popup = centered(area, 90, 28);
-            frame.render_widget(Clear, popup);
-            let parts = Layout::vertical([
-                Constraint::Length(3),
-                Constraint::Min(3),
-                Constraint::Length(2),
-            ])
-            .split(popup);
-            frame.render_widget(
-                Paragraph::new(b.folder.to_string_lossy().into_owned())
-                    .block(panel(" Select file or folder ")),
-                parts[0],
-            );
-            let items = b
-                .entries
-                .iter()
-                .map(|p| {
-                    ListItem::new(format!(
-                        "{} {}",
-                        if p.is_dir() { "▸" } else { " " },
-                        p.file_name().unwrap_or_default().to_string_lossy()
-                    ))
-                })
-                .collect::<Vec<_>>();
-            let mut state = ListState::default();
-            state.select(Some(b.selected));
-            frame.render_stateful_widget(
-                List::new(items)
-                    .highlight_style(Style::default().fg(ACCENT))
-                    .highlight_symbol("› "),
-                parts[1],
-                &mut state,
-            );
-            frame.render_widget(
-                Paragraph::new(
-                    "Enter open/select file · Space select this folder · Backspace up · Esc back",
-                ),
-                parts[2],
-            );
-        }
-        Modal::Search(query) => {
-            let popup = centered(area, 80, 5);
-            frame.render_widget(Clear, popup);
-            frame.render_widget(
-                Paragraph::new(format!("\n  {query}▏"))
-                    .block(panel(" Search · Enter to search · Esc cancel ")),
-                popup,
-            );
-        }
-        Modal::Message(title, body) => {
-            let popup = centered(area, 100, 30);
-            frame.render_widget(Clear, popup);
-            frame.render_widget(
-                Paragraph::new(body.as_str())
-                    .block(panel(title))
-                    .scroll((app.modal_scroll, 0))
-                    .wrap(Wrap { trim: false }),
-                popup,
-            );
-        }
-    }
 }

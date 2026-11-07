@@ -23,3 +23,5 @@ indicatif.workspace = true
 schemars.workspace = true
 toml.workspace = true
 librarian-core.workspace = true
+tempfile.workspace = true
+zeroize.workspace = true

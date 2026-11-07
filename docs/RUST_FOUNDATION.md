@@ -10,34 +10,82 @@ For a source build:
 
 ```sh
 cargo build --release --locked -p librarian-cli
-./target/release/librarian setup
-./target/release/librarian engines install
 ./target/release/librarian
 ```
 
-`engines install` verifies pinned archive SHA-256 hashes and installs PDFium, CPU ONNX Runtime, and PaddleOCR models under the selected library. Bundled distributions already contain them. `doctor --load-engines` diagnoses actual library loading and OCR model-session construction without importing documents or calling a provider.
+On first launch, Librarian opens setup **before Home**. Its Rust runtime needs no Python virtual environment, shell activation, or manual export commands. The same wizard runs on all four native platforms.
 
-Default data lives in the platform application-data location for **librarian-terminal**, separate from the legacy app. Global `--library PATH` and `--config PATH` select another library/configuration. `config path` prints the active TOML path. Import, cancellation, and retry do not delete originals or Keychain entries.
+## First launch: establish your runtime profile
 
-## Dashboard
+Each step asks one question or performs one visible operation. Accept the defaults with Enter/Space. Automatic operations wait for completion; press `x`, Enter, or Space to continue. Esc goes back without losing accepted answers.
 
-Press `,` for setup, then `n` for an import. Enter source and destination; `Ctrl+B` opens the filesystem browser. Enter opens folders/selects a file, Space selects the current folder, Backspace moves up. Tab moves through options. Explicitly choose whether to create a missing destination. Writability is checked before queueing.
+1. Start setup.
+2. Choose the workspace for originals, jobs, caches and the search index. This is separate from each import's Markdown destination. You can use the default, browse, or type a path.
+3. Librarian creates and checks local storage.
+4. Choose a provider. Its API base URL is filled automatically. Custom compatible endpoints are also supported.
+5. Paste your API key into a masked field, reuse a saved credential, or import a key already present in your shell. The provider's key-page link is available if you need an account/key. Local servers may use no key.
+6. Choose secure storage or session-only storage. macOS uses Keychain, Windows uses Credential Manager, and Linux uses Secret Service. If Linux has no unlocked Secret Service, session-only mode works without installing a desktop environment. Existing Keychain entries are never deleted.
+7. Librarian retrieves the provider's **live model catalog** with your credential. Discovery errors remain visible; a stale model list is never substituted.
+8. Select a model for text and vision. Search by typing; use arrows or Tab to navigate. The list labels reported image support and unknown capabilities. No model slug needs to be typed.
+9. Set per-document spending or generated-token limits. Missing catalog prices are shown as unknown, never free.
+10. Review processing defaults: copyediting, classification, selective vision, local OCR, language and editorial style.
+11. Review Markdown defaults: metadata, title, synopsis, page markers, review notes and filenames.
+12. Initialize PDF/OCR engines. Bundled engines are reused; source builds download pinned, checksum-verified assets automatically. The optional external Tesseract engine requires its own installation.
+13. Explicitly run a small billed API check. A fresh worker loads the draft profile and credential, reads a built-in image, and returns validated structured data. One request, at most 1,024 generated tokens; no user documents. This checks authentication, worker handoff, image input and protocol compatibility, not document quality.
+14. Review and activate the profile, then enter Home.
 
-Files run one at a time. Within-file model requests have bounded concurrency.
+Accepted answers are saved in a non-secret setup draft. Ctrl+S saves that draft and exits; unaccepted text and unsaved API keys are discarded. On the next launch, resume the draft or start from your current configuration. Setup does not rewrite existing queued jobs. Choosing a workspace that already has a configuration offers to load those settings.
+
+The active profile supplies workspace, credentials, provider, models, engines and defaults automatically to future CLI/TUI launches. Session-only credentials remain available to workers started by that process; a new independent launch needs the key again. Keys never appear in ordinary config files, job snapshots, logs, or command-line arguments. Credential references are bound to their provider endpoint.
+
+Provider presets include Anthropic, Alibaba Qwen, Google, OpenAI, xAI, Z.ai, Moonshot, DeepSeek, MiniMax, Mistral, OpenRouter, Together, Fireworks, Groq, NVIDIA, Hugging Face, Nebius, Novita, SiliconFlow, SambaNova, Ollama, LM Studio and custom compatible endpoints. Account access and API compatibility are verified for the selected model during setup; inclusion is not a claim that every provider has been exercised with a paid account.
+
+Direct providers are sorted by their best listed model's [Vision Arena](https://arena.ai/leaderboard/chat/vision) point estimate as of **2026-11-06**. Scores and the snapshot date are displayed. This is a general vision preference benchmark with overlapping confidence intervals, not a document-OCR ranking. Gateways/local endpoints are listed separately without invented scores. Current model availability always comes from the live provider catalog.
+
+`doctor --load-engines` diagnoses actual library loading and OCR model-session construction without provider requests. `engines install` installs the pinned assets manually if needed. Default data lives in the platform application-data location for **librarian-terminal**, separate from the legacy app. The active-profile pointer lives there too. Global `--library PATH` selects another workspace; `--config PATH` overrides its configuration. `config path` prints the resolved TOML path.
+
+## Controls: one set of expectations
+
+| Context | Keys | Action |
+| --- | --- | --- |
+| Every list/form | Arrows, Tab, Shift+Tab | Move selection |
+| Buttons, toggles, browsable fields | Enter or Space | Activate, toggle, or browse |
+| Every screen | Esc | Back one level; accepted answers remain |
+| Completed automatic setup step | `x`, Enter or Space | Continue; never bypass running work or errors |
+| Text field | Enter / Esc | Accept / discard current edit |
+| Text field | Left/Right, Home/End, Backspace/Delete | Edit normally; spaces remain text |
+| Long setup details | PageUp / PageDown | Scroll explanatory text |
+| TUI | Ctrl+S | Save accepted drafts, pause active/queued work in this workspace, and exit |
+
+Home shortcuts do not fire while entering text or filtering a list. Ctrl+C has **no Librarian TUI binding**. Copy/paste belongs to your terminal: commonly Cmd+C/V on macOS and Ctrl+Shift+C/V in Windows/Linux terminals; some terminals also support Ctrl+C with selected text. Librarian enables bracketed paste for text fields. Ctrl+S is handled in raw terminal mode so it does not invoke Unix terminal flow control.
+
+### Home
 
 | Key | Action |
 | --- | --- |
-| `s` | Start queued work |
-| `p` / `r` / `c` | Pause / resume / cancel selected job |
-| `v` / Enter | Preview output or diagnostics |
-| Arrows / PgUp / PgDn | Navigate or scroll a preview |
-| `/` | Search accepted document text |
-| `,` | Configure new jobs |
-| `?` | Help |
-| `q` | Close dashboard; background worker continues |
-| Ctrl+C | Pause active/queued work and close |
+| `n` | New Import |
+| `q` | Start queue |
+| `p` | Pause selected job |
+| `r` | Resume selected job and start queue |
+| `c` | Cancel selected job; retain originals and committed work |
+| `s` | Search |
+| `f` | Setup |
+| `h` | Help |
+| Enter / Space | Preview selected output or diagnostics |
+| Esc | Close the dashboard; its background worker continues |
+| Ctrl+S | Save, request a pause for all active/queued jobs, and exit |
 
-The dashboard shows stages, progress, calls, local cache hits, tokens, configured-price cost estimates, outputs, and review/failure status. Preview is capped at 64 KiB; `print` streams the complete file. Background diagnostics also go to `worker.log` in the library directory.
+**Closing Home and pausing work are different actions.** Esc leaves the worker running. Ctrl+S requests a pause before exiting. Accepted chunks and queue changes are already persisted as work progresses. A remote request already sent may finish and be billed after a pause; new accepted-block commits and publication remain gated by job state. Resume later with `r` or `librarian resume --start`.
+
+### New Import and the browser
+
+Press `n`. Source and Destination are browsable fields: Enter/Space opens either one; Ctrl+B is an additional shortcut. Press `e` on either field to type a path, including a not-yet-existing output directory. Choose “Create destination if missing” when appropriate. In the destination browser, `n` creates a folder.
+
+Inside the browser, arrows or Tab move selection. **Enter opens the highlighted folder or selects the highlighted file. Space selects the folder you are currently inside.** Esc returns through your folder history, then back to the form. Backspace opens the parent; `/` opens a typed-path field.
+
+Back in the form, Enter/Space toggles each option. **Queue import is a separate button** below the “Start processing after queueing” toggle. Nothing starts until that button is activated. The destination is checked before queueing. Esc returns Home and retains the unfinished import draft.
+
+Files run one at a time; requests within a file have bounded concurrency. The dashboard shows stages, progress, calls, local cache hits, tokens, estimated cost, output paths and review/failure status. Preview is capped at 64 KiB; `print` streams the complete file. Background diagnostics go to `worker.log` in the workspace.
 
 ## Commands
 
@@ -56,9 +104,11 @@ librarian print 12
 librarian export 12 -o another-folder --create-output
 ```
 
-`clean` without paths prompts interactively. Scripts must supply a destination. `--extract-only` disables editing, classification, and vision calls. `--no-vision` keeps text editing/classification but prohibits image requests. `--body-only` omits frontmatter, generated title/synopsis, page comments, and review notes; review status remains in the library. Global `--json` emits machine-readable results without animation.
+`clean` without paths opens the shared interactive browser. Scripts must supply a destination. `--extract-only` disables editing, classification, and vision calls. `--no-vision` keeps text editing/classification but prohibits image requests. `--body-only` omits frontmatter, generated title/synopsis, page comments, and review notes; review status remains in the library. Global `--json` emits machine-readable results without animation.
 
 `resume` retains saved configuration and accepted work. `retry` creates a new job using current configuration and the retained original. `export` applies current presentation settings to accepted content without model calls. Existing files are never overwritten; collisions receive a filename suffix.
+
+Standalone CLI workers retain conventional Ctrl+C/SIGINT handling to request a graceful pause; Ctrl+S is the interactive TUI action.
 
 Processing exit codes: `0` complete, `1` failure/budget exhausted, `2` review needed, `3` paused/cancelled. A failed file does not discard the remaining queue.
 
@@ -84,7 +134,7 @@ librarian config edit
 | `chat` | OpenAI-compatible `/v1`; appends `/chat/completions` | `implicit`, `off` |
 | `anthropic` | Anthropic-compatible `/v1`; appends `/messages` | `ephemeral`, `off` |
 
-Choose models explicitly. `provider.key_env` names the environment variable holding credentials; the configuration stores its name, never the secret value. Localhost endpoints may omit credentials. Remote endpoints require HTTPS. Hosted providers receive material needed by enabled operations. Extraction-only mode stays local after engine installation.
+Use Setup to select live models and save credentials. For scripts and older profiles, `provider.key_env` can still name an existing environment variable; a saved credential takes precedence. `provider.structured_output` selects strict schema, JSON mode, or prompt-described JSON for compatible endpoints; every response is still validated locally. Localhost endpoints may omit credentials. Remote endpoints require HTTPS. Hosted providers receive material needed by enabled operations. Extraction-only mode stays local after engine installation.
 
 Stable instruction prefixes enable provider caching. The separate local exact-response cache includes endpoint, namespace, model, prompt, schema, input/images, and output limit. Identical concurrent requests are coalesced. Change `provider.namespace` when changing accounts or trust contexts. `cache_ttl_hours` sets reuse duration.
 

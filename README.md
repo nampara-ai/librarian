@@ -4,18 +4,18 @@ A local-first document cleaner and organizer. Import files or folders, extract t
 
 This branch implements the Rust CLI/TUI rebuild. Graphical application work is deferred. The previous Python/Swift implementation remains available as reference; its documentation is in [LEGACY_README.md](docs/LEGACY_README.md).
 
-Native archives are available from successful [Librarian terminal builds](https://github.com/nampara-ai/librarian/actions/workflows/rust-foundation.yml) runs for this branch. Download the artifact matching your platform, unpack the artifact ZIP and the platform archive inside it, and keep `librarian` beside its `engines` folder. Run `./librarian setup`, then `./librarian` (`.\librarian.exe` in PowerShell). The bundled distribution already includes its OCR/PDF engines.
+Native archives are available from successful [Librarian terminal builds](https://github.com/nampara-ai/librarian/actions/workflows/rust-foundation.yml) runs for this branch. Download the artifact matching your platform, unpack the artifact ZIP and the platform archive inside it, and keep `librarian` beside its `engines` folder. Run `./librarian` (`.\librarian.exe` in PowerShell). The bundled distribution already includes its OCR/PDF engines.
 
 To build from source:
 
 ```sh
 cargo build --release --locked -p librarian-cli
-./target/release/librarian setup
-./target/release/librarian engines install
 ./target/release/librarian
 ```
 
-In the dashboard, press `n`, select the source and destination, choose whether to create a missing destination, and start. `Ctrl+B` opens the file/folder browser. Files are processed sequentially, with live progress and pause/resume/cancel controls.
+First launch guides you through a runtime profile: workspace, provider, masked API key, secure/session storage, live model selection, processing/Markdown defaults, engine initialization and an explicit connection/vision check. Later launches load the profile automatically. No environment activation or manual key exports are required.
+
+In Home: `n` New Import, `q` Start queue, `p` Pause, `r` Resume, `c` Cancel, `s` Search, `f` Setup, `h` Help. Arrows or Tab navigate; Enter/Space activates; Esc goes back. Source and destination fields open the shared browser. Files run sequentially with live progress. Ctrl+S saves accepted drafts, requests a pause for active/queued work, and exits; Esc at Home leaves a worker running. See the [terminal guide](docs/RUST_FOUNDATION.md) for browser behavior, clipboard controls, credentials and recovery.
 
 ```sh
 librarian clean /path/to/source-folder -o /path/to/results --create-output --recursive

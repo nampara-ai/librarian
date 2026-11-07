@@ -2,11 +2,14 @@
 #![forbid(unsafe_code)]
 
 pub mod assets;
+pub mod catalog;
 pub mod config;
+pub mod credentials;
 pub mod export;
 pub mod extract;
 pub mod ocr;
 pub mod pipeline;
+pub mod profile;
 pub mod provider;
 pub mod store;
 

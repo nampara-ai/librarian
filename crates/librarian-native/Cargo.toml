@@ -38,3 +38,5 @@ pulldown-cmark.workspace = true
 schemars.workspace = true
 csv.workspace = true
 tiff.workspace = true
+keyring.workspace = true
+zeroize.workspace = true

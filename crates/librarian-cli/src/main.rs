@@ -1,9 +1,11 @@
+mod onboarding;
 mod setup;
 mod terminal;
+mod ui;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use librarian_native::{
-    config::{Config, default_library},
+    config::Config,
     convert_file, pipeline,
     store::{Library, sql_params},
     write_new_markdown,
@@ -38,6 +40,8 @@ struct Cli {
 enum Command {
     /// Interactive setup for processing, providers, metadata and output conventions.
     Setup,
+    #[command(hide = true)]
+    SetupVerify,
     /// Interactive dashboard, source/destination picker, queue and live progress.
     Tui,
     /// Configure processing and output profiles.
@@ -149,6 +153,9 @@ async fn main() -> ExitCode {
     match run(Cli::parse()).await {
         Ok(code) => ExitCode::from(code),
         Err(error) => {
+            if error.is::<ui::SaveExit>() {
+                return ExitCode::SUCCESS;
+            }
             if error
                 .downcast_ref::<io::Error>()
                 .is_some_and(|e| e.kind() == io::ErrorKind::BrokenPipe)
@@ -162,8 +169,23 @@ async fn main() -> ExitCode {
 }
 
 async fn run(cli: Cli) -> Result<u8> {
-    let root = cli.library.unwrap_or_else(default_library);
-    let config_path = cli.config.unwrap_or_else(|| root.join("config.toml"));
+    let mut location = match cli.library {
+        Some(root) => librarian_native::profile::Location::for_root(if root.is_absolute() {
+            root
+        } else {
+            std::env::current_dir()?.join(root)
+        }),
+        None => librarian_native::profile::Location::active()?,
+    };
+    if let Some(path) = cli.config {
+        location.config = if path.is_absolute() {
+            path
+        } else {
+            std::env::current_dir()?.join(path)
+        };
+    }
+    let root = location.root.clone();
+    let config_path = location.config.clone();
     let command = cli.command.unwrap_or(Command::Tui);
     match command {
         Command::Convert { source, output } => {
@@ -184,8 +206,25 @@ async fn run(cli: Cli) -> Result<u8> {
             return Ok(0);
         }
         Command::Setup => {
-            setup::configure(&config_path)?;
+            setup::configure(location)?;
             return Ok(0);
+        }
+        Command::SetupVerify => {
+            let result = async {
+                let config = Config::load(&config_path)?;
+                librarian_native::catalog::verify(&config, &root).await
+            }
+            .await;
+            return match result {
+                Ok(report) => {
+                    println!("{}", serde_json::to_string(&report)?);
+                    Ok(0)
+                }
+                Err(error) => {
+                    println!("{}", serde_json::json!({"error":format!("{error:#}")}));
+                    Ok(1)
+                }
+            };
         }
         Command::Config { action } => {
             configure(action, &config_path)?;
@@ -388,7 +427,7 @@ async fn run(cli: Cli) -> Result<u8> {
             println!(
                 "{}",
                 serde_json::to_string_pretty(
-                    &serde_json::json!({"library":library.root,"config":config_path,"platform":format!("{}-{}",std::env::consts::OS,std::env::consts::ARCH),"provider":config.provider.kind,"model_configured":!config.provider.model.is_empty(),"credential_environment_present":!config.provider.key_env.is_empty()&&std::env::var_os(&config.provider.key_env).is_some(),"engines":engines,"engine_sessions_loaded":load_engines})
+                    &serde_json::json!({"library":library.root,"config":config_path,"platform":format!("{}-{}",std::env::consts::OS,std::env::consts::ARCH),"provider":config.provider.kind,"model_configured":!config.provider.model.is_empty(),"credential_storage":config.provider.credential.as_ref().map(|r|if r.session_only{"session"}else{"system"}),"credential_environment_present":!config.provider.key_env.is_empty()&&std::env::var_os(&config.provider.key_env).is_some(),"engines":engines,"engine_sessions_loaded":load_engines})
                 )?
             );
         }
