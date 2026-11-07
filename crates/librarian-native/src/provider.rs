@@ -8,7 +8,10 @@ use serde_json::{Value, json};
 use std::{
     borrow::Cow,
     collections::{HashMap, VecDeque},
-    sync::{Arc, OnceLock, Weak},
+    sync::{
+        Arc, OnceLock, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::sync::Mutex;
@@ -20,6 +23,7 @@ pub struct ModelClient {
     rate: Arc<Mutex<Rate>>,
     pending: Arc<Mutex<HashMap<String, Weak<Mutex<()>>>>>,
     slots: Arc<tokio::sync::Semaphore>,
+    token_count_unavailable: Arc<AtomicBool>,
 }
 struct Rate {
     next: Instant,
@@ -37,6 +41,13 @@ pub struct Request<'a> {
     pub schema: Value,
     pub image: Option<(&'a [u8], &'a str)>,
     pub validate: &'a dyn Fn(&Value) -> Result<()>,
+}
+
+fn checkpoint_request(library: &Library, job: i64) -> Result<()> {
+    if !library.active(job)? {
+        bail!("Job paused or cancelled");
+    }
+    Ok(())
 }
 
 // Three MiB becomes four MiB after base64, leaving room below common gateway
@@ -120,6 +131,7 @@ impl ModelClient {
             rate,
             pending: Arc::new(Mutex::new(HashMap::new())),
             slots: Arc::new(tokio::sync::Semaphore::new(config.provider.concurrency)),
+            token_count_unavailable: Arc::new(AtomicBool::new(false)),
         })
     }
     pub fn configured(&self, vision: bool) -> bool {
@@ -295,6 +307,81 @@ impl ModelClient {
             format!("{}/{suffix}", p.base_url.trim_end_matches('/')),
         ))
     }
+    /// Byte bounds are safe for text, but can needlessly split a page's competing
+    /// readings. Ask the selected model's tokenizer before rejecting such a
+    /// request. Counts are cached separately from generated content and billing.
+    async fn counted_input(
+        &self,
+        library: &Library,
+        job: i64,
+        body: &Value,
+        url: &str,
+        credential: Option<&str>,
+    ) -> Result<Option<u64>> {
+        let p = &self.config.provider;
+        if p.kind != "anthropic" || self.token_count_unavailable.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+        let mut body = body.clone();
+        body.as_object_mut()
+            .context("Invalid request body")?
+            .remove("max_tokens");
+        let url = format!("{url}/count_tokens");
+        let key = format!(
+            "token-count:{}",
+            blake3::hash(&serde_json::to_vec(&(&url, &p.namespace, &body))?)
+        );
+        if let Some(count) = library
+            .cache(&key, p.cache_ttl_hours)?
+            .and_then(|v| v.as_u64())
+        {
+            return Ok(Some(count));
+        }
+        checkpoint_request(library, job)?;
+        let mut req = self
+            .http
+            .post(&url)
+            .json(&body)
+            .header("anthropic-version", "2023-06-01")
+            .timeout(Duration::from_secs(20));
+        if let Some(key) = credential {
+            req = req.header("x-api-key", key);
+        }
+        let counting = async {
+            let mut response = req.send().await?.error_for_status()?;
+            let mut bytes = Vec::new();
+            while let Some(chunk) = response.chunk().await? {
+                if bytes.len() + chunk.len() > 65536 {
+                    bail!("Token count response exceeds limit");
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            serde_json::from_slice::<Value>(&bytes)?["input_tokens"]
+                .as_u64()
+                .filter(|n| *n > 0)
+                .context("Missing input token count")
+        };
+        tokio::pin!(counting);
+        let count = loop {
+            tokio::select! {
+                result = &mut counting => break result,
+                _ = tokio::time::sleep(Duration::from_millis(500)) => checkpoint_request(library, job)?,
+            }
+        };
+        match count {
+            Ok(count) => {
+                library.cache_put(&key, &json!(count))?;
+                Ok(Some(count))
+            }
+            Err(_) => {
+                // Compatible gateways need not implement this optional endpoint.
+                // Never log its response body or credentials, or relax the bound.
+                self.token_count_unavailable.store(true, Ordering::Relaxed);
+                library.event(job, "warning", "Provider token counting unavailable; using conservative context bounds for this worker")?;
+                Ok(None)
+            }
+        }
+    }
     async fn throttle(&self, estimated: u64, library: &Library, job: i64) -> Result<()> {
         let p = &self.config.provider;
         if estimated > p.tokens_per_minute {
@@ -406,10 +493,6 @@ impl ModelClient {
             + serde_json::to_vec(&request.schema)?.len()
             + 1024) as u64
             + if request.image.is_some() { 8192 } else { 0 };
-        if input_estimate + p.max_output_tokens as u64 > p.context_tokens as u64 {
-            bail!("Request exceeds the configured context budget");
-        }
-        let estimated = input_estimate + p.max_output_tokens as u64;
         let provider = p.clone();
         let key_value =
             tokio::task::spawn_blocking(move || crate::credentials::resolve(&provider)).await??;
@@ -422,6 +505,26 @@ impl ModelClient {
                 p.key_env
             );
         }
+        let mut context_input = input_estimate;
+        if context_input + p.max_output_tokens as u64 > p.context_tokens as u64
+            && let Some(count) = self
+                .counted_input(
+                    library,
+                    job,
+                    &body,
+                    &url,
+                    key_value.as_ref().map(|v| v.as_str()),
+                )
+                .await?
+        {
+            // The endpoint estimates input usage; leave headroom for server-side
+            // formatting. Cost reservations keep the original conservative bound.
+            context_input = count.saturating_add(256).saturating_add(count / 20);
+        }
+        if context_input + p.max_output_tokens as u64 > p.context_tokens as u64 {
+            bail!("Request exceeds the configured context budget");
+        }
+        let estimated = context_input + p.max_output_tokens as u64;
         for attempt in 0..p.attempts {
             self.throttle(estimated, library, job).await?;
             if !library.active(job)? {
