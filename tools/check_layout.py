@@ -41,6 +41,8 @@ def check(binary):
             if len(pages) != 2 or f"FIRST {kind}" not in pages[0][1] or f"SECOND {kind}" not in pages[1][1]:
                 raise RuntimeError(f"{kind} page identity/order/text was lost: {pages}")
             for number, _, ocr in pages:
+                if ocr is None:
+                    raise RuntimeError(f"{kind} {number}: job reported prepared before its OCR checkpoint was committed")
                 if not json.loads(ocr)["lines"]:
                     raise RuntimeError(f"{kind} {number} rendered text could not be read by the actual OCR engine")
         connection.close()

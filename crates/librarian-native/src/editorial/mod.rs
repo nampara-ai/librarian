@@ -180,21 +180,28 @@ pub async fn run(
     let execution = async {
         if config.processing.prepare_only {
             loop {
+                // Read the producer watermark BEFORE inspecting its rows. Once
+                // true, all source pages are committed and the set cannot grow.
+                let source_finished = extraction_done(library, job)?;
                 let (total, ocr): (i64, i64) = library.db.query_row(
                     "SELECT count(*),count(ocr) FROM editorial_pages WHERE job=?",
                     [job],
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )?;
                 library.progress(job, "preparing page images + OCR", ocr as u64, total as u64)?;
-                if extraction_done(library, job)? && total == ocr {
+                if source_finished && total == ocr {
                     break;
                 }
                 tick(library, job).await?;
             }
             return Ok(());
         }
-        while counts(library, job)?.0 == 0 {
-            if extraction_done(library, job)? {
+        loop {
+            let source_finished = extraction_done(library, job)?;
+            if counts(library, job)?.0 > 0 {
+                break;
+            }
+            if source_finished {
                 bail!("No readable source pages were produced");
             }
             tick(library, job).await?;
@@ -265,9 +272,10 @@ fn ocr_worker(root: &Path, job: i64, config: &Config, cancel: &AtomicBool) -> Re
             return Ok(());
         }
         checkpoint(&library, job)?;
+        let source_finished = extraction_done(&library, job)?;
         let row:Option<(i64,String)>=library.db.query_row("SELECT page,image FROM editorial_pages WHERE job=? AND ocr IS NULL ORDER BY page LIMIT 1",[job],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
         let Some((page, path)) = row else {
-            if extraction_done(&library, job)? {
+            if source_finished {
                 return Ok(());
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -508,6 +516,7 @@ async fn copyeditor(
     let mut preceding = String::new();
     loop {
         checkpoint(library, job)?;
+        let source_finished = extraction_done(library, job)?;
         let row: Option<(String, Option<String>)> = library
             .db
             .query_row(
@@ -517,7 +526,7 @@ async fn copyeditor(
             )
             .optional()?;
         let Some((native, cleaned)) = row else {
-            if extraction_done(library, job)? {
+            if source_finished {
                 break;
             }
             tick(library, job).await?;
@@ -562,11 +571,12 @@ async fn visual_reader(
 ) -> Result<()> {
     loop {
         checkpoint(library, job)?;
+        let source_finished = extraction_done(library, job)?;
         let rows=library.db.prepare("SELECT page,image,native,ocr FROM editorial_pages WHERE job=? AND ocr IS NOT NULL AND reading IS NULL ORDER BY page LIMIT ?")?
             .query_map(params![job,config.processing.page_concurrency as i64],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         if rows.is_empty() {
             let (total, done) = counts(library, job)?;
-            if extraction_done(library, job)? && total == done {
+            if source_finished && total == done {
                 break;
             }
             tick(library, job).await?;
