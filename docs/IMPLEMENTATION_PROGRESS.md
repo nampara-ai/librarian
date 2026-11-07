@@ -1,5 +1,7 @@
 # Terminal implementation ledger
 
+This ledger records the earlier terminal foundation. The current [editorial contract and work log](EDITORIAL_PIPELINE.md) supersedes its selective-vision and archival-fidelity policies. New runs use parallel native copyediting and page image/OCR/vision readings, Typesetter synthesis and corrective final editing; old jobs retain their saved pipeline. Current commands and controls are in the [terminal guide](RUST_FOUNDATION.md).
+
 Scope: implement the terminal corpus pipeline and portable engine described in TERMINAL_REBUILD.md. No graphical application. Existing Python/Swift sources and unrelated repositories are reference-only.
 
 Implemented in this branch (these are implementation records, not quality guarantees):

@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 use base64::Engine;
 use serde_json::{Value, json};
 use std::{
+    borrow::Cow,
     collections::{HashMap, VecDeque},
     sync::{Arc, OnceLock, Weak},
     time::{Duration, Instant},
@@ -36,6 +37,45 @@ pub struct Request<'a> {
     pub schema: Value,
     pub image: Option<(&'a [u8], &'a str)>,
     pub validate: &'a dyn Fn(&Value) -> Result<()>,
+}
+
+// Three MiB becomes four MiB after base64, leaving room below common gateway
+// per-image limits. Keep compact originals lossless; reduce large photos first
+// through JPEG and only then through dimensions. Source-page assets stay intact.
+fn transport_image<'a>(bytes: &'a [u8], mime: &'a str) -> Result<(Cow<'a, [u8]>, &'a str)> {
+    const MAX_BYTES: usize = 3 * 1024 * 1024;
+    const MAX_SIDE: u32 = 7680;
+    let (width, height) = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()?
+        .into_dimensions()?;
+    if bytes.len() <= MAX_BYTES && width.max(height) <= MAX_SIDE {
+        return Ok((Cow::Borrowed(bytes), mime));
+    }
+    let decoded = image::load_from_memory(bytes)?;
+    let decoded = if width.max(height) > MAX_SIDE {
+        decoded.resize(MAX_SIDE, MAX_SIDE, image::imageops::FilterType::Lanczos3)
+    } else {
+        decoded
+    };
+    let mut background = image::RgbaImage::from_pixel(
+        decoded.width(),
+        decoded.height(),
+        image::Rgba([255, 255, 255, 255]),
+    );
+    image::imageops::overlay(&mut background, &decoded.to_rgba8(), 0, 0);
+    let mut image = image::DynamicImage::ImageRgba8(background).into_rgb8();
+    loop {
+        let mut encoded = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, 92)
+            .encode_image(&image)?;
+        if encoded.len() <= MAX_BYTES {
+            return Ok((Cow::Owned(encoded), "image/jpeg"));
+        }
+        let width = (image.width() * 3 / 4).max(1);
+        let height = (image.height() * 3 / 4).max(1);
+        image =
+            image::imageops::resize(&image, width, height, image::imageops::FilterType::Lanczos3);
+    }
 }
 
 impl ModelClient {
@@ -143,6 +183,10 @@ impl ModelClient {
     }
     fn payload(&self, request: &Request<'_>) -> Result<(Value, String)> {
         let p = &self.config.provider;
+        let image = request
+            .image
+            .map(|(bytes, mime)| transport_image(bytes, mime))
+            .transpose()?;
         let model = if request.image.is_some() && !p.vision_model.is_empty() {
             &p.vision_model
         } else {
@@ -176,7 +220,7 @@ impl ModelClient {
                     prefix["prompt_cache_breakpoint"] = json!({"mode":"explicit","ttl":"30m"});
                 }
                 let mut content = vec![json!({"type":"input_text","text":input})];
-                if let Some((bytes, mime)) = request.image {
+                if let Some((bytes, mime)) = &image {
                     content.push(json!({"type":"input_image","image_url":format!("data:{mime};base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes)),"detail":"high"}));
                 }
                 let mut body = json!({"model":model,"store":false,"input":[{"role":"developer","content":[prefix]},{"role":"user","content":content}],"max_output_tokens":p.max_output_tokens});
@@ -199,7 +243,7 @@ impl ModelClient {
                     prefix["cache_control"] = json!({"type":"ephemeral"});
                 }
                 let mut content = vec![json!({"type":"text","text":input})];
-                if let Some((bytes, mime)) = request.image {
+                if let Some((bytes, mime)) = &image {
                     content.push(json!({"type":"image","source":{"type":"base64","media_type":mime,"data":base64::engine::general_purpose::STANDARD.encode(bytes)}}));
                 }
                 let mut body = json!({"model":model,"max_tokens":p.max_output_tokens,"system":[prefix],"messages":[{"role":"user","content":content}]});
@@ -217,7 +261,7 @@ impl ModelClient {
             }
             _ => {
                 let mut content = vec![json!({"type":"text","text":input})];
-                if let Some((bytes, mime)) = request.image {
+                if let Some((bytes, mime)) = &image {
                     content.push(json!({"type":"image_url","image_url":{"url":format!("data:{mime};base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes))}}));
                 }
                 let mut body = json!({"model":model,"messages":[{"role":"system","content":instructions},{"role":"user","content":content}],"max_tokens":p.max_output_tokens});
@@ -744,6 +788,61 @@ fn validate_schema(value: &Value, schema: &Value, path: &str, depth: usize) -> R
 #[cfg(test)]
 mod budget_invariants {
     use super::*;
+
+    // An actual high-entropy PNG crosses the transport limit. Exercise the
+    // provider envelope, base64 and real codec, not a mocked request/response.
+    #[test]
+    fn large_scan_payload_is_bounded_and_decodable() {
+        let mut random = 0x12345678u32;
+        let mut pixels = image::RgbImage::new(1100, 1000);
+        for byte in pixels.as_mut() {
+            random ^= random << 13;
+            random ^= random >> 17;
+            random ^= random << 5;
+            *byte = (random >> 8) as u8;
+        }
+        let mut png = std::io::Cursor::new(Vec::new());
+        pixels.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        assert!(png.get_ref().len() > 3 * 1024 * 1024);
+        let mut config = Config::default();
+        config.provider.kind = "anthropic".into();
+        config.provider.model = "transport-invariant".into();
+        let client = ModelClient::new(&config).unwrap();
+        let (body, _) = client
+            .payload(&Request {
+                task: "vision",
+                instructions: "Read the source image.",
+                context: None,
+                input: Value::String("Page evidence".into()),
+                schema: Value::Null,
+                image: Some((png.get_ref(), "image/png")),
+                validate: &|_| Ok(()),
+            })
+            .unwrap();
+        let source = &body["messages"][0]["content"][1]["source"];
+        let data = source["data"].as_str().unwrap();
+        assert!(data.len() <= 4 * 1024 * 1024);
+        let decoded = image::load_from_memory(
+            &base64::engine::general_purpose::STANDARD
+                .decode(data)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            (decoded.width(), decoded.height()),
+            (1100, 1000),
+            "JPEG should fit without losing scan resolution"
+        );
+        assert_eq!(source["media_type"], "image/jpeg");
+        // A compact text-page PNG keeps its exact lossless representation.
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbImage::from_pixel(16, 16, image::Rgb([255, 255, 255]))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let (bytes, mime) = transport_image(png.get_ref(), "image/png").unwrap();
+        assert_eq!(bytes.as_ref(), png.get_ref());
+        assert_eq!(mime, "image/png");
+    }
 
     // Real concurrent SQLite connections exercise the spending transaction. No
     // provider or transport is mocked; this checks the boundary before dispatch.

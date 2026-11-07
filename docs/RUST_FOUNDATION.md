@@ -101,6 +101,8 @@ The exact former built-in copyediting style upgrades to Jake's original contextu
 
 Local caches avoid identical completed inference; provider prompt caches reuse stable instructions for new requests. These are different mechanisms. Separate concurrency, requests/minute, tokens/minute, context/output limits and per-job budgets apply. Source is subdivided on output exhaustion; continuation retains actual source material. Original text, page images, OCR, intermediate readings and stage checkpoints remain available for diagnosis and recovery.
 
+Model-bound images have dimension and encoded-size limits. Compact PNGs remain lossless; larger scans use high-quality JPEG before any further resizing. Requests stay within four MiB of base64 image data, and the full source-page PNG remains in the page matrix.
+
 Supported extraction routes include UTF-8 text/Markdown, CSV/TSV, SRT/VTT, HTML, PDF, DOCX/PPTX, common Office formats through the private renderer, and supported PNG/JPEG/BMP/WebP/TIFF/GIF images. Office conversion has a ten-minute deadline. Password-protected files need an accessible copy. The embedded text-print font supports its available glyphs; complex-script shaping is not implemented in that simple print adapter. Native text remains available independently.
 
 ## Builds and verification

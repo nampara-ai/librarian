@@ -4,7 +4,7 @@ A local-first document cleaner and organizer. Import files or folders, extract t
 
 This branch implements the Rust CLI/TUI rebuild. Graphical application work is deferred. The previous Python/Swift implementation remains available as reference; its documentation is in [LEGACY_README.md](docs/LEGACY_README.md).
 
-Native archives are available from successful [Librarian terminal builds](https://github.com/nampara-ai/librarian/actions/workflows/rust-foundation.yml) runs for this branch. Download the artifact matching your platform, unpack the artifact ZIP and the platform archive inside it, and keep `librarian` beside its `engines` folder. Run `./librarian` (`.\librarian.exe` in PowerShell). The bundled distribution already includes its OCR/PDF engines.
+Native archives are available from successful [Librarian terminal builds](https://github.com/nampara-ai/librarian/actions/workflows/rust-foundation.yml) runs for this branch. Download the artifact matching your platform, unpack the artifact ZIP and the platform archive inside it, and keep `librarian` beside its `engines` folder. Run `./librarian` (`.\librarian.exe` in PowerShell). The bundled distribution includes OCR, PDF and private Office layout engines.
 
 To build from source:
 
@@ -12,6 +12,8 @@ To build from source:
 cargo build --release --locked -p librarian-cli
 ./target/release/librarian
 ```
+
+Source builds can install the OCR/PDF engines during setup; Office layout additionally needs LibreOffice configured through `processing.office_renderer`. The full native packages include that renderer.
 
 First launch guides you through a runtime profile: workspace, provider, masked API key, secure/session storage, live model selection, processing/Markdown defaults, engine initialization and an explicit connection/vision check. Later launches load the profile automatically. No environment activation or manual key exports are required.
 
@@ -22,14 +24,18 @@ librarian clean /path/to/source-folder -o /path/to/results --create-output --rec
 librarian search 'a phrase'
 librarian show 12
 librarian print 12
+librarian prepare /path/to/slides.pptx
+librarian pages 12 --page 2
+librarian catalog
+librarian stats
 ```
 
-Native build targets: Apple Silicon macOS, Intel macOS, Windows x64, and Linux x64. Distribution archives carry pinned PDFium, CPU ONNX Runtime, and PaddleOCR models. Native users do not need Python or Node. The shared document core also builds to WASM; browser hosts supply I/O, inference, and storage.
+Native build targets: Apple Silicon macOS, Intel macOS, Windows x64, and Linux x64. Distribution archives carry pinned PDFium, CPU ONNX Runtime, PaddleOCR models and LibreOffice. Native users do not need Python or Node. The shared document core also builds to WASM; browser hosts supply I/O, inference, and storage.
 
-Supported inputs include UTF-8 text/Markdown, transcripts, CSV/TSV, HTML, DOCX, PDFs, and common raster images, including multi-page TIFFs. Ordinary PDF text uses native extraction; scans use local OCR; complex pages and figures can use vision. Tables, equations, figures, and flowcharts have structured Markdown representations. Pele is the preferred Mermaid renderer.
+Supported inputs include UTF-8 text/Markdown, transcripts, CSV/TSV, HTML, PDF, DOCX/PPTX and other supported Office formats, plus common raster images including multi-page TIFFs. Native text receives CMOS copyediting while ordered page images receive local OCR and vision interpretation. The Typesetter reconciles these readings, restores continuity and combines narrative visual explanations with CSV, TeX and portable Pele/Mermaid. A final Copyeditor repairs the assembled Markdown before cataloging and publication.
 
-Originals remain immutable. SQLite journals jobs, accepted blocks, usage reservations, and exact-result caches. Exports never replace existing files. Questionable edits and extraction findings produce explicit review status.
+Originals remain immutable. SQLite journals page readings, editorial checkpoints, usage reservations, category accessions and exact-result caches. Exports never replace existing files. Contextual spelling, punctuation, quotation and number-format repairs do not trigger archival-fidelity rejection. Technical failures remain explicit and resumable. Old jobs keep their original pipeline; `retry` or **r** on a finished job starts a new run with current settings and preserves the earlier result.
 
-Read the [terminal guide](docs/RUST_FOUNDATION.md) for configuration, credentials, commands, caching, recovery, limits, and builds. See [architecture](docs/TERMINAL_REBUILD.md), [implementation status](docs/IMPLEMENTATION_PROGRESS.md), and [third-party notices](docs/THIRD_PARTY.md).
+Read the [terminal guide](docs/RUST_FOUNDATION.md) for configuration, credentials, commands, caching, recovery, limits, and builds. The [editorial contract and work log](docs/EDITORIAL_PIPELINE.md) describe the current architecture. Earlier [architecture notes](docs/TERMINAL_REBUILD.md) and [implementation history](docs/IMPLEMENTATION_PROGRESS.md) remain as background. See [third-party notices](docs/THIRD_PARTY.md) for bundled components.
 
 This is a development rebuild. Compilation and targeted invariant checks do not establish OCR accuracy, model quality, or complete cross-platform runtime behavior. Hands-on evaluation with Jake's documents and API keys follows the terminal implementation.
