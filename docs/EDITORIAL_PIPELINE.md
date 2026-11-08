@@ -1,5 +1,7 @@
 # Editorial pipeline implementation contract — 2026-11-07
 
+> 2026-11-08: Jake directed an extraction-first rebuild. Deterministic parsing is now the baseline and this pipeline becomes the intelligence layer on top of it. See [PARSING_FOUNDATION.md](PARSING_FOUNDATION.md).
+
 Jake's approved direction supersedes conflicting archival-fidelity policies in older architecture documents. The goal is a complete, continuous, polished Markdown document that makes sense when read aloud. Contextual transcription repair and editorial judgment are required. Preserve substantive meaning and voice, remove pure filler/stutters, and never substitute a summary for source content. Ordinary editorial changes must not revert whole passages or strand documents in `needs_review`.
 
 ## Required workflow

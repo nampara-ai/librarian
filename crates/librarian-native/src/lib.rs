@@ -9,6 +9,7 @@ pub mod editorial;
 pub mod export;
 pub mod extract;
 pub mod ocr;
+pub mod parse;
 pub mod pipeline;
 pub mod profile;
 pub mod provider;
@@ -77,12 +78,17 @@ pub fn write_new_markdown(path: &Path, markdown: &str) -> Result<(), NativeError
     {
         return Err(NativeError::OutputFormat);
     }
+    write_new_file(path, markdown.as_bytes())
+}
+
+/// Durable no-clobber publication for any derived artifact.
+pub fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), NativeError> {
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let mut temporary = NamedTempFile::new_in(parent)?;
-    temporary.write_all(markdown.as_bytes())?;
+    temporary.write_all(bytes)?;
     temporary.as_file().sync_all()?;
     temporary.persist_noclobber(path).map_err(|e| e.error)?;
     #[cfg(unix)]

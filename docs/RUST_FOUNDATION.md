@@ -55,6 +55,8 @@ The default image reader requests narrative explanations that make figures/table
 ## Commands
 
 ```sh
+librarian parse /path/source.pdf
+librarian parse /path/source.pdf --output /path/parsed --create-output
 librarian clean /path/source.pdf --output /path/finished --create-output
 librarian clean /path/folder --output /path/finished --recursive
 librarian run
@@ -82,6 +84,8 @@ librarian config show
 librarian config schema
 librarian config edit
 ```
+
+`parse` cracks a PDF locally with the bundled PDFium engine and writes reader Markdown plus a typed JSON layout model (titles, headings, paragraphs, lists, tables, code, captions, pictures, headers, footers, page numbers) with a per-page routing report. It makes no model calls and refuses to publish if any word is lost or duplicated. `--words` adds positioned words and fonts; `--furniture` keeps running headers and footers in the Markdown. See the [parsing foundation](PARSING_FOUNDATION.md).
 
 `prepare` renders page images and runs local OCR without making model calls or publishing a cleaned document. Its status is `prepared`. `pages` exposes the ordered matrix: A=image, B=OCR, C=visual reading, plus native/copyedited text. With `--page`, it prints that page's actual contents. The hidden work area is `<workspace>/.librarian-work/job-ID/pages`, with numbered PNG/JSON/Markdown sidecars.
 
