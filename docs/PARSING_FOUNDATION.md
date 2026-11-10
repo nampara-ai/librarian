@@ -122,7 +122,7 @@ A further 18 multi-page documents with another engine's output as reference rose
 - **Tables without ruled lines are the weakest area.** The best engines use a trained table model and score 0.93 where Librarian scores 0.68.
 - **Headings are over-detected in documents that use bold lead-in labels.**
 - **Structure tags are not read** in the product, for the reason above.
-- **Fonts that cannot be decoded to Unicode are not yet detected.** Such pages produce wrong characters instead of an `ocr` route.
+- **Undecodable fonts are caught only when they show.** A page is routed to `ocr` when its text is replacement characters or mostly private-use code points. A font that maps to wrong but valid letters is not detected.
 - **A printed table of contents is recognised but not used** to confirm heading levels.
 - **PDF only.** Text, Markdown, HTML, DOCX, PPTX and images still go through `librarian clean`.
 - **`clean` still uses the earlier pipeline** that renders and reads every page. It is as slow as before.

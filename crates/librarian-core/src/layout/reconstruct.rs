@@ -428,6 +428,19 @@ fn page_elements(ctx: &Ctx, tally: &mut Tally) -> PageResult {
         .iter()
         .map(|w| w.text.chars().filter(|c| c.is_alphanumeric()).count())
         .sum();
+    // Private-use code points are what a font without a Unicode mapping
+    // yields. A few are symbol bullets; many mean the text cannot be trusted.
+    let unmapped: usize = page
+        .words
+        .iter()
+        .filter(|w| !w.hidden)
+        .map(|w| {
+            w.text
+                .chars()
+                .filter(|c| matches!(*c as u32, 0xE000..=0xF8FF | 0xF0000..=0x10FFFD))
+                .count()
+        })
+        .sum();
     let mut tier = Tier::Deterministic;
     let mut reasons = Vec::new();
     let mut regions = Vec::new();
@@ -446,6 +459,9 @@ fn page_elements(ctx: &Ctx, tally: &mut Tally) -> PageResult {
     } else if page.bad_chars * 50 > page.text_chars.max(1) {
         raise(&mut tier, Tier::Ocr);
         reasons.push("text layer contains undecodable characters".to_owned());
+    } else if unmapped * 5 > alnum + unmapped {
+        raise(&mut tier, Tier::Ocr);
+        reasons.push("much of the text uses a font with no Unicode mapping".to_owned());
     } else if ocr_layer {
         raise(&mut tier, Tier::Review);
         reasons.push("text comes from an embedded OCR layer of unknown quality".to_owned());
