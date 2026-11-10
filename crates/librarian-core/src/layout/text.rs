@@ -302,7 +302,9 @@ pub(crate) fn lines_from(ctx: &Ctx, words: &[u32]) -> Vec<Line> {
 /// Length in bytes of a leading list marker and its following whitespace.
 pub(crate) fn list_marker(text: &str) -> Option<usize> {
     let first = text.chars().next()?;
-    let marker_end = if "•◦▪▫‣⁃●○■□–—-*·➢►▶✓✔❖◆◇➤".contains(first)
+    // Symbol and dingbat fonts map their bullets into the private-use area.
+    let symbol = matches!(first, '\u{E000}'..='\u{F8FF}');
+    let marker_end = if symbol || "•◦▪▫‣⁃●○■□–—-*·➢►▶✓✔❖◆◇➤".contains(first)
     {
         first.len_utf8()
     } else {

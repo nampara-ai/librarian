@@ -1,7 +1,7 @@
 //! Table construction: cells from a drawn grid, or rows and columns from
 //! aligned text when no grid was drawn.
 use super::Rect;
-use super::geom::{cluster, free_of, intersect, median, merge_intervals, quantile, union_all};
+use super::geom::{cluster, median, merge_intervals, quantile, union_all};
 use super::lattice::Grid;
 use super::text::{Ctx, Line, lines_from};
 
@@ -73,6 +73,67 @@ pub(crate) fn from_grid(ctx: &Ctx, grid: &Grid, available: &[bool]) -> Option<Ta
             cell.words.push(id);
         }
     }
+    // Row labels are often printed just outside the drawn grid. When most
+    // rows have text standing directly to the left, it is the first column.
+    let edges = &grid.row_edges;
+    let track =
+        |y: f32| (0..edges.len().saturating_sub(1)).find(|r| y >= edges[*r] && y <= edges[*r + 1]);
+    let reach = grid.bbox.x - 0.45 * grid.bbox.w;
+    let mut labels: std::collections::BTreeMap<usize, Vec<u32>> = std::collections::BTreeMap::new();
+    for id in 0..ctx.page.words.len() as u32 {
+        let word = ctx.word(id);
+        if !available[id as usize] || word.rotated {
+            continue;
+        }
+        let bbox = word.bbox;
+        if bbox.right() <= grid.bbox.x + 1.0
+            && bbox.x >= reach
+            && let Some(row) = track(bbox.cy())
+        {
+            labels.entry(row).or_default().push(id);
+        }
+    }
+    let content_rows: std::collections::BTreeSet<u32> = cells
+        .iter()
+        .filter(|c| !c.words.is_empty())
+        .map(|c| c.row)
+        .collect();
+    let labelled = labels
+        .keys()
+        .filter(|r| content_rows.contains(&(**r as u32)))
+        .count();
+    // Labels are short: a word or a few per row. Prose from a neighbouring
+    // column that merely stands beside the grid is not a label column.
+    let short = labels.values().all(|words| {
+        words.len() <= 5
+            && words
+                .iter()
+                .map(|id| ctx.word(*id).text.chars().count())
+                .sum::<usize>()
+                <= 40
+    });
+    let mut extra_left = None;
+    if short && labelled >= 2 && labelled * 5 >= content_rows.len() * 3 {
+        for cell in &mut cells {
+            cell.col += 1;
+        }
+        let mut left = grid.bbox.x;
+        for (row, words) in labels {
+            let rect = union_all(words.iter().map(|id| ctx.word(*id).bbox));
+            left = left.min(rect.x);
+            cells.push(TableCell {
+                row: row as u32,
+                col: 0,
+                rowspan: 1,
+                colspan: 1,
+                header: false,
+                words,
+                rect,
+            });
+        }
+        cells.sort_by_key(|c| (c.row, c.col));
+        extra_left = Some(left);
+    }
     let filled = cells.iter().filter(|c| !c.words.is_empty()).count();
     // One framed block of text is a callout, not a table.
     if filled < 2 || cells.len() < 2 {
@@ -83,9 +144,14 @@ pub(crate) fn from_grid(ctx: &Ctx, grid: &Grid, available: &[bool]) -> Option<Ta
         return None;
     }
     let mut table = TableNode {
-        bbox: grid.bbox,
+        bbox: match extra_left {
+            Some(left) => {
+                Rect::from_edges(left, grid.bbox.y, grid.bbox.right(), grid.bbox.bottom())
+            }
+            None => grid.bbox,
+        },
         rows: grid.rows,
-        cols: grid.cols,
+        cols: grid.cols + u32::from(extra_left.is_some()),
         cells,
         ruled: true,
         confidence: 0.95,
@@ -432,10 +498,11 @@ fn sectioned(
     }
     let mut sizes: Vec<f32> = lines.iter().map(|l| l.size).collect();
     let size = median(&mut sizes).max(1.0);
-    let (left, right) = (grid.bbox.x - 1.0, grid.bbox.right() + 1.0);
     let min = 0.75 * size;
+    // Gaps free in nearly every line. A few lines may cross a gap: header
+    // cells that span several columns.
     let gutters_of = |selected: &[&Line]| -> Vec<(f32, f32)> {
-        let mut common = vec![(left, right)];
+        let mut edges: Vec<(f32, i32)> = Vec::new();
         for line in selected {
             let ink = merge_intervals(
                 line.words
@@ -445,19 +512,42 @@ fn sectioned(
                         (b.x, b.right())
                     })
                     .collect(),
-                0.0,
+                0.25 * size,
             );
-            common = intersect(&common, &free_of(&ink, left, right), min);
+            for (start, end) in ink {
+                edges.push((start, 1));
+                edges.push((end, -1));
+            }
         }
+        edges.sort_by(|a, b| a.0.total_cmp(&b.0).then(b.1.cmp(&a.1)));
+        let allowed = if selected.len() >= 6 {
+            (selected.len() / 8).max(1) as i32
+        } else {
+            0
+        };
         let ink_left = selected.iter().map(|l| l.bbox.x).fold(f32::MAX, f32::min);
         let ink_right = selected
             .iter()
             .map(|l| l.bbox.right())
             .fold(f32::MIN, f32::max);
-        common
-            .into_iter()
-            .filter(|g| g.0 > ink_left && g.1 < ink_right)
-            .collect()
+        let mut gaps = Vec::new();
+        let (mut depth, mut open) = (0i32, None::<f32>);
+        for (x, delta) in edges {
+            let before = depth;
+            depth += delta;
+            if before > allowed && depth <= allowed {
+                open = Some(x);
+            } else if before <= allowed
+                && depth > allowed
+                && let Some(start) = open.take()
+                && x - start >= min
+                && start > ink_left
+                && x < ink_right
+            {
+                gaps.push((start, x));
+            }
+        }
+        gaps
     };
     let mut gutters = gutters_of(&lines);
     if gutters.is_empty() && band_lines.len() >= 2 {

@@ -165,10 +165,57 @@ pub fn markdown(document: &Document, options: RenderOptions) -> String {
     let mut page = 0;
     let mut joining = false;
     let mut tight = false;
-    for element in &document.elements {
-        if element.role == Role::Hidden || (element.role.furniture() && !options.furniture) {
+    let mut skip_until = 0usize;
+    for (index, element) in document.elements.iter().enumerate() {
+        if index < skip_until
+            || element.role == Role::Hidden
+            || (element.role.furniture() && !options.furniture)
+        {
             continue;
         }
+        // Stitch a table that continues over following pages into one.
+        let mut stitched: Option<Element> = None;
+        if element.role == Role::Table && element.continues {
+            let mut whole = element.clone();
+            let header: Vec<String> = whole
+                .cells
+                .iter()
+                .filter(|c| c.row == 0)
+                .map(|c| c.text.clone())
+                .collect();
+            let mut last = element;
+            let mut cursor = index + 1;
+            while last.continues && cursor < document.elements.len() {
+                let next = &document.elements[cursor];
+                cursor += 1;
+                if next.role.furniture() {
+                    continue;
+                }
+                if next.role != Role::Table || next.cols != whole.cols {
+                    break;
+                }
+                let repeated: Vec<String> = next
+                    .cells
+                    .iter()
+                    .filter(|c| c.row == 0)
+                    .map(|c| c.text.clone())
+                    .collect();
+                let drop_header = repeated == header;
+                let offset = whole.rows;
+                for cell in next.cells.iter().filter(|c| !(drop_header && c.row == 0)) {
+                    let mut cell = cell.clone();
+                    cell.row = cell.row + offset - u32::from(drop_header);
+                    cell.header = false;
+                    whole.cells.push(cell);
+                }
+                whole.rows += next.rows - u32::from(drop_header);
+                skip_until = cursor;
+                last = next;
+            }
+            whole.continues = false;
+            stitched = Some(whole);
+        }
+        let element = stitched.as_ref().unwrap_or(element);
         if options.page_markers && element.page != page {
             page = element.page;
             if !joining {
@@ -214,7 +261,10 @@ pub fn markdown(document: &Document, options: RenderOptions) -> String {
                         element.bbox.h
                     );
                 }
-                if !text.trim().is_empty() {
+                // Labels inside a figure are worth reading; thumbnail-sized
+                // type is not.
+                let readable = element.font_size >= 0.55 * document.stats.body_font_size;
+                if readable && !text.trim().is_empty() {
                     if !piece.is_empty() {
                         piece.push_str("\n\n");
                     }

@@ -66,7 +66,22 @@ fn from_table(ctx: &Ctx, page: u32, table: TableNode, tally: &mut Tally) -> Elem
     e.font_size = ctx.stats.body;
     let mut rows: BTreeMap<u32, Vec<String>> = BTreeMap::new();
     for cell in table.cells {
-        let composed = cell_text(ctx, &cell.words);
+        // Rotated header text reads in the order it was written.
+        let rotated = !cell.words.is_empty() && cell.words.iter().all(|id| ctx.word(*id).rotated);
+        let composed = if rotated {
+            let mut ids = cell.words.clone();
+            ids.sort_unstable();
+            super::text::Composed {
+                text: ids
+                    .iter()
+                    .map(|id| ctx.word(*id).text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                ..Default::default()
+            }
+        } else {
+            cell_text(ctx, &cell.words)
+        };
         tally.hyphens_removed += composed.hyphens_removed;
         tally.hyphens_kept += composed.hyphens_kept;
         rows.entry(cell.row)
@@ -140,6 +155,7 @@ fn page_elements(ctx: &Ctx, tally: &mut Tally) -> PageResult {
             && visible.contains_center(&w.bbox)
     };
     let mut available: Vec<bool> = page.words.iter().map(in_flow).collect();
+    let mut taken = vec![false; total];
     let mut atoms: Vec<Node> = Vec::new();
     let mut uncertain_tables: Vec<Rect> = Vec::new();
 
@@ -163,9 +179,84 @@ fn page_elements(ctx: &Ctx, tally: &mut Tally) -> PageResult {
         }
     }
 
+    // Type far below reading size, set in clusters, is the content of an
+    // illustration (page thumbnails, dense diagrams), not text to read.
+    let micro: Vec<Rect> = (0..total)
+        .filter(|i| available[*i] && page.words[*i].size <= 0.55 * ctx.stats.body)
+        .map(|i| page.words[i].bbox)
+        .collect();
+    let mut micro_regions: Vec<Rect> = Vec::new();
+    for region in merge_rects(&micro, 1.2 * ctx.stats.body) {
+        let count = micro.iter().filter(|m| region.contains_center(m)).count();
+        if count >= 10 && region.area() >= 0.005 * page_area {
+            micro_regions.push(region);
+        }
+    }
+    for region in &micro_regions {
+        match figures
+            .iter()
+            .position(|f| f.intersection_area(region) > 0.3 * region.area().min(f.area()))
+        {
+            Some(index) => figures[index] = figures[index].union(region),
+            None => figures.push(*region),
+        }
+    }
+
+    // Captions are the author's own statement of what a block is. A caption
+    // word ("Figure", "Table") that starts a line, followed by a number.
+    let mut captions: Vec<(Rect, bool)> = Vec::new(); // anchor box, is a figure
+    for (index, word) in page.words.iter().enumerate() {
+        let label = word.text.trim_end_matches(['.', ':']).to_lowercase();
+        let figure = matches!(label.as_str(), "figure" | "fig" | "abbildung" | "abb");
+        let table = matches!(label.as_str(), "table" | "tabelle" | "tab");
+        if !(figure || table) || !available[index] {
+            continue;
+        }
+        let numbered = page
+            .words
+            .get(index + 1)
+            .is_some_and(|next| next.text.chars().next().is_some_and(|c| c.is_ascii_digit()));
+        let starts_line = !page.words.iter().any(|other| {
+            other.bbox.overlap_y(&word.bbox) > 0.5 * word.bbox.h
+                && other.bbox.right() <= word.bbox.x
+                && word.bbox.x - other.bbox.right() < 2.0 * word.size
+        });
+        if numbered && starts_line {
+            captions.push((word.bbox, figure));
+        }
+    }
+    let captioned_as_figure = |bbox: &Rect| -> bool {
+        captions
+            .iter()
+            .filter(|(anchor, _)| {
+                anchor.x < bbox.right() && anchor.right() > bbox.x - ctx.stats.body
+            })
+            .filter_map(|(anchor, figure)| {
+                let below = anchor.y - bbox.bottom();
+                let above = bbox.y - anchor.bottom();
+                let distance = if below >= -2.0 { below } else { above };
+                (0.0 - 2.0..=6.0 * ctx.stats.body)
+                    .contains(&distance)
+                    .then_some((distance, *figure))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .is_some_and(|(_, figure)| figure)
+    };
+
     // 2. Tables whose grid was drawn.
     let mut table_boxes: Vec<Rect> = Vec::new();
     for grid in grids(page) {
+        // A grid the author captioned as a figure is a drawing of a table.
+        if grid.bbox.area() < 0.25 * page_area && captioned_as_figure(&grid.bbox) {
+            match figures
+                .iter()
+                .position(|f| f.intersection_area(&grid.bbox) > 0.0)
+            {
+                Some(index) => figures[index] = figures[index].union(&grid.bbox),
+                None => figures.push(grid.bbox),
+            }
+            continue;
+        }
         if table_boxes
             .iter()
             .any(|t| t.intersection_area(&grid.bbox) > 0.5 * grid.bbox.area())
@@ -179,9 +270,22 @@ fn page_elements(ctx: &Ctx, tally: &mut Tally) -> PageResult {
         {
             continue;
         }
-        if let Some(table) = from_grid(ctx, &grid, &available) {
+        // Inside a drawn grid, rotated text is cell content (vertical headers).
+        let usable: Vec<bool> = (0..total)
+            .map(|i| {
+                let w = &page.words[i];
+                available[i]
+                    || (w.rotated
+                        && !taken[i]
+                        && w.bbox.finite()
+                        && visible.contains_center(&w.bbox)
+                        && (!w.hidden || ocr_layer))
+            })
+            .collect();
+        if let Some(table) = from_grid(ctx, &grid, &usable) {
             for id in table.words() {
                 available[id as usize] = false;
+                taken[id as usize] = true;
             }
             table_boxes.push(table.bbox);
             atoms.push(Node::Table(table));
@@ -214,8 +318,11 @@ fn page_elements(ctx: &Ctx, tally: &mut Tally) -> PageResult {
             .filter(|id| available[*id as usize] && region.contains_center(&ctx.word(*id).bbox))
             .collect();
         let ink: f32 = inside.iter().map(|id| ctx.word(*id).bbox.area()).sum();
+        let illustration = micro_regions
+            .iter()
+            .any(|m| m.intersection_area(&region) > 0.5 * m.area());
         // Dense text over a shape is a framed or tinted text box, not a figure.
-        if inside.len() > 25 && ink > 0.12 * region.area() {
+        if inside.len() > 25 && ink > 0.12 * region.area() && !illustration {
             continue;
         }
         // A line or two of ordinary text on a low band is a heading or label
@@ -276,6 +383,8 @@ fn page_elements(ctx: &Ctx, tally: &mut Tally) -> PageResult {
                 tally.hyphens_kept += composed.hyphens_kept;
                 tally.hyphens_removed += composed.hyphens_removed;
                 e.text = composed.text;
+                let mut sizes: Vec<f32> = words.iter().map(|id| ctx.word(*id).size).collect();
+                e.font_size = super::geom::median(&mut sizes);
                 e.words = words;
                 elements.push(e);
                 flows.push(flow as u32);
@@ -284,7 +393,7 @@ fn page_elements(ctx: &Ctx, tally: &mut Tally) -> PageResult {
     }
     // 4. Words outside the reading flow stay in the model, out of the text.
     let leftover: Vec<u32> = (0..total as u32)
-        .filter(|id| !in_flow(&page.words[*id as usize]))
+        .filter(|id| !in_flow(&page.words[*id as usize]) && !taken[*id as usize])
         .collect();
     if !leftover.is_empty() {
         let mut e = element(
@@ -648,6 +757,23 @@ pub fn reconstruct(input: &DocumentInput) -> Document {
                 }
                 elements[a].tight = true;
             }
+            elements[a].continues = true;
+        }
+    }
+
+    // A table that fills the end of one page and resumes at the top of the
+    // next with the same columns is one table.
+    for pair in body_indices.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let (first, second) = (&elements[a], &elements[b]);
+        if first.role == Role::Table
+            && second.role == Role::Table
+            && second.page == first.page + 1
+            && first.cols == second.cols
+            && first.cols >= 2
+            && (first.bbox.x - second.bbox.x).abs() <= 0.04 * first.bbox.w.max(1.0) + 6.0
+            && (first.bbox.w - second.bbox.w).abs() <= 0.1 * first.bbox.w.max(1.0)
+        {
             elements[a].continues = true;
         }
     }
