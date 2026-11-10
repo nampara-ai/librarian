@@ -17,10 +17,11 @@ Source builds can install the OCR/PDF engines during setup; Office layout additi
 
 First launch guides you through a runtime profile: workspace, provider, masked API key, secure/session storage, live model selection, processing/Markdown defaults, engine initialization and an explicit connection/vision check. Later launches load the profile automatically. No environment activation or manual key exports are required.
 
-In Home: `n` New Import, `q` Start queue, `p` Pause, `r` Resume, `c` Cancel, `s` Search, `f` Setup, `h` Help. Arrows or Tab navigate; Enter/Space activates; Esc goes back. Source and destination fields open the shared browser. Files run sequentially with live progress. Ctrl+S saves accepted drafts, requests a pause for active/queued work, and exits; Esc at Home leaves a worker running. See the [terminal guide](docs/RUST_FOUNDATION.md) for browser behavior, clipboard controls, credentials and recovery.
+Home has two panes: actions on the left, your documents on the right. `a` Parse PDFs now (local, instant, no AI), `n` Clean documents with AI, `q` Start the queue, `s` Search, `f` Setup, `h` Help. Up/Down moves within a pane; Tab or Left/Right switches panes; Enter/Space runs the action or opens the selected document's menu. `p`, `r` and `c` pause, resume or retry, and cancel the selected document. Esc goes back. Files run sequentially with live progress. Ctrl+S saves accepted drafts, requests a pause for active/queued work, and exits; Esc at Home leaves a worker running. See the [terminal guide](docs/RUST_FOUNDATION.md) for browser behavior, clipboard controls, credentials and recovery.
 
 ```sh
 librarian parse /path/to/document.pdf -o /path/to/parsed --create-output
+librarian parse /path/to/pdf-folder -o /path/to/parsed --create-output --recursive
 librarian clean /path/to/source-folder -o /path/to/results --create-output --recursive
 librarian search 'a phrase'
 librarian show 12
@@ -37,7 +38,7 @@ Supported inputs include UTF-8 text/Markdown, transcripts, CSV/TSV, HTML, PDF, D
 
 Originals remain immutable. SQLite journals page readings, editorial checkpoints, usage reservations, category accessions and exact-result caches. Exports never replace existing files. Contextual spelling, punctuation, quotation and number-format repairs do not trigger archival-fidelity rejection. Technical failures remain explicit and resumable. Old jobs keep their original pipeline; `retry` or **r** on a finished job starts a new run with current settings and preserves the earlier result.
 
-`parse` is the new deterministic foundation: it turns a PDF into typed layout blocks, reader Markdown and JSON in well under a second with no model calls, and reports which pages would need OCR, vision or review. The [parsing foundation](docs/PARSING_FOUNDATION.md) describes the direction, architecture and benchmark against Nutrient.
+`parse` is the deterministic foundation: it turns a PDF, or a folder of PDFs, into typed layout blocks, reader Markdown and JSON at a few milliseconds per page with no model calls. It keeps bold, italic and links, rebuilds tables and multi-column reading order, and reports which pages would need OCR, vision or review. Scanned pages are reported, not read. The [parsing foundation](docs/PARSING_FOUNDATION.md) describes the architecture, the four ways it is measured, the scores and the limits.
 
 Read the [terminal guide](docs/RUST_FOUNDATION.md) for configuration, credentials, commands, caching, recovery, limits, and builds. The [editorial contract and work log](docs/EDITORIAL_PIPELINE.md) describe the current architecture. Earlier [architecture notes](docs/TERMINAL_REBUILD.md) and [implementation history](docs/IMPLEMENTATION_PROGRESS.md) remain as background. See [third-party notices](docs/THIRD_PARTY.md) for bundled components.
 

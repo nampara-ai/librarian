@@ -12,27 +12,39 @@ On Jake's Mac:
 
 On other platforms, run `librarian` (`librarian.exe` on Windows) from the extracted native package. Keep its `engines` directory alongside it. First launch guides you through setup. Provider selection fills the endpoint, retrieves live models, connects credentials and verifies access. Keys stay out of ordinary configuration and job snapshots.
 
-1. Press **n** for New Import.
+Home has two panes. The left pane lists what you can do, each with its key. The right pane lists your documents, newest first. The panel below shows the selected document; the footer shows the keys that apply right now.
+
+**To see what is in a PDF, with no AI and no setup choices:**
+
+1. Press **a** for Parse PDFs now.
+2. Choose the source file or folder, then the destination folder.
+3. Choose **Parse now**. Results appear in seconds: counts of pages, headings, tables and lists, which pages would need OCR or vision, and a preview of each Markdown file. Earlier results stay listed on the form.
+
+**To clean documents with the configured model:**
+
+1. Press **n** for Clean documents with AI.
 2. Select the source file or folder; choose recursion if needed.
 3. Select or create the destination before processing.
 4. Review processing/output options and add the jobs.
 5. Press **q** to start the queue. Files run one at a time; independent work within a document runs concurrently.
-6. Select a job and press **Enter** to see its output or diagnostics.
+6. Press **Tab** to move to the documents pane, select a document and press **Enter**. Its menu offers what fits its state: read the result, read diagnostics, pause, resume, run again, or cancel.
 
 ## Controls
 
 | Control | Action |
 | --- | --- |
-| n | New Import |
-| q | Start queue |
-| p | Pause selected work |
-| r | Resume paused/cancelled/budget-limited work; retry a finished or failed job as a new run using current settings |
-| c | Cancel selected work; retain originals and checkpoints |
+| a | Parse PDFs now |
+| n | Clean documents with AI (import) |
+| q | Start the queue |
 | s | Search |
 | f | Setup |
 | h | Help |
-| Arrows, Tab, Shift+Tab | Navigate lists/forms |
-| Enter, Space | Activate a button, toggle or browsable field |
+| p | Pause the selected document |
+| r | Resume paused/cancelled/budget-limited work; retry a finished or failed document as a new run using current settings |
+| c | Cancel the selected document; retain originals and checkpoints |
+| Up, Down | Move within the focused pane, list or form |
+| Tab, Shift+Tab, Left, Right | On Home, switch between actions and documents; in forms, move |
+| Enter, Space | Run the action, open the document menu, or activate a button, toggle or browsable field |
 | Esc | Back; at Home, close the dashboard while the worker continues |
 | Ctrl+S | Save accepted drafts, pause workspace work and exit |
 | x | Continue a completed automatic setup step |
@@ -57,6 +69,7 @@ The default image reader requests narrative explanations that make figures/table
 ```sh
 librarian parse /path/source.pdf
 librarian parse /path/source.pdf --output /path/parsed --create-output
+librarian parse /path/folder --output /path/parsed --create-output --recursive
 librarian clean /path/source.pdf --output /path/finished --create-output
 librarian clean /path/folder --output /path/finished --recursive
 librarian run
@@ -85,7 +98,7 @@ librarian config schema
 librarian config edit
 ```
 
-`parse` cracks a PDF locally with the bundled PDFium engine and writes reader Markdown plus a typed JSON layout model (titles, headings, paragraphs, lists, tables, code, captions, pictures, headers, footers, page numbers) with a per-page routing report. It makes no model calls and refuses to publish if any word is lost or duplicated. `--words` adds positioned words and fonts; `--furniture` keeps running headers and footers in the Markdown. See the [parsing foundation](PARSING_FOUNDATION.md).
+`parse` cracks a PDF, or every PDF in a folder, locally with the bundled PDFium engine. It writes reader Markdown plus a typed JSON layout model (titles, headings, paragraphs, lists, tables, code, captions, footnotes, pictures, headers, footers, page numbers) with inline bold, italic and links and a per-page routing report. It makes no model calls and refuses to publish if any word or character is lost or duplicated. `--plain` drops inline markup; `--words` adds positioned words and fonts; `--furniture` keeps running headers and footers; `--page-markers` marks page boundaries. One unreadable file does not stop a folder. Scanned pages are reported for OCR, not read. See the [parsing foundation](PARSING_FOUNDATION.md).
 
 `prepare` renders page images and runs local OCR without making model calls or publishing a cleaned document. Its status is `prepared`. `pages` exposes the ordered matrix: A=image, B=OCR, C=visual reading, plus native/copyedited text. With `--page`, it prints that page's actual contents. The hidden work area is `<workspace>/.librarian-work/job-ID/pages`, with numbered PNG/JSON/Markdown sidecars.
 

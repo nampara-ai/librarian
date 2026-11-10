@@ -5,6 +5,7 @@ use anyhow::{Context, Result, bail};
 use librarian_core::layout::{
     self, Document, DocumentInput, Font, Link, Origin, OutlineItem, PageInput, Rect, Word,
 };
+pub use pdfium_render::prelude::Pdfium;
 use pdfium_render::prelude::*;
 use serde::Serialize;
 use std::{
@@ -51,9 +52,21 @@ pub fn parse(pdfium: &Pdfium, path: &Path) -> Result<Parsed> {
         bail!("parse currently reads PDF files; other formats use `librarian clean`");
     }
     let started = Instant::now();
-    let pdf = pdfium
-        .load_pdf_from_file(path, None)
-        .context("Cannot open PDF (encrypted documents require an unencrypted copy)")?;
+    let pdf = pdfium.load_pdf_from_file(path, None).map_err(|error| {
+        let reason = match error {
+            PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::PasswordError) => {
+                "it is password-protected; supply an unlocked copy"
+            }
+            PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::FormatError) => {
+                "it is damaged or not a PDF"
+            }
+            PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::SecurityError) => {
+                "it uses an unsupported security scheme"
+            }
+            _ => "the PDF engine could not read it",
+        };
+        anyhow::anyhow!("Cannot open {}: {reason}", path.display())
+    })?;
     let opened = started.elapsed();
     let input = pdf_input(&pdf)?;
     let extracted = started.elapsed();

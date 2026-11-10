@@ -1,5 +1,6 @@
 mod onboarding;
 mod parse_cmd;
+mod parse_tui;
 mod setup;
 mod terminal;
 mod ui;

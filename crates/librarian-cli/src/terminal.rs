@@ -81,12 +81,50 @@ impl Default for Import {
         }
     }
 }
+#[derive(Clone, Copy, PartialEq)]
+enum Pane {
+    Actions,
+    Documents,
+}
+
 struct App {
+    pane: Pane,
+    action: usize,
     selected: usize,
     message: String,
     child: Option<Child>,
     tick: u64,
 }
+
+/// Home actions: shortcut, label, what it does.
+const ACTIONS: [(char, &str, &str); 6] = [
+    (
+        'a',
+        "Parse PDFs now",
+        "Local and instant, no AI. Markdown plus blocks.",
+    ),
+    (
+        'n',
+        "Clean documents with AI",
+        "Import, copyedit and publish Markdown.",
+    ),
+    (
+        'q',
+        "Start the queue",
+        "Process queued documents, one at a time.",
+    ),
+    (
+        's',
+        "Search the library",
+        "Full-text search of finished documents.",
+    ),
+    (
+        'f',
+        "Setup",
+        "Workspace, provider, models, engines, defaults.",
+    ),
+    ('h', "Help", "Every key, and how the two workflows fit."),
+];
 
 pub fn run(root: &Path, config_path: &Path) -> Result<()> {
     let mut location = Location {
@@ -119,7 +157,234 @@ pub fn run(root: &Path, config_path: &Path) -> Result<()> {
     })
 }
 
-const HELP: &str = "HOME\nn  New Import\nq  Start queue (one file at a time)\np  Pause selected job\nr  Resume paused work; retry finished/failed jobs with current settings\nc  Cancel selected job; originals and committed work remain\ns  Search\nf  Setup\nh  Help\nEnter / Space  Preview selected job\n\nEVERY SCREEN\nArrows / Tab / Shift+Tab  Navigate lists and forms\nEnter / Space  Activate a button, toggle, or browsable field\nEsc  Back; at Home, close the dashboard (worker continues)\nCtrl+S  Save accepted answers/drafts, pause work in this workspace, and exit\nx  Continue a completed automatic setup step\n\nFILE BROWSER\nEnter  Open folder / select file\nSpace  Select the folder you are currently inside\nEsc  Return through folder history, then back to the form\nBackspace  Parent folder\n/  Type a path\nn  Create folder when selecting a destination or workspace\nCtrl+B  Additional browse shortcut on source/destination fields\ne  Type a path on source/destination fields\n\nTEXT FIELDS\nEnter accepts; Esc discards the current edit. Spaces are ordinary text.\nHome shortcuts do not fire inside fields. Ctrl+S keeps previously accepted\nanswers; an unaccepted edit or unsaved API key is discarded.\n\nCOPY / PASTE\nUse your terminal's copy/paste commands (often Ctrl+Shift+C/V on Windows\nand Linux; Cmd+C/V on macOS). Librarian does not bind Ctrl+C in the TUI.\nMouse selection and clipboard shortcuts belong to your terminal.\n\nRUNTIME\nSetup establishes the active workspace, provider, secure credential, model,\nengines and defaults. Workers load it automatically. Existing queued jobs\nkeep their saved configuration. API keys are never written into config.\n\nCLI\nconfig schema · config edit · doctor · status --json\nshow ID · pages ID · prepare FILE · catalog · stats\nprint ID · export ID --output FOLDER\nSee the bundled README for the complete terminal guide.";
+const HELP: &str = "TWO WAYS TO WORK
+
+a  Parse PDFs now
+   Local and instant. Each PDF becomes Markdown plus a JSON file of typed
+   blocks: headings, paragraphs, lists, tables, pictures. No provider, no
+   model, no cost. Start here to see what is in a file.
+
+n  Clean documents with AI
+   Import a file or folder and choose a destination. The queue copyedits
+   and publishes Markdown using the provider chosen in Setup.
+   q starts the queue; files run one at a time.
+
+HOME
+
+Left pane: actions. Right pane: your documents, newest first.
+Up / Down            Move within the pane
+Tab / Left / Right   Switch between actions and documents
+Enter / Space        Run the action, or open the selected document's menu
+a n q s f h          Run that action from anywhere on Home
+p r c                Pause, resume or retry, cancel the selected document
+Esc                  Close Librarian; a running queue keeps working
+Ctrl+S               Save drafts, pause work in this workspace, and exit
+
+DOCUMENT MENU
+
+Enter on a document lists what you can do with it in its current state:
+read the result, read diagnostics, pause, resume, run again with current
+settings as a new run, or cancel. Originals and earlier results are kept.
+
+FORMS AND LISTS
+
+Up / Down / Tab / Shift+Tab   Move
+Enter / Space                 Activate a button, toggle or browsable field
+Esc                           Back; answers already given are kept
+x                             Continue after an automatic step completes
+
+FILE BROWSER
+
+Enter       Open folder / select file
+Space       Select the folder you are currently inside
+Esc         Return through folder history, then back to the form
+Backspace   Parent folder
+/           Type a path
+n           Create a folder when selecting a destination or workspace
+Ctrl+B      Browse from a source or destination field
+e           Type the path of a source or destination field
+
+TEXT FIELDS
+
+Enter accepts; Esc discards the current edit. Spaces are ordinary text.
+Home shortcuts do not fire inside fields. Ctrl+S keeps previously accepted
+answers; an unaccepted edit or unsaved API key is discarded.
+
+COPY / PASTE
+
+Use your terminal's copy and paste commands (often Ctrl+Shift+C/V on
+Windows and Linux; Cmd+C/V on macOS). Librarian does not bind Ctrl+C here.
+
+RUNTIME
+
+Setup establishes the active workspace, provider, secure credential, model,
+engines and defaults. Workers load it automatically. Queued jobs keep the
+configuration they were queued with. API keys are never written into config.
+
+COMMAND LINE
+
+parse FILE|FOLDER -o FOLDER · clean SOURCE -o FOLDER · status --json
+show ID · pages ID · print ID · export ID --output FOLDER · doctor
+See the bundled README for the complete terminal guide.";
+
+fn pause(app: &mut App, library: &Library, id: i64) -> Result<()> {
+    library.control(Some(id), "pause")?;
+    app.message = format!("Pause requested for #{id}; committed work is kept");
+    Ok(())
+}
+
+fn cancel(app: &mut App, library: &Library, id: i64) -> Result<()> {
+    library.control(Some(id), "cancel")?;
+    app.message = format!("Cancel requested for #{id}; the original is kept");
+    Ok(())
+}
+
+/// "running · assembling", or just "queued" when the stage says the same.
+fn state(job: &Job) -> String {
+    let status = job.status.replace('_', " ");
+    if job.stage.is_empty() || job.stage == job.status {
+        status
+    } else {
+        format!("{status}  ·  {}", job.stage)
+    }
+}
+
+fn finished(status: &str) -> bool {
+    matches!(status, "complete" | "needs_review" | "prepared" | "failed")
+}
+
+/// Resume unfinished work, or run finished work again as a new job.
+fn resume(app: &mut App, library: &Library, config_path: &Path, id: i64) -> Result<()> {
+    if finished(&library.job(id)?.status) {
+        let new_id = pipeline::retry(library, id, &Config::load(config_path)?)?;
+        app.message = format!(
+            "Queued #{new_id} from #{id} with current settings; the earlier result is kept"
+        );
+    } else {
+        library.control(Some(id), "resume")?;
+    }
+    start_worker(app, library, config_path)
+}
+
+fn search(terminal: &mut ratatui::DefaultTerminal, library: &Library) -> Result<()> {
+    let mut query = String::new();
+    while let Some(value) = ui::input(
+        terminal,
+        "Search",
+        "Search the text of finished documents. Enter runs the search; Esc returns Home.",
+        &query,
+        false,
+    )? {
+        query = value.to_string();
+        let hits = library.search(&query, 30)?;
+        let body = hits
+            .into_iter()
+            .map(|r| {
+                format!(
+                    "#{}  {}\n{}\n",
+                    r["job"],
+                    r["title"].as_str().unwrap_or(""),
+                    r["snippet"].as_str().unwrap_or("")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        ui::notice(
+            terminal,
+            &format!("Search: {query}"),
+            if body.is_empty() { "No matches" } else { &body },
+        )?;
+    }
+    Ok(())
+}
+
+/// Everything that can be done with one document in its current state.
+fn document_menu(
+    terminal: &mut ratatui::DefaultTerminal,
+    app: &mut App,
+    library: &Library,
+    config_path: &Path,
+    job: &Job,
+) -> Result<()> {
+    let name = Path::new(&job.source)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let status = job.status.as_str();
+    let mut choices: Vec<(&str, String)> = Vec::new();
+    if job.output.is_some() {
+        choices.push(("open", "Read the result".into()));
+    }
+    choices.push(("log", "Read diagnostics and events".into()));
+    if matches!(status, "running" | "queued") {
+        choices.push(("pause", "Pause (committed work is kept)".into()));
+    }
+    if matches!(status, "paused" | "cancelled" | "budget_exhausted") {
+        choices.push(("resume", "Resume from the last checkpoint".into()));
+    }
+    if finished(status) {
+        choices.push((
+            "resume",
+            "Run again with current settings (keeps this result)".into(),
+        ));
+    }
+    if matches!(status, "running" | "queued" | "paused") {
+        choices.push(("cancel", "Cancel (the original is kept)".into()));
+    }
+    choices.push(("back", "Back to Home".into()));
+    let labels: Vec<String> = choices.iter().map(|(_, label)| label.clone()).collect();
+    let body = format!(
+        "{}Status       {}\nSource       {}\nDestination  {}\nModel calls  {} ({} from cache)",
+        job.error
+            .as_ref()
+            .map(|e| format!("Error        {e}\n"))
+            .unwrap_or_default(),
+        state(job),
+        job.source,
+        job.destination,
+        job.requests,
+        job.cache_hits
+    );
+    let Some(choice) = ui::choose(
+        terminal,
+        &format!("Document #{} · {name}", job.id),
+        &body,
+        &labels,
+        0,
+    )?
+    else {
+        return Ok(());
+    };
+    match choices[choice].0 {
+        "open" => {
+            let (title, body) = preview(library, job)?;
+            ui::notice(terminal, &title, &body)?;
+        }
+        "log" => {
+            let body = library
+                .events(Some(job.id), 60)?
+                .into_iter()
+                .map(|(_, level, message)| format!("{level}: {message}"))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            ui::notice(
+                terminal,
+                &format!("Diagnostics for #{}", job.id),
+                if body.is_empty() {
+                    "No events recorded yet."
+                } else {
+                    &body
+                },
+            )?;
+        }
+        "pause" => pause(app, library, job.id)?,
+        "resume" => resume(app, library, config_path, job.id)?,
+        "cancel" => cancel(app, library, job.id)?,
+        _ => {}
+    }
+    Ok(())
+}
 
 fn dashboard(
     terminal: &mut ratatui::DefaultTerminal,
@@ -127,15 +392,19 @@ fn dashboard(
     config_path: &Path,
 ) -> Result<Option<Location>> {
     let mut app = App {
+        pane: Pane::Actions,
+        action: 0,
         selected: 0,
-        message: "Arrows/Tab select · Enter/Space preview · Esc close · Ctrl+S save, pause & exit"
-            .into(),
+        message: crate::parse_tui::latest(&library.root).unwrap_or_default(),
         child: None,
         tick: 0,
     };
     loop {
         let jobs = library.jobs(1000)?;
         app.selected = app.selected.min(jobs.len().saturating_sub(1));
+        if jobs.is_empty() {
+            app.pane = Pane::Actions;
+        }
         app.tick += 1;
         if let Some(child) = &mut app.child
             && child.try_wait()?.is_some()
@@ -152,79 +421,50 @@ fn dashboard(
         {
             continue;
         }
-        if let Some(delta) = ui::movement(key.code) {
-            app.selected = ui::advance(app.selected, delta, jobs.len());
-            continue;
+        match key.code {
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right => {
+                if !jobs.is_empty() {
+                    app.pane = match (app.pane, key.code) {
+                        (_, KeyCode::Left) => Pane::Actions,
+                        (_, KeyCode::Right) => Pane::Documents,
+                        (Pane::Actions, _) => Pane::Documents,
+                        (Pane::Documents, _) => Pane::Actions,
+                    };
+                }
+                continue;
+            }
+            KeyCode::Up | KeyCode::Down => {
+                let delta = if key.code == KeyCode::Up { -1 } else { 1 };
+                match app.pane {
+                    Pane::Actions => app.action = ui::advance(app.action, delta, ACTIONS.len()),
+                    Pane::Documents => app.selected = ui::advance(app.selected, delta, jobs.len()),
+                }
+                continue;
+            }
+            KeyCode::Esc => return Ok(None),
+            _ => {}
         }
         let selected = jobs.get(app.selected).map(|j| j.id);
+        // Enter on an action is the same as pressing its letter.
+        let command = match key.code {
+            code if ui::activate(code) => match app.pane {
+                Pane::Actions => Some(ACTIONS[app.action].0),
+                Pane::Documents => Some('\n'),
+            },
+            KeyCode::Char(c) => Some(c),
+            _ => None,
+        };
         let outcome = (|| -> Result<Option<Location>> {
-            match key.code {
-                KeyCode::Char('n') => import(terminal, &mut app, library, config_path)?,
-                KeyCode::Char('q') => start_worker(&mut app, library, config_path)?,
-                KeyCode::Char('p') => {
-                    if let Some(id) = selected {
-                        library.control(Some(id), "pause")?;
-                        app.message = format!("Pause requested for #{id}; committed work retained");
+            match command {
+                Some('a') => {
+                    if let Some(message) = crate::parse_tui::run(terminal, &library.root)? {
+                        app.message = message;
                     }
                 }
-                KeyCode::Char('r') => {
-                    if let Some(id) = selected {
-                        let state = library.job(id)?;
-                        if matches!(
-                            state.status.as_str(),
-                            "complete" | "needs_review" | "prepared" | "failed"
-                        ) {
-                            let new_id = librarian_native::pipeline::retry(
-                                library,
-                                id,
-                                &Config::load(config_path)?,
-                            )?;
-                            app.message = format!(
-                                "Queued #{new_id} from #{id} with current settings; original result preserved"
-                            );
-                        } else {
-                            library.control(Some(id), "resume")?;
-                        }
-                        start_worker(&mut app, library, config_path)?;
-                    }
-                }
-                KeyCode::Char('c') => {
-                    if let Some(id) = selected {
-                        library.control(Some(id), "cancel")?;
-                        app.message = format!("Cancel requested for #{id}; originals retained");
-                    }
-                }
-                KeyCode::Char('s') => {
-                    let mut query = String::new();
-                    while let Some(value) = ui::input(
-                        terminal,
-                        "Search",
-                        "Search accepted document text. Enter runs the search; Esc returns Home.",
-                        &query,
-                        false,
-                    )? {
-                        query = value.to_string();
-                        let hits = library.search(&query, 30)?;
-                        let body = hits
-                            .into_iter()
-                            .map(|r| {
-                                format!(
-                                    "#{}  {}\n{}\n",
-                                    r["job"],
-                                    r["title"].as_str().unwrap_or(""),
-                                    r["snippet"].as_str().unwrap_or("")
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        ui::notice(
-                            terminal,
-                            &format!("Search: {query}"),
-                            if body.is_empty() { "No matches" } else { &body },
-                        )?;
-                    }
-                }
-                KeyCode::Char('f') => {
+                Some('n') => import(terminal, &mut app, library, config_path)?,
+                Some('q') => start_worker(&mut app, library, config_path)?,
+                Some('s') => search(terminal, library)?,
+                Some('f') => {
                     return crate::onboarding::run(
                         terminal,
                         Location {
@@ -233,11 +473,25 @@ fn dashboard(
                         },
                     );
                 }
-                KeyCode::Char('h') => ui::notice(terminal, "Librarian controls", HELP)?,
-                code if ui::activate(code) => {
+                Some('h') => ui::notice(terminal, "Librarian help", HELP)?,
+                Some('p') => {
+                    if let Some(id) = selected {
+                        pause(&mut app, library, id)?;
+                    }
+                }
+                Some('r') => {
+                    if let Some(id) = selected {
+                        resume(&mut app, library, config_path, id)?;
+                    }
+                }
+                Some('c') => {
+                    if let Some(id) = selected {
+                        cancel(&mut app, library, id)?;
+                    }
+                }
+                Some('\n') => {
                     if let Some(job) = jobs.get(app.selected) {
-                        let (title, body) = preview(library, job)?;
-                        ui::notice(terminal, &title, &body)?;
+                        document_menu(terminal, &mut app, library, config_path, job)?;
                     }
                 }
                 _ => {}
@@ -249,9 +503,6 @@ fn dashboard(
             Ok(None) => {}
             Err(e) if e.is::<ui::SaveExit>() => return Err(e),
             Err(e) => app.message = format!("{e:#}"),
-        }
-        if key.code == KeyCode::Esc {
-            return Ok(None);
         }
     }
 }
@@ -272,7 +523,7 @@ fn import(
         let check = |b| if b { "[x]" } else { "[ ]" };
         let fields = vec![
             format!(
-                "Source       {}",
+                "1  Source        {}",
                 if w.source.is_empty() {
                     "Select a file or folder"
                 } else {
@@ -280,28 +531,40 @@ fn import(
                 }
             ),
             format!(
-                "Destination  {}",
+                "2  Destination   {}",
                 if w.destination.is_empty() {
                     "Select or create an output folder"
                 } else {
                     &w.destination
                 }
             ),
-            format!("{} Include subfolders", check(w.recursive)),
-            format!("{} Create destination if missing", check(w.create)),
-            format!("{} Extraction only (no model calls)", check(w.extract_only)),
-            format!("{} Body-only Markdown", check(w.body_only)),
-            format!("{} Start processing after queueing", check(w.start)),
-            "Queue import".into(),
+            format!("   {} Include subfolders", check(w.recursive)),
+            format!(
+                "   {} Create the destination if it is missing",
+                check(w.create)
+            ),
+            format!(
+                "   {} Extraction only (no model calls)",
+                check(w.extract_only)
+            ),
+            format!(
+                "   {} Body-only Markdown (no title, summary or front matter)",
+                check(w.body_only)
+            ),
+            format!(
+                "   {} Start processing as soon as it is queued",
+                check(w.start)
+            ),
+            "3  Queue import".into(),
         ];
         // This form shares navigation with setup; browse fields also expose an
         // explicit typed-path option, so paths containing spaces work normally.
         let Some(index) = ui::path_form(
             t,
-            "New Import",
-            "Choose source and destination before queueing.
-Enter/Space opens a path or toggles an option; Queue import submits.
-Esc returns Home with this draft saved.",
+            "Clean documents with AI",
+            "Choose what to import and where the finished Markdown goes, then queue it.\n\
+             The queue copyedits with the provider chosen in Setup; originals are kept.\n\
+             Esc returns Home with this form saved.",
             &fields,
             w.field,
         )?
@@ -509,122 +772,242 @@ fn panel(title: &str) -> Block<'_> {
 }
 fn draw(frame: &mut Frame<'_>, jobs: &[Job], app: &App, library: &Library) {
     let area = frame.area();
+    let roomy = area.height >= 30;
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(2),
             Constraint::Min(8),
-            Constraint::Length(4),
-            Constraint::Length(4),
+            Constraint::Length(if roomy { 8 } else { 5 }),
+            Constraint::Length(3),
             Constraint::Length(2),
         ])
         .split(area);
-    let completed = jobs.iter().filter(|j| j.status == "complete").count();
-    let review = jobs.iter().filter(|j| j.status == "needs_review").count();
-    let queued = jobs.iter().filter(|j| j.status == "queued").count();
+    let count = |status: &str| jobs.iter().filter(|j| j.status == status).count();
+    let (queued, running) = (count("queued"), count("running"));
+    let focused = |pane: Pane| {
+        Style::default().fg(if app.pane == pane {
+            ACCENT
+        } else {
+            Color::DarkGray
+        })
+    };
+
+    // Header: product, counts, workspace.
+    let summary = if jobs.is_empty() {
+        "no documents yet".to_owned()
+    } else {
+        format!(
+            "{} done · {} to review · {queued} queued · {running} running",
+            count("complete"),
+            count("needs_review")
+        )
+    };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
                 "  LIBRARIAN  ",
                 Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
             ),
-            Span::raw(format!(
-                "{completed} complete  ·  {review} review  ·  {queued} queued"
-            )),
+            Span::raw(summary),
+            Span::styled(
+                format!("   workspace {}", library.root.display()),
+                Style::default().fg(Color::DarkGray),
+            ),
         ]))
         .block(Block::default().borders(Borders::BOTTOM)),
         rows[0],
     );
+
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
+        .constraints([
+            Constraint::Length(58.min(area.width / 2)),
+            Constraint::Min(20),
+        ])
         .split(rows[1]);
-    let items = jobs
+
+    // Left: what you can do. Every action shows its key and its meaning.
+    let describe = columns[0].width >= 54 && rows[1].height >= 14;
+    let actions = ACTIONS
         .iter()
-        .map(|job| {
-            let name = Path::new(&job.source)
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy();
-            ListItem::new(vec![
-                Line::from(vec![
-                    Span::styled(
-                        format!(" #{:<4} ", job.id),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                    Span::raw(name.into_owned()),
-                ]),
-                Line::from(Span::styled(
-                    format!("       {}  ·  {}", job.status, job.stage),
-                    Style::default().fg(status_color(&job.status)),
-                )),
-            ])
+        .map(|(key, label, about)| {
+            let about = if *key == 'q' {
+                match (running, queued) {
+                    (0, 0) => "Nothing is queued. Import documents first.".to_owned(),
+                    (0, n) => format!("{n} queued and waiting. Starts one at a time."),
+                    (_, n) => format!("Running now; {n} more queued."),
+                }
+            } else {
+                (*about).to_owned()
+            };
+            let mut lines = vec![Line::from(vec![
+                Span::styled(
+                    format!(" {key}  "),
+                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(*label, Style::default().add_modifier(Modifier::BOLD)),
+            ])];
+            // Descriptions need room; a narrow terminal shows the labels only.
+            if describe {
+                lines.push(Line::from(Span::styled(
+                    format!("    {about}"),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+            ListItem::new(lines)
         })
         .collect::<Vec<_>>();
-    let mut state = ListState::default();
-    if !jobs.is_empty() {
-        state.select(Some(app.selected));
-    }
-    frame.render_stateful_widget(
-        List::new(items)
-            .block(panel(" Queue · newest first "))
-            .highlight_style(Style::default().bg(Color::Rgb(25, 45, 55)))
-            .highlight_symbol("›"),
-        columns[0],
-        &mut state,
-    );
-    let detail = if let Some(job) = jobs.get(app.selected) {
-        let editorial = librarian_native::editorial::progress(library, job.id).unwrap_or_default();
-        let stages = if editorial["pages"]["rendered"].as_i64().unwrap_or(0) > 0 {
-            format!(
-                "\nPAGES {} · OCR {} · VISION {}\nCOPYEDIT {} · ASSEMBLED {} · POLISHED {}\n",
-                editorial["pages"]["rendered"],
-                editorial["pages"]["ocr"],
-                editorial["pages"]["visual"],
-                editorial["pages"]["copyedited"],
-                editorial["assembled"],
-                editorial["reviewed"]
-            )
+    let mut action_state = ListState::default();
+    action_state.select(Some(app.action));
+    let highlight = |pane: Pane| {
+        if app.pane == pane {
+            Style::default().bg(Color::Rgb(25, 45, 55))
         } else {
-            String::new()
-        };
-        format!(
-            "{}STAGE  {}\nSTATUS  {}\n{}\nSOURCE\n{}\n\nDESTINATION\n{}\n\nREQUESTS  {}   CACHE HITS  {}\nTOKENS  {} in / {} out\nCACHED INPUT  {}\nCOST  {}\n\n{}",
-            job.error
-                .as_ref()
-                .map(|e| format!("ERROR\n{e}\n\n"))
-                .unwrap_or_default(),
-            job.stage,
-            job.status,
-            stages,
-            job.source,
-            job.destination,
-            job.requests,
-            job.cache_hits,
-            job.input_tokens,
-            job.output_tokens,
-            job.cached_tokens,
-            job.cost
-                .map(|n| format!("${n:.5} (configured rates)"))
-                .unwrap_or_else(|| "rates not configured".into()),
-            job.output
-                .as_ref()
-                .or(job.error.as_ref())
-                .cloned()
-                .unwrap_or_default()
-        )
+            Style::default()
+        }
+    };
+    frame.render_stateful_widget(
+        List::new(actions)
+            .block(
+                Block::default()
+                    .title(" What do you want to do? ")
+                    .borders(Borders::ALL)
+                    .border_style(focused(Pane::Actions)),
+            )
+            .highlight_style(highlight(Pane::Actions))
+            .highlight_symbol(if app.pane == Pane::Actions {
+                "›"
+            } else {
+                " "
+            }),
+        columns[0],
+        &mut action_state,
+    );
+
+    // Right: documents, or how to get the first one.
+    let documents = Block::default()
+        .title(" Documents · newest first ")
+        .borders(Borders::ALL)
+        .border_style(focused(Pane::Documents));
+    if jobs.is_empty() {
+        frame.render_widget(
+            Paragraph::new(
+                "Nothing here yet.\n\n\
+                 1. Press a to parse a PDF. It is local and takes seconds:\n   \
+                 you get Markdown and a JSON file of typed blocks.\n\n\
+                 2. Press n to clean documents with AI. Imported files\n   \
+                 appear here with live progress and results.\n\n\
+                 Press h for every key.",
+            )
+            .wrap(Wrap { trim: false })
+            .block(documents),
+            columns[1],
+        );
     } else {
-        format!(
-            "Your library is ready.\n\nPress n to select a file or folder and an output destination.\n\nPress f to configure your provider, OCR and Markdown preferences.\n\nLibrary:\n{}",
-            library.root.display()
-        )
+        let items = jobs
+            .iter()
+            .map(|job| {
+                let name = Path::new(&job.source)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::styled(
+                            format!(" #{:<4} ", job.id),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                        Span::raw(name.into_owned()),
+                    ]),
+                    Line::from(Span::styled(
+                        format!("       {}", state(job)),
+                        Style::default().fg(status_color(&job.status)),
+                    )),
+                ])
+            })
+            .collect::<Vec<_>>();
+        let mut state = ListState::default();
+        state.select(Some(app.selected));
+        frame.render_stateful_widget(
+            List::new(items)
+                .block(documents)
+                .highlight_style(highlight(Pane::Documents))
+                .highlight_symbol(if app.pane == Pane::Documents {
+                    "›"
+                } else {
+                    " "
+                }),
+            columns[1],
+            &mut state,
+        );
+    }
+
+    // Detail: the selected document, or the workspace when there is none.
+    let (title, detail) = match jobs.get(app.selected) {
+        Some(job) => {
+            let editorial =
+                librarian_native::editorial::progress(library, job.id).unwrap_or_default();
+            let stages = if editorial["pages"]["rendered"].as_i64().unwrap_or(0) > 0 {
+                format!(
+                    "Pages {} · OCR {} · vision {} · copyedit {} · assembled {} · polished {}\n",
+                    editorial["pages"]["rendered"],
+                    editorial["pages"]["ocr"],
+                    editorial["pages"]["visual"],
+                    editorial["pages"]["copyedited"],
+                    editorial["assembled"],
+                    editorial["reviewed"]
+                )
+            } else {
+                String::new()
+            };
+            (
+                format!(
+                    " #{} · {} ",
+                    job.id,
+                    Path::new(&job.source)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                ),
+                format!(
+                    "{}{}\n{}From  {}\nTo    {}\nModel calls {} ({} cached) · tokens {} in / {} out · cost {}",
+                    job.error
+                        .as_ref()
+                        .map(|e| format!("Error: {e}\n"))
+                        .unwrap_or_default(),
+                    state(job),
+                    stages,
+                    job.source,
+                    job.output.as_deref().unwrap_or(&job.destination),
+                    job.requests,
+                    job.cache_hits,
+                    job.input_tokens,
+                    job.output_tokens,
+                    job.cost
+                        .map(|n| format!("${n:.5}"))
+                        .unwrap_or_else(|| "n/a".into()),
+                ),
+            )
+        }
+        None => (
+            " This workspace ".to_owned(),
+            format!(
+                "{}\n{}",
+                library.root.display(),
+                crate::parse_tui::latest(&library.root)
+                    .unwrap_or_else(|| "Nothing has been parsed here yet.".into())
+            ),
+        ),
     };
     frame.render_widget(
         Paragraph::new(detail)
             .wrap(Wrap { trim: false })
-            .block(panel(" Selected document ")),
-        columns[1],
+            .block(panel(&title)),
+        rows[2],
     );
+
+    // Now: what is running.
     if let Some(job) = jobs.iter().find(|j| j.status == "running") {
         let ratio = if job.total > 0 {
             (job.done as f64 / job.total as f64).clamp(0.0, 1.0)
@@ -634,7 +1017,7 @@ fn draw(frame: &mut Frame<'_>, jobs: &[Job], app: &App, library: &Library) {
         let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][(app.tick % 10) as usize];
         frame.render_widget(
             Gauge::default()
-                .block(panel(" Live progress "))
+                .block(panel(" Now "))
                 .gauge_style(Style::default().fg(ACCENT))
                 .ratio(ratio)
                 .label(format!(
@@ -648,19 +1031,42 @@ fn draw(frame: &mut Frame<'_>, jobs: &[Job], app: &App, library: &Library) {
                         "?".into()
                     }
                 )),
-            rows[2],
+            rows[3],
         );
     } else {
-        frame.render_widget(
-            Paragraph::new("  No active job · q starts queued work").block(panel(" Progress ")),
-            rows[2],
-        );
+        let idle = if queued > 0 {
+            format!("  Nothing is running. {queued} queued: press q to start.")
+        } else {
+            "  Nothing is running.".to_owned()
+        };
+        frame.render_widget(Paragraph::new(idle).block(panel(" Now ")), rows[3]);
     }
-    frame.render_widget(Paragraph::new("  n New Import   q Start queue   p Pause   r Resume   c Cancel   s Search   f Setup   h Help").wrap(Wrap{trim:true}).block(panel(" Controls ")),rows[3]);
+
+    // Footer: the keys that apply right now, then the latest message.
+    let wide = area.width >= 104;
+    let hints = match (app.pane, wide) {
+        (Pane::Actions, _) if jobs.is_empty() => {
+            "↑↓ move · Enter run · letter = shortcut · h help · Esc close"
+        }
+        (Pane::Actions, true) => {
+            "↑↓ move · Enter run · Tab documents · letter = shortcut · Esc close · Ctrl+S save, pause & exit"
+        }
+        (Pane::Actions, false) => "↑↓ move · Enter run · Tab documents · h help · Esc close",
+        (Pane::Documents, true) => {
+            "↑↓ move · Enter document menu · p pause · r resume/retry · c cancel · Tab actions · Esc close"
+        }
+        (Pane::Documents, false) => {
+            "↑↓ move · Enter menu · p pause · r resume · c cancel · Tab actions"
+        }
+    };
     frame.render_widget(
-        Paragraph::new(app.message.as_str())
-            .style(Style::default().fg(Color::DarkGray))
-            .wrap(Wrap { trim: true }),
+        Paragraph::new(vec![
+            Line::from(Span::raw(format!("  {hints}"))),
+            Line::from(Span::styled(
+                format!("  {}", app.message),
+                Style::default().fg(Color::DarkGray),
+            )),
+        ]),
         rows[4],
     );
 }
