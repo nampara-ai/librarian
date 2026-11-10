@@ -82,6 +82,16 @@ pub fn parse(pdfium: &Pdfium, path: &Path) -> Result<Parsed> {
 fn font_flags(name: &str, character: &PdfPageTextChar<'_>) -> Font {
     let base = name.split_once('+').map_or(name, |(_, rest)| rest);
     let lower = base.to_ascii_lowercase();
+    // TeX fonts encode style in the name: cmbx10, sfbx0900, cmti10, cmtt9.
+    let tex = ["cm", "sf", "ec", "lm", "tc"]
+        .iter()
+        .find_map(|p| lower.strip_prefix(p))
+        .filter(|rest| rest.chars().any(|c| c.is_ascii_digit()) && rest.len() <= 12)
+        .map(|rest| {
+            rest.trim_end_matches(|c: char| c.is_ascii_digit())
+                .to_owned()
+        });
+    let tex_is = |styles: &[&str]| tex.as_deref().is_some_and(|t| styles.contains(&t));
     let heavy = [
         "bold",
         "semibold",
@@ -90,9 +100,12 @@ fn font_flags(name: &str, character: &PdfPageTextChar<'_>) -> Font {
         "heavy",
         "extrabold",
         "-medi",
+        "-bd",
+        "-demi",
     ]
     .iter()
-    .any(|w| lower.contains(w));
+    .any(|w| lower.contains(w))
+        || tex_is(&["bx", "b", "bxti", "bxsl", "ssbx", "bsy", "mib"]);
     let weight_bold = matches!(
         character.font_weight(),
         Some(
@@ -108,8 +121,10 @@ fn font_flags(name: &str, character: &PdfPageTextChar<'_>) -> Font {
         italic: lower.contains("italic")
             || lower.contains("oblique")
             || lower.ends_with("-it")
-            || character.font_is_italic(),
+            || tex_is(&["ti", "sl", "bxti", "bxsl", "ssi", "u"])
+            || (tex.is_none() && character.font_is_italic()),
         mono: character.font_is_fixed_pitch()
+            || tex_is(&["tt", "tti", "sltt", "tcsc", "itt"])
             || ["mono", "courier", "consol", "menlo"]
                 .iter()
                 .any(|w| lower.contains(w)),
@@ -119,6 +134,8 @@ fn font_flags(name: &str, character: &PdfPageTextChar<'_>) -> Font {
 struct Pending {
     text: String,
     bbox: Rect,
+    /// Right edge of the last glyph's advance box.
+    cell_right: f32,
     baseline: f32,
     font: u32,
     size: f32,
@@ -454,12 +471,25 @@ pub fn pdf_input(pdf: &PdfDocument<'_>) -> Result<DocumentInput> {
                 line += 1;
             }
             let size = character.scaled_font_size().value;
+            // Some files carry no space characters at all. The advance boxes
+            // of neighbouring letters touch; a clear gap between them is a
+            // word space the file left implicit.
+            let cell = character.loose_bounds().map(&to_rect).ok();
+            if let (Some(p), Some(cell)) = (current.as_ref(), cell.as_ref())
+                && !p.rotated
+                && cell.x - p.cell_right > 0.1 * size.max(1.0)
+                && cell.overlap_y(&p.bbox) > 0.0
+            {
+                flush(&mut current, &mut words, line);
+            }
+            let cell_right = cell.map_or(bbox.right(), |c| c.right());
             let glyph = if soft || marker { '-' } else { c };
             match current.as_mut() {
                 // A style change inside a word keeps the word whole; the first
                 // glyph describes it.
                 Some(p) => {
                     p.text.push(glyph);
+                    p.cell_right = cell_right;
                     p.bbox = p.bbox.union(&bbox);
                     p.hyphen = soft;
                 }
@@ -490,6 +520,7 @@ pub fn pdf_input(pdf: &PdfDocument<'_>) -> Result<DocumentInput> {
                     current = Some(Pending {
                         text: glyph.to_string(),
                         bbox,
+                        cell_right,
                         baseline,
                         font,
                         size,

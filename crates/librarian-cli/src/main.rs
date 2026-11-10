@@ -170,7 +170,7 @@ enum Command {
         /// Mark page boundaries in the Markdown with HTML comments.
         #[arg(long)]
         page_markers: bool,
-        /// Text only: no bold/italic/link markup or picture markers; keeps page furniture.
+        /// Text only: no bold/italic/link markup or picture markers.
         #[arg(long)]
         plain: bool,
         /// Include word indices and positioned words in the JSON.

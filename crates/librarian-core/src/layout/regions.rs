@@ -319,11 +319,38 @@ impl Segmenter<'_, '_> {
             if strips.iter().any(Vec::is_empty) {
                 continue;
             }
+            // A page number or footnote mark standing in a gutter splits it in
+            // two. Such a sliver is a stray item, not a column: set it aside
+            // and let its neighbours share one gutter.
+            let mut gutters = gutters;
+            let mut strays: Vec<Entry> = Vec::new();
+            let mut k = 1;
+            while k + 1 < strips.len() {
+                let sliver = strips[k].len() <= 3
+                    && strips[k].iter().all(|e| matches!(e.item, Item::Word(_)))
+                    && union_all(strips[k].iter().map(|e| e.bbox)).w <= 4.0 * size;
+                if sliver {
+                    strays.extend(strips.remove(k));
+                    let right_gutter = gutters.remove(k);
+                    gutters[k - 1].1 = right_gutter.1;
+                } else {
+                    k += 1;
+                }
+            }
+            let run_middle = (run[0].top + run[run.len() - 1].bottom) / 2.0;
             let narrowest = gutters.iter().map(|g| g.1 - g.0).fold(f32::MAX, f32::min);
             match self.classify(&strips, narrowest, size) {
                 Kind::Reject => continue,
                 Kind::Columns => {
-                    let (before, after) = outside(&entries, &rows, candidate.first, candidate.last);
+                    let (mut before, mut after) =
+                        outside(&entries, &rows, candidate.first, candidate.last);
+                    for stray in strays {
+                        if stray.bbox.cy() < run_middle {
+                            before.push(stray);
+                        } else {
+                            after.push(stray);
+                        }
+                    }
                     self.split(before, depth + 1);
                     for strip in strips {
                         self.split(strip, depth + 1);
@@ -410,7 +437,10 @@ impl Segmenter<'_, '_> {
             lines.push(lines_from(ctx, &words));
         }
         let prose: Vec<bool> = lines.iter().map(|l| prose_like(l, size)).collect();
-        let wide = narrowest >= 1.0 * size;
+        // A narrow gutter is trustworthy once many lines on both sides respect
+        // it: chance alignments of word spaces do not persist that long.
+        let fewest = lines.iter().map(Vec::len).min().unwrap_or(0);
+        let wide = narrowest >= 1.0 * size || (narrowest >= 0.75 * size && fewest >= 8);
         let any_atom = atomic.iter().any(|a| *a);
         if (0..strips.len()).all(|k| prose[k] || atomic[k]) {
             return if wide { Kind::Columns } else { Kind::Reject };

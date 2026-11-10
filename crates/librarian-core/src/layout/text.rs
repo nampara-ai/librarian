@@ -143,6 +143,7 @@ pub(crate) struct Line {
     pub baseline: f32,
     pub size: f32,
     pub bold: bool,
+    pub italic: bool,
     pub mono: bool,
     pub chars: usize,
 }
@@ -156,10 +157,25 @@ impl Line {
                 .total_cmp(&ctx.word(*b).bbox.x)
                 .then(a.cmp(b))
         });
+        // Right-to-left scripts read from the right edge.
+        let (mut rtl, mut ltr) = (0usize, 0usize);
+        for &id in &words {
+            for c in ctx.word(id).text.chars() {
+                if matches!(c, '\u{0590}'..='\u{08FF}' | '\u{FB1D}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')
+                {
+                    rtl += 1;
+                } else if c.is_alphabetic() {
+                    ltr += 1;
+                }
+            }
+        }
+        if rtl > ltr {
+            words.reverse();
+        }
         let bbox = union_all(words.iter().map(|id| ctx.word(*id).bbox));
         let mut sizes = Vec::with_capacity(words.len());
         let mut baselines = Vec::with_capacity(words.len());
-        let (mut chars, mut bold, mut mono) = (0usize, 0usize, 0usize);
+        let (mut chars, mut bold, mut italic, mut mono) = (0usize, 0usize, 0usize, 0usize);
         for &id in &words {
             let word = ctx.word(id);
             let count = word.text.chars().count();
@@ -168,6 +184,7 @@ impl Line {
             baselines.push(word_baseline(word));
             if let Some(font) = ctx.font(id) {
                 bold += count * font.bold as usize;
+                italic += count * font.italic as usize;
                 mono += count * font.mono as usize;
             }
         }
@@ -191,6 +208,7 @@ impl Line {
             size,
             // A line that merely opens with a bold run-in phrase is not bold.
             bold: bold * 10 >= chars.max(1) * 9,
+            italic: italic * 10 >= chars.max(1) * 9,
             mono: most(mono),
             chars,
             words,
@@ -351,7 +369,8 @@ pub(crate) fn section_number(text: &str) -> bool {
             .trim_start()
             .chars()
             .next()
-            .is_some_and(|c| c.is_uppercase() || c.is_ascii_digit())
+            // Scripts without letter case count as capitalised.
+            .is_some_and(|c| c.is_ascii_digit() || (c.is_alphabetic() && !c.is_lowercase()))
 }
 
 /// Table-of-contents style dot leaders ("Introduction ........ 7").

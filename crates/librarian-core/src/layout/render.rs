@@ -29,7 +29,7 @@ impl RenderOptions {
     /// Text only: no markup beyond headings, lists and tables.
     pub fn plain() -> Self {
         Self {
-            furniture: true,
+            furniture: false,
             page_markers: false,
             styles: false,
             pictures: false,

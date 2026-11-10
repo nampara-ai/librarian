@@ -14,6 +14,10 @@ pub(crate) struct Draft {
     pub size: f32,
     pub bold: bool,
     pub words: Vec<u32>,
+    pub italic: bool,
+    pub lines: usize,
+    /// Distance from the previous block, in ordinary line steps.
+    pub gap_above: f32,
     pub hyphens_removed: u32,
     pub hyphens_kept: u32,
 }
@@ -117,6 +121,7 @@ pub(crate) fn flow_blocks(ctx: &Ctx, words: &[u32]) -> Vec<Draft> {
                     || step < 0.4 * size
                     || (previous.size - line.size).abs() > 0.12 * size
                     || previous.bold != line.bold
+                    || previous.italic != line.italic
                     || previous.mono != line.mono
                     || list_marker(&text).is_some()
                     || leader(&before)
@@ -143,8 +148,15 @@ pub(crate) fn flow_blocks(ctx: &Ctx, words: &[u32]) -> Vec<Draft> {
     let page_height = ctx.page.height.max(1.0);
     let mut drafts: Vec<Draft> = Vec::with_capacity(blocks.len());
     let mut caps: Vec<bool> = Vec::with_capacity(blocks.len());
-    for block in &blocks {
+    for (block_index, block) in blocks.iter().enumerate() {
         let refs: Vec<&Line> = block.lines.iter().collect();
+        let gap_above = match block_index.checked_sub(1) {
+            Some(before) => {
+                let (above, first) = (blocks[before].last(), block.first());
+                (first.baseline - above.baseline) / (pitch * first.size.max(above.size).max(1.0))
+            }
+            None => f32::MAX,
+        };
         let mono = refs.iter().filter(|l| l.mono).count() * 10 >= refs.len() * 6;
         let Composed {
             text,
@@ -173,9 +185,19 @@ pub(crate) fn flow_blocks(ctx: &Ctx, words: &[u32]) -> Vec<Draft> {
             && refs.len() <= 2
             && (!ends_like_sentence || numbered)
             && (!marker || numbered);
+        // "3.2 Method" on its own line with space above is a heading even in
+        // the body face.
+        // A bare "1." is how list items start, so the number must be
+        // multi-level ("3.2") or undotted ("3 Method").
+        let label = text.split_whitespace().next().unwrap_or("");
+        let isolated = refs.len() == 1
+            && gap_above >= 1.3
+            && chars <= 80
+            && !ends_like_sentence
+            && (!label.ends_with(['.', ')']) || label.trim_end_matches('.').contains('.'));
         let numbered_title = numbered
             && ratio >= 0.95
-            && (bold || ratio >= 1.08 || upper)
+            && (bold || ratio >= 1.08 || upper || isolated)
             && chars <= 120
             && refs.len() <= 2;
         let role = if mono && chars >= 2 {
@@ -218,6 +240,9 @@ pub(crate) fn flow_blocks(ctx: &Ctx, words: &[u32]) -> Vec<Draft> {
             size,
             bold,
             words: refs.iter().flat_map(|l| l.words.iter().copied()).collect(),
+            italic: refs.iter().all(|l| l.italic),
+            lines: refs.len(),
+            gap_above,
             hyphens_removed,
             hyphens_kept,
         });
@@ -227,9 +252,20 @@ pub(crate) fn flow_blocks(ctx: &Ctx, words: &[u32]) -> Vec<Draft> {
     for index in 0..drafts.len().saturating_sub(1) {
         let (current, next) = (&drafts[index], &drafts[index + 1]);
         let chars = current.text.chars().count();
+        // Bold labels need no extra space; an italic line does, or it is just
+        // an emphasised line of the paragraph.
+        let letters = current.text.chars().filter(|c| c.is_alphabetic()).count();
+        let wordy = letters >= 8
+            && letters * 10 >= chars * 7
+            && current.text.chars().next().is_some_and(char::is_uppercase);
+        let distinct = (current.bold && !next.bold)
+            || (current.italic
+                && !next.italic
+                && current.lines == 1
+                && current.gap_above >= 1.25
+                && wordy);
         if current.role == Role::Paragraph
-            && current.bold
-            && !next.bold
+            && distinct
             && current.size >= 0.7 * body
             && next.size <= current.size + 0.25
             && matches!(next.role, Role::Paragraph | Role::ListItem)

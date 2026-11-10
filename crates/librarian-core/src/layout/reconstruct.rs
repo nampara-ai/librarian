@@ -143,25 +143,7 @@ fn page_elements(ctx: &Ctx, tally: &mut Tally) -> PageResult {
     let mut atoms: Vec<Node> = Vec::new();
     let mut uncertain_tables: Vec<Rect> = Vec::new();
 
-    // 1. Tables whose grid was drawn.
-    let mut table_boxes: Vec<Rect> = Vec::new();
-    for grid in grids(page) {
-        if table_boxes
-            .iter()
-            .any(|t| t.intersection_area(&grid.bbox) > 0.5 * grid.bbox.area())
-        {
-            continue;
-        }
-        if let Some(table) = from_grid(ctx, &grid, &available) {
-            for id in table.words() {
-                available[id as usize] = false;
-            }
-            table_boxes.push(table.bbox);
-            atoms.push(Node::Table(table));
-        }
-    }
-
-    // 2. Pictures and vector figures, with the words drawn inside them.
+    // 1. Pictures: raster images first, since they bound what a grid can be.
     let mut figures: Vec<Rect> = Vec::new();
     let mut backgrounds: Vec<Rect> = Vec::new();
     let images: Vec<Rect> = page
@@ -180,6 +162,33 @@ fn page_elements(ctx: &Ctx, tally: &mut Tally) -> PageResult {
             figures.push(region);
         }
     }
+
+    // 2. Tables whose grid was drawn.
+    let mut table_boxes: Vec<Rect> = Vec::new();
+    for grid in grids(page) {
+        if table_boxes
+            .iter()
+            .any(|t| t.intersection_area(&grid.bbox) > 0.5 * grid.bbox.area())
+        {
+            continue;
+        }
+        // Lines drawn over a picture annotate it; they are not a table.
+        if figures
+            .iter()
+            .any(|f| f.intersection_area(&grid.bbox) > 0.6 * grid.bbox.area())
+        {
+            continue;
+        }
+        if let Some(table) = from_grid(ctx, &grid, &available) {
+            for id in table.words() {
+                available[id as usize] = false;
+            }
+            table_boxes.push(table.bbox);
+            atoms.push(Node::Table(table));
+        }
+    }
+
+    // Vector figures, with the words drawn inside them.
     for region in merge_rects(&page.drawings, 4.0) {
         let share = region.area() / page_area;
         if !(0.01..0.7).contains(&share) || region.w < 30.0 || region.h < 20.0 {
@@ -208,6 +217,16 @@ fn page_elements(ctx: &Ctx, tally: &mut Tally) -> PageResult {
         // Dense text over a shape is a framed or tinted text box, not a figure.
         if inside.len() > 25 && ink > 0.12 * region.area() {
             continue;
+        }
+        // A line or two of ordinary text on a low band is a heading or label
+        // printed over decoration; the text belongs to the reading flow.
+        if !inside.is_empty() {
+            let mut sizes: Vec<f32> = inside.iter().map(|id| ctx.word(*id).size).collect();
+            let size = super::geom::median(&mut sizes).max(1.0);
+            let lines = super::text::lines_from(ctx, &inside).len();
+            if lines <= 2 && region.h <= 6.0 * size && size >= 0.85 * ctx.stats.body {
+                continue;
+            }
         }
         for &id in &inside {
             available[id as usize] = false;
@@ -476,8 +495,25 @@ pub fn reconstruct(input: &DocumentInput) -> Document {
             }
             None => roman_folio(&e.text) && page_count >= 3 && (e.page as usize) < 40,
         };
+        // A short document cannot show recurrence. Its running head is still
+        // recognisable: one small line at the very top carrying the folio.
+        let running_head = page_count < 3
+            && top
+            && !e.text.contains('\n')
+            && e.text.chars().count() <= 120
+            && e.font_size <= 1.05 * body
+            && {
+                let tokens: Vec<&str> = e.text.split_whitespace().collect();
+                let number = |t: &&str| {
+                    !t.is_empty() && t.len() <= 4 && t.chars().all(|c| c.is_ascii_digit())
+                };
+                tokens.len() >= 2
+                    && (tokens.first().is_some_and(number) != tokens.last().is_some_and(number))
+            };
         if folio {
             e.role = Role::PageNumber;
+        } else if running_head {
+            e.role = Role::Header;
         } else if recurrence
             .get(&furniture_key(&e.text))
             .is_some_and(|pages| pages.len() >= threshold)
