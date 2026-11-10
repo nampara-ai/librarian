@@ -1,6 +1,6 @@
 # Parsing foundation
 
-Direction set by Jake on 2026-11-08. Engine rebuilt and measured 2026-11-09 and 2026-11-10.
+Direction set by Jake on 2026-11-08. Engine rebuilt and measured 2026-11-09 and 2026-11-10. Numbers below are from the build that includes the brochure fixes.
 
 ## Direction
 
@@ -64,19 +64,19 @@ Odd-numbered documents were the development set. Even-numbered documents were a 
 
 | Split | Librarian | Nutrient | Best published engine |
 | --- | --- | --- | --- |
-| Development (100) | 0.880 | 0.876 | 0.901 |
-| Holdout (100) | 0.859 | 0.894 | 0.912 |
-| All 200 | 0.870 | 0.885 | 0.907 |
+| Development (100) | 0.887 | 0.876 | 0.901 |
+| Holdout (100) | 0.866 | 0.894 | 0.912 |
+| All 200 | 0.876 | 0.885 | 0.907 |
 
 | All 200, by score | Librarian | Nutrient | Best published engine |
 | --- | --- | --- | --- |
-| Reading order and text (NID) | 0.915 | 0.925 | 0.934 |
-| Table structure (TEDS) | 0.680 | 0.708 | 0.928 |
-| Heading hierarchy (MHS) | 0.796 | 0.819 | 0.821 |
+| Reading order and text (NID) | 0.921 | 0.925 | 0.934 |
+| Table structure (TEDS) | 0.707 | 0.708 | 0.928 |
+| Heading hierarchy (MHS) | 0.802 | 0.819 | 0.821 |
 
 The engine before the rebuild scored 0.747 and crashed on five pages. Among the 14 published engines Librarian now places fifth, behind opendataloader-hybrid (0.907), Nutrient (0.885), docling (0.882) and one opendataloader variant (0.877). Every engine above it uses a trained model. Librarian parses all 200 pages in 1.7 s on one thread.
 
-The honest reading: Librarian beats Nutrient on the pages it was developed on and trails it by 0.035 on pages it never saw. The holdout gap is mostly tables (0.626 against 0.702) and headings (0.780 against 0.848). The development result overstates general accuracy; the holdout result is the one to trust.
+The honest reading: Librarian beats Nutrient on the pages it was developed on and trails it by 0.028 on pages it never saw. The holdout gap is mostly tables (0.654 against 0.702) and headings (0.793 against 0.848). The development result overstates general accuracy; the holdout result is the one to trust.
 
 ### 2. Author truth: tagged PDFs
 
@@ -90,12 +90,12 @@ The product does not read structure tags. PDFium exposes them only through unsaf
 
 | Measure | Make It Rain (57 pp) | Apple Style Guide (244 pp) |
 | --- | --- | --- |
-| Librarian parse | 99 ms | 659 ms |
+| Librarian parse | 100 ms | 666 ms |
 | Nutrient | 11,746 ms | 57,532 ms |
 | Our words matched to Nutrient | 99.89% | 99.90% |
 | Reading-order discordance | 0.012% | 0.005% |
 | Headings precision / recall | 96.8% / 44.3% | 75.9% / 69.7% |
-| List items precision / recall | 100% / 100% | 99.5% / 98.5% |
+| List items precision / recall | 100% / 100% | 99.5% / 99.5% |
 | Table words precision / recall | none in either | 100% / 94.6% |
 | Footers precision / recall | 98.1% / 100% | 100% / 100% |
 | Table pages ours / Nutrient / shared | 0 / 0 / 0 | 12 / 13 / 12 |
@@ -114,12 +114,29 @@ This measures agreement, not truth. Nutrient labels emphasised sentences as head
 
 Average 3.7 ms per page.
 
-A further 18 multi-page documents with another engine's output as reference rose from 0.569 to 0.713. That is agreement with a different parser, not truth, and is used only to spot regressions.
+A further 18 multi-page documents with another engine's output as reference rose from 0.569 to 0.714. That is agreement with a different parser, not truth, and is used only to spot regressions.
+
+### 5. A real brochure
+
+Jake supplied a six-page product brochure on 2026-11-10: photographs, a shaded panel of illustrations with captions, and a 39-row specification table under a dimensioned drawing. The first parse got three things wrong. Each was fixed with a rule that also raised the benchmark, including the holdout half (0.859 to 0.866).
+
+| What went wrong | Rule that fixed it |
+| --- | --- |
+| Text inside a shaded panel was read as one picture, its columns interleaved | A single shape that holds running text is a panel, not a figure |
+| The table's label column collapsed into one cell | Borders that break at the same place form one grid when a drawn line crosses both, however far apart they are |
+| The drawing above the table was fused into it | Borders with no line across both and different extents are separate objects |
+| The shaded header band was left out of the table | Borders that run past the last drawn line to a common end close a row |
+| A line of text was cut where it crossed a figure's box | A figure's edge never cuts a line of text |
+| An italic lead-in was split from its sentence | An italic line that runs on into the sentence is emphasis, not a block |
+| A footer with large type was read as a table | Display type above small print in one column is a layout, not a grid |
+| Footnotes marked †, ‡ merged into one | Reference marks start their own note |
+
+Still wrong on that brochure: photo captions sit after the text of their page instead of beside their photo, a decorative dash under the cover tagline is kept as a line, and the phone number and web address are labelled headings because they are set in display type.
 
 ## Limits
 
 - **Scanned pages are reported, not read.** `parse` routes them to `ocr` and stops. OCR inside `parse` is not built.
-- **Tables without ruled lines are the weakest area.** The best engines use a trained table model and score 0.93 where Librarian scores 0.68.
+- **Tables without ruled lines are the weakest area.** The best engines use a trained table model and score 0.93 where Librarian scores 0.71.
 - **Headings are over-detected in documents that use bold lead-in labels and have no bookmarks.**
 - **Structure tags are not read** in the product, for the reason above.
 - **Undecodable fonts are caught only when they show.** A page is routed to `ocr` when its text is replacement characters or mostly private-use code points. A font that maps to wrong but valid letters is not detected.

@@ -176,6 +176,62 @@ fn piecewise_grid_with_spacer_bands_keeps_cells() {
     assert!(document.stats.accounted());
 }
 
+/// A specification table as brochures draw it: rows are marked only by column
+/// borders drawn one row at a time, the label column is far wider than the
+/// rest, the header band has no top line, and a dimensioned drawing sits just
+/// above. Every row keeps its own label, and the drawing stays out of the grid.
+#[test]
+fn rows_marked_only_by_broken_borders_keep_a_wide_label_column() {
+    let xs = [40.0f32, 240.0, 290.0, 340.0, 390.0];
+    let (top, pitch, rows) = (200.0f32, 14.0f32, 6usize);
+    let mut rules = Vec::new();
+    let mut words = Vec::new();
+    for r in 0..rows {
+        let y = top + r as f32 * pitch;
+        for x in xs {
+            rules.push(Rect::new(x, y, 0.0, pitch));
+        }
+        words.push(word(&format!("label{r}"), 46.0, y + 10.0, 8.0));
+        for (c, x) in xs[1..4].iter().enumerate() {
+            words.push(word(&format!("v{r}{c}"), x + 6.0, y + 10.0, 8.0));
+        }
+    }
+    // Lines under the header row and under the last row only.
+    for y in [top + pitch, top + rows as f32 * pitch] {
+        rules.push(Rect::new(40.0, y, 350.0, 0.0));
+    }
+    // Dimension lines of a drawing above, drawn in pieces that break at the
+    // same positions as the table's columns.
+    for y in [150.0f32, 170.0] {
+        rules.push(Rect::new(200.0, y, 40.0, 0.0));
+        rules.push(Rect::new(240.0, y, 50.0, 0.0));
+    }
+    let mut input = page(1, words);
+    input.rules = rules;
+    let document = document(vec![input]);
+    let tables: Vec<&Element> = document
+        .elements
+        .iter()
+        .filter(|e| e.role == Role::Table)
+        .collect();
+    assert_eq!(tables.len(), 1);
+    let table = tables[0];
+    assert_eq!((table.rows, table.cols), (rows as u32, 4));
+    assert!(table.cells.iter().all(|c| c.rowspan == 1 && c.colspan == 1));
+    assert!(
+        table.bbox.y >= top - 3.0,
+        "the drawing is not part of the grid"
+    );
+    let row3: Vec<&str> = table
+        .cells
+        .iter()
+        .filter(|c| c.row == 3)
+        .map(|c| c.text.as_str())
+        .collect();
+    assert_eq!(row3, ["label3", "v30", "v31", "v32"]);
+    assert!(document.stats.accounted());
+}
+
 /// Text placed outside the page box, drawn invisibly, or rotated stays in the
 /// model but never enters the reading text.
 #[test]

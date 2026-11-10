@@ -292,8 +292,28 @@ fn page_elements(ctx: &Ctx, tally: &mut Tally) -> PageResult {
         }
     }
 
-    // Vector figures, with the words drawn inside them.
-    for region in merge_rects(&page.drawings, 4.0) {
+    // Vector figures, with the words drawn inside them. A single shape that
+    // holds running text is a panel or frame around content, not a figure:
+    // left in, it would glue everything it surrounds into one picture.
+    let shapes: Vec<Rect> = page
+        .drawings
+        .iter()
+        .filter(|d| {
+            d.area() < 0.02 * page_area
+                || (0..total)
+                    .filter(|i| {
+                        let w = &page.words[*i];
+                        available[*i]
+                            && w.size >= 0.7 * ctx.stats.body
+                            && d.contains_center(&w.bbox)
+                            && w.text.chars().any(char::is_alphabetic)
+                    })
+                    .count()
+                    < 20
+        })
+        .copied()
+        .collect();
+    for region in merge_rects(&shapes, 4.0) {
         let share = region.area() / page_area;
         if !(0.01..0.7).contains(&share) || region.w < 30.0 || region.h < 20.0 {
             continue;
@@ -314,9 +334,41 @@ fn page_elements(ctx: &Ctx, tally: &mut Tally) -> PageResult {
     }
     let mut meaningful: Vec<Rect> = Vec::new();
     for region in figures {
-        let inside: Vec<u32> = (0..total as u32)
+        let mut inside: Vec<u32> = (0..total as u32)
             .filter(|id| available[*id as usize] && region.contains_center(&ctx.word(*id).bbox))
             .collect();
+        // A figure's edge never cuts a line of text: a word whose neighbour
+        // on the same line lies outside belongs to that line, not the figure.
+        let mut beside: Vec<u32> = (0..total as u32)
+            .filter(|id| {
+                let b = &ctx.word(*id).bbox;
+                available[*id as usize]
+                    && !region.contains_center(b)
+                    && b.bottom() > region.y
+                    && b.y < region.bottom()
+            })
+            .collect();
+        loop {
+            let leaving: Vec<u32> = inside
+                .iter()
+                .copied()
+                .filter(|id| {
+                    let w = ctx.word(*id);
+                    beside.iter().any(|other| {
+                        let o = ctx.word(*other);
+                        let gap = (w.bbox.x - o.bbox.right()).max(o.bbox.x - w.bbox.right());
+                        gap < 0.8 * w.size.max(o.size)
+                            && (w.size - o.size).abs() <= 0.12 * w.size
+                            && w.bbox.overlap_y(&o.bbox) > 0.6 * w.bbox.h.min(o.bbox.h)
+                    })
+                })
+                .collect();
+            if leaving.is_empty() {
+                break;
+            }
+            inside.retain(|id| !leaving.contains(id));
+            beside = leaving;
+        }
         let ink: f32 = inside.iter().map(|id| ctx.word(*id).bbox.area()).sum();
         let illustration = micro_regions
             .iter()

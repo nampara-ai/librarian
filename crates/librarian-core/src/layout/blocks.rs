@@ -121,9 +121,14 @@ pub(crate) fn flow_blocks(ctx: &Ctx, words: &[u32]) -> Vec<Draft> {
                     || step < 0.4 * size
                     || (previous.size - line.size).abs() > 0.12 * size
                     || previous.bold != line.bold
-                    || previous.italic != line.italic
+                    // An italic lead that runs on into the sentence is emphasis,
+                    // not a separate block.
+                    || (previous.italic != line.italic
+                        && (sentence_end(&before)
+                            || !text.chars().next().is_some_and(char::is_lowercase)))
                     || previous.mono != line.mono
                     || list_marker(&text).is_some()
+                    || text.starts_with(['†', '‡'])
                     || leader(&before)
                     || folio_line(ctx, previous)
                     || hanging
@@ -200,13 +205,21 @@ pub(crate) fn flow_blocks(ctx: &Ctx, words: &[u32]) -> Vec<Draft> {
             && (bold || ratio >= 1.08 || upper || isolated)
             && chars <= 120
             && refs.len() <= 2;
+        // Small type low on the page that opens with a reference mark is a
+        // note, even though an asterisk can also be a bullet.
+        let note = ratio <= 0.88
+            && bbox.y > 0.6 * page_height
+            && text.chars().next().is_some_and(|c| "*†‡".contains(c));
         let role = if mono && chars >= 2 {
             Role::Code
         } else if compact
+            && text.chars().any(char::is_alphanumeric)
             && ((!in_margin && (larger || bold_title || numbered_title))
                 || (in_margin && ratio >= 1.3))
         {
             Role::Heading
+        } else if note {
+            Role::Footnote
         } else if marker {
             Role::ListItem
         } else if chars <= 600 && caption_like(&text) {

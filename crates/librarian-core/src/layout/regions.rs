@@ -238,6 +238,54 @@ impl Segmenter<'_, '_> {
                 last += 1;
             }
         }
+        // A run does not reach across open space to take a line that sits
+        // tight against like text beyond it: that line ends the block above
+        // (or starts the one below), whatever gap it happens to leave free.
+        let type_size = |row: &Row| -> Option<f32> {
+            let mut sizes: Vec<f32> = row
+                .members
+                .iter()
+                .filter_map(|i| match entries[*i].item {
+                    Item::Word(id) => Some(word_size(self.ctx.word(id))),
+                    Item::Atom(_) => None,
+                })
+                .collect();
+            (sizes.len() == row.members.len()).then(|| super::geom::median(&mut sizes))
+        };
+        let belongs_beyond = |edge: &Row, inner: &Row, outer: &Row| -> bool {
+            let (inside, outside) = if inner.top >= edge.top {
+                (inner.top - edge.bottom, edge.top - outer.bottom)
+            } else {
+                (edge.top - inner.bottom, outer.top - edge.bottom)
+            };
+            let alike = match (type_size(edge), type_size(outer)) {
+                (Some(a), Some(b)) => (a - b).abs() <= 0.12 * a.max(b),
+                _ => false,
+            };
+            alike && inside > 1.5 * size && inside > 2.0 * outside.max(0.25 * size)
+        };
+        for candidate in &mut found {
+            while candidate.last > candidate.first
+                && candidate.first > 0
+                && belongs_beyond(
+                    &rows[candidate.first],
+                    &rows[candidate.first + 1],
+                    &rows[candidate.first - 1],
+                )
+            {
+                candidate.first += 1;
+            }
+            while candidate.last > candidate.first
+                && candidate.last + 1 < rows.len()
+                && belongs_beyond(
+                    &rows[candidate.last],
+                    &rows[candidate.last - 1],
+                    &rows[candidate.last + 1],
+                )
+            {
+                candidate.last -= 1;
+            }
+        }
         // Rank by how many rows a gap spans, then measure real support.
         found.sort_by(|a, b| {
             (b.last - b.first)
@@ -504,6 +552,21 @@ impl Segmenter<'_, '_> {
             hits * 5 >= lines[k].len() * 3
         });
         let any_prose = prose.iter().any(|p| *p);
+        // A table column is set in one size, give or take a header. Display
+        // type above small print in one strip is a designed layout, not a
+        // grid. Sizes in an OCR layer are estimates and prove nothing.
+        let mixed = lines.iter().any(|strip| {
+            let small = strip.iter().map(|l| l.size).fold(f32::MAX, f32::min);
+            let large = strip.iter().map(|l| l.size).fold(0.0, f32::max);
+            large > 1.6 * small.max(1.0)
+        });
+        if mixed && !ruled {
+            let words = &ctx.page.words;
+            let scanned = words.iter().filter(|w| w.hidden).count() * 5 >= words.len() * 4;
+            if !scanned {
+                return if wide { Kind::Columns } else { Kind::Reject };
+            }
+        }
         let table_like = if any_prose {
             cell_strips_aligned && aligned_rows >= 2
         } else {

@@ -89,7 +89,8 @@ fn strokes(rules: &[Rect], horizontal: bool) -> (Vec<Stroke>, Vec<(f32, f32)>) {
 }
 
 /// Positions where at least two parallel strokes break: implied crossing edges.
-fn implied(breaks: &[(f32, f32)]) -> Vec<(f32, f32, f32)> {
+/// `own` are the strokes that break, `across` the real strokes that cross them.
+fn implied(breaks: &[(f32, f32)], own: &[Stroke], across: &[Stroke]) -> Vec<(f32, f32, f32)> {
     // (position, lowest supporting stroke, highest supporting stroke)
     let mut sorted: Vec<(f32, f32)> = breaks.to_vec();
     sorted.sort_by(|a, b| a.1.total_cmp(&b.1));
@@ -101,22 +102,40 @@ fn implied(breaks: &[(f32, f32)]) -> Vec<(f32, f32, f32)> {
             end += 1;
         }
         let group = &sorted[start..end];
-        let supporters: Vec<f32> = cluster(group.iter().map(|g| g.0).collect(), 1.5)
-            .into_iter()
-            .map(|(at, _)| at)
-            .collect();
         let position = group.iter().map(|g| g.1).sum::<f32>() / group.len() as f32;
-        // Supporters far apart belong to different tables: an implied edge
-        // only runs through strokes that follow each other closely.
-        let mut gaps: Vec<f32> = supporters.windows(2).map(|w| w[1] - w[0]).collect();
+        // Each supporter is the stroke that breaks here.
+        let supporters: Vec<Stroke> = cluster(group.iter().map(|g| g.0).collect(), 1.5)
+            .into_iter()
+            .filter_map(|(at, _)| {
+                own.iter()
+                    .find(|s| (s.at - at).abs() <= 1.5 && s.from < position && s.to > position)
+                    .copied()
+            })
+            .collect();
+        // Two borders belong to one grid when a drawn line crosses both, or
+        // when they run side by side over the same extent. Anything else is
+        // a neighbouring table or drawing that happens to break at this point.
+        let mut gaps: Vec<f32> = supporters.windows(2).map(|w| w[1].at - w[0].at).collect();
         let limit = (2.5 * median(&mut gaps)).max(40.0);
+        let joined = |a: &Stroke, b: &Stroke| {
+            let crossed = across.iter().any(|c| {
+                c.from <= a.at + SNAP
+                    && c.to >= b.at - SNAP
+                    && c.at >= a.from.max(b.from) - SNAP
+                    && c.at <= a.to.min(b.to) + SNAP
+            });
+            let together = (a.from - b.from).abs() <= 2.0 * SNAP
+                && (a.to - b.to).abs() <= 2.0 * SNAP
+                && b.at - a.at <= limit;
+            crossed || together
+        };
         let mut run_start = 0;
         for index in 1..=supporters.len() {
             let ends =
-                index == supporters.len() || supporters[index] - supporters[index - 1] > limit;
+                index == supporters.len() || !joined(&supporters[index - 1], &supporters[index]);
             if ends {
                 if index - run_start >= 2 {
-                    out.push((position, supporters[run_start], supporters[index - 1]));
+                    out.push((position, supporters[run_start].at, supporters[index - 1].at));
                 }
                 run_start = index;
             }
@@ -160,14 +179,16 @@ pub(crate) fn grids(page: &PageInput) -> Vec<Grid> {
     // Vertical borders that break at the same heights imply row edges between
     // them, and likewise for horizontal borders and column edges.
     if h_breaks.len() + v_breaks.len() <= 2000 {
-        for (y, left, right) in implied(&v_breaks) {
+        let rows = implied(&v_breaks, &vertical, &horizontal);
+        let columns = implied(&h_breaks, &horizontal, &vertical);
+        for (y, left, right) in rows {
             horizontal.push(Stroke {
                 at: y,
                 from: left,
                 to: right,
             });
         }
-        for (x, top, bottom) in implied(&h_breaks) {
+        for (x, top, bottom) in columns {
             vertical.push(Stroke {
                 at: x,
                 from: top,
@@ -221,10 +242,54 @@ pub(crate) fn grids(page: &PageInput) -> Vec<Grid> {
         if hs.len() < 2 {
             continue;
         }
+        let mut hs = hs;
         let left = hs.iter().map(|s| s.from).fold(f32::MAX, f32::min);
         let right = hs.iter().map(|s| s.to).fold(f32::MIN, f32::max);
-        let top = hs.iter().map(|s| s.at).fold(f32::MAX, f32::min);
-        let bottom = hs.iter().map(|s| s.at).fold(f32::MIN, f32::max);
+        let mut top = hs.iter().map(|s| s.at).fold(f32::MAX, f32::min);
+        let mut bottom = hs.iter().map(|s| s.at).fold(f32::MIN, f32::max);
+        // Borders that run past the outermost drawn line to a common end close
+        // a row whose own edge was not drawn as a line (a shaded header band).
+        for above in [true, false] {
+            let ends: Vec<f32> = vs
+                .iter()
+                .map(|v| if above { v.from } else { v.to })
+                .filter(|e| {
+                    if above {
+                        *e < top - 6.0
+                    } else {
+                        *e > bottom + 6.0
+                    }
+                })
+                .collect();
+            let shared = cluster(ends, SNAP)
+                .into_iter()
+                .filter(|(_, count)| *count >= 3)
+                .map(|(at, _)| at)
+                .fold(None, |best: Option<f32>, at| match best {
+                    Some(b) if above == (b < at) => Some(b),
+                    _ => Some(at),
+                });
+            if let Some(at) = shared {
+                let touching =
+                    |v: &&Stroke| ((if above { v.from } else { v.to }) - at).abs() <= SNAP + 0.5;
+                let from = vs
+                    .iter()
+                    .filter(touching)
+                    .map(|v| v.at)
+                    .fold(f32::MAX, f32::min);
+                let to = vs
+                    .iter()
+                    .filter(touching)
+                    .map(|v| v.at)
+                    .fold(f32::MIN, f32::max);
+                hs.push(Stroke { at, from, to });
+                if above {
+                    top = at;
+                } else {
+                    bottom = at;
+                }
+            }
+        }
         if right - left < 20.0 || bottom - top < 6.0 {
             continue;
         }
