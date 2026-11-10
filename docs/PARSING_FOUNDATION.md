@@ -41,7 +41,7 @@ The JSON model (`librarian-layout-v2`) is a list of elements in reading order. E
 
 ### Principles that made it accurate
 
-1. **Evidence has an order.** What the author declared beats what was drawn, which beats what is inferred from spacing. Bookmarks declare headings. A caption that begins "Table 3" or "Figure 2" declares what the region beside it is. Ruled lines declare a grid. Whitespace is the fallback.
+1. **Evidence has an order.** What the author declared beats what was drawn, which beats what is inferred from spacing. Bookmarks declare headings; when a document's bookmarks are rich and multi-level, a body-size bold line they do not name is a label, not a heading. A caption that begins "Table 3" or "Figure 2" declares what the region beside it is. Ruled lines declare a grid. Whitespace is the fallback.
 2. **Every threshold is relative to the document.** Body size, line pitch, vocabulary and hyphenation habits are measured per document. Nothing is tuned to a fixture's coordinates.
 3. **Whitespace is classified, not just found.** A gutter between two strips is text columns if the strips read as prose, a table if rows align across it, and noise otherwise. This one decision replaced separate column and table detectors that disagreed with each other.
 4. **Line-end hyphens follow the document's own vocabulary.** "four-" + "day" stays "four-day" when the document writes "four-day" elsewhere, or when the document does not break words at line ends at all. Only a true soft hyphen is removed without that check.
@@ -80,7 +80,7 @@ The honest reading: Librarian beats Nutrient on the pages it was developed on an
 
 ### 2. Author truth: tagged PDFs
 
-Nine tagged PDFs (432 pages). The author's own structure tags, read at test time with Poppler, are the answer key. On the Apple Style Guide: list items 0.99 precision and 1.00 recall, text similarity 0.999, headings 1.00 recall and 0.66 precision. The Apple file has 91 real heading tags; an earlier note said 203, but 112 of those are empty tags. The surplus headings are mostly bold lead-in labels that the author tagged as paragraphs.
+Nine tagged PDFs (432 pages). The author's own structure tags, read at test time with Poppler, are the answer key. On the Apple Style Guide: list items 0.99 precision and 1.00 recall, text similarity 0.999, headings 1.00 recall and 0.82 precision. The Apple file has 91 real heading tags; an earlier note said 203, but 112 of those are empty tags. Precision was 0.66 until the bookmark rule below: the surplus headings were bold lead-in labels that the author tagged as paragraphs.
 
 The product does not read structure tags. PDFium exposes them only through unsafe bindings, and `librarian-native` forbids unsafe code.
 
@@ -90,17 +90,17 @@ The product does not read structure tags. PDFium exposes them only through unsaf
 
 | Measure | Make It Rain (57 pp) | Apple Style Guide (244 pp) |
 | --- | --- | --- |
-| Librarian parse | 104 ms | 757 ms |
+| Librarian parse | 99 ms | 659 ms |
 | Nutrient | 11,746 ms | 57,532 ms |
 | Our words matched to Nutrient | 99.89% | 99.90% |
 | Reading-order discordance | 0.012% | 0.005% |
-| Headings precision / recall | 96.8% / 44.3% | 74.0% / 80.6% |
+| Headings precision / recall | 96.8% / 44.3% | 75.9% / 69.7% |
 | List items precision / recall | 100% / 100% | 99.5% / 98.5% |
 | Table words precision / recall | none in either | 100% / 94.6% |
 | Footers precision / recall | 98.1% / 100% | 100% / 100% |
 | Table pages ours / Nutrient / shared | 0 / 0 / 0 | 12 / 13 / 12 |
 
-This measures agreement, not truth. Nutrient labels emphasised sentences as headings in Make It Rain, which is why recall there is low. The parse times are higher than the first version (63 ms and 330 ms) because the miner now walks every drawing on the page.
+This measures agreement, not truth. Nutrient labels emphasised sentences as headings in Make It Rain, which is why recall there is low. On Apple, Nutrient labels bold lead-in labels as headings where the author's tags call them paragraphs. Following the author lowered agreement with Nutrient from 80.6% to 69.7% recall and raised accuracy against the tags. The parse times are higher than the first version (63 ms and 330 ms) because the miner now walks every drawing on the page.
 
 ### 4. Robustness sweep
 
@@ -120,7 +120,7 @@ A further 18 multi-page documents with another engine's output as reference rose
 
 - **Scanned pages are reported, not read.** `parse` routes them to `ocr` and stops. OCR inside `parse` is not built.
 - **Tables without ruled lines are the weakest area.** The best engines use a trained table model and score 0.93 where Librarian scores 0.68.
-- **Headings are over-detected in documents that use bold lead-in labels.**
+- **Headings are over-detected in documents that use bold lead-in labels and have no bookmarks.**
 - **Structure tags are not read** in the product, for the reason above.
 - **Undecodable fonts are caught only when they show.** A page is routed to `ocr` when its text is replacement characters or mostly private-use code points. A font that maps to wrong but valid letters is not detected.
 - **A printed table of contents is recognised but not used** to confirm heading levels.

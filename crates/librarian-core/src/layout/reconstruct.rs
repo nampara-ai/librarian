@@ -681,6 +681,27 @@ pub fn reconstruct(input: &DocumentInput) -> Document {
         .iter()
         .filter(|e| e.evidence == Evidence::Declared)
         .count();
+    // A rich, multi-level outline is the author's own list of headings. A
+    // body-size line it does not name, smaller than every heading it does
+    // name, is a lead-in label.
+    let floor = elements
+        .iter()
+        .filter(|e| e.evidence == Evidence::Declared)
+        .map(|e| e.font_size)
+        .fold(f32::INFINITY, f32::min);
+    let deep = input.outline.iter().any(|o| o.level >= 2);
+    if declared >= 8 && deep {
+        for e in elements.iter_mut().filter(|e| {
+            e.role == Role::Heading
+                && e.evidence != Evidence::Declared
+                && e.font_size <= 1.05 * body
+                && e.font_size < 0.95 * floor
+                && !text::section_number(&e.text)
+        }) {
+            e.role = Role::Paragraph;
+            e.level = None;
+        }
+    }
 
     // Heading levels from recurring sizes; the largest rare size at the start
     // of the document is its title.
