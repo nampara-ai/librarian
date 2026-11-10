@@ -51,13 +51,14 @@ fn our_role(role: Role) -> &'static str {
     match role {
         // Nutrient's Title labels are inconsistent; titles are scored as headings.
         Role::Title | Role::Heading => "SectionHeader",
-        Role::Paragraph => "Text",
+        Role::Paragraph | Role::Footnote => "Text",
         Role::ListItem => "ListItem",
         Role::Table => "Table",
         Role::Code => "Code",
         Role::Caption => "Caption",
         Role::Header | Role::Footer | Role::PageNumber => "Footer",
         Role::Picture => "Picture",
+        Role::Hidden => "Hidden",
     }
 }
 

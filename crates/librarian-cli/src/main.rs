@@ -1,4 +1,5 @@
 mod onboarding;
+mod parse_cmd;
 mod setup;
 mod terminal;
 mod ui;
@@ -150,7 +151,8 @@ enum Command {
         #[command(subcommand)]
         action: EngineCommand,
     },
-    /// Parse a PDF locally into typed layout blocks, Markdown and JSON. No model calls.
+    /// Parse a PDF, or a folder of PDFs, locally into typed layout blocks,
+    /// Markdown and JSON. No model calls.
     Parse {
         source: PathBuf,
         /// Folder for <name>.md and <name>.layout.json; omit to print Markdown.
@@ -159,12 +161,18 @@ enum Command {
         /// Create the output folder if it does not exist.
         #[arg(long)]
         create_output: bool,
+        /// Include PDFs in subfolders when the source is a folder.
+        #[arg(short, long)]
+        recursive: bool,
         /// Keep running headers, footers and page numbers in the Markdown.
         #[arg(long)]
         furniture: bool,
         /// Mark page boundaries in the Markdown with HTML comments.
         #[arg(long)]
         page_markers: bool,
+        /// Text only: no bold/italic/link markup or picture markers; keeps page furniture.
+        #[arg(long)]
+        plain: bool,
         /// Include word indices and positioned words in the JSON.
         #[arg(long)]
         words: bool,
@@ -273,25 +281,31 @@ async fn run(cli: Cli) -> Result<u8> {
             ref source,
             ref output,
             create_output,
+            recursive,
             furniture,
             page_markers,
+            plain,
             words,
             ref pdfium,
         } => {
-            parse_command(
-                &root,
+            let mut options = if plain {
+                librarian_core::layout::RenderOptions::plain()
+            } else {
+                librarian_core::layout::RenderOptions::default()
+            };
+            options.furniture |= furniture;
+            options.page_markers = page_markers;
+            return parse_cmd::run(parse_cmd::Request {
+                root: &root,
                 source,
-                output.as_deref(),
+                output: output.as_deref(),
                 create_output,
-                librarian_core::layout::RenderOptions {
-                    furniture,
-                    page_markers,
-                },
+                recursive,
+                options,
                 words,
-                pdfium.as_deref(),
-                cli.json,
-            )?;
-            return Ok(0);
+                pdfium: pdfium.as_deref(),
+                json: cli.json,
+            });
         }
         Command::Convert { source, output } => {
             let doc = convert_file(&source)?;
@@ -676,110 +690,6 @@ async fn worker(library: &Library, json: bool, quiet: bool) -> Result<()> {
     }
     Ok(())
 }
-#[allow(clippy::too_many_arguments)]
-fn parse_command(
-    root: &std::path::Path,
-    source: &std::path::Path,
-    output: Option<&std::path::Path>,
-    create_output: bool,
-    options: librarian_core::layout::RenderOptions,
-    words: bool,
-    pdfium: Option<&std::path::Path>,
-    json: bool,
-) -> Result<()> {
-    use librarian_native::parse;
-    let started = std::time::Instant::now();
-    let engine = parse::pdfium(root, pdfium)?;
-    let parsed = parse::parse(&engine, source)?;
-    let markdown = librarian_core::layout::markdown(&parsed.document, options);
-    let render_ms = started.elapsed().as_secs_f64() * 1e3;
-    let summary = serde_json::json!({
-        "source": source.display().to_string(),
-        "pages": parsed.document.stats.pages,
-        "words": parsed.document.stats.words,
-        "elements": parsed.document.stats.elements,
-        "roles": parsed.document.stats.roles,
-        "routing": parsed.document.stats.tiers,
-        "model_calls": 0,
-        "timing_ms": {
-            "open": parsed.timing.open_ms,
-            "extract": parsed.timing.extract_ms,
-            "layout": parsed.timing.layout_ms,
-            "total": render_ms,
-        },
-    });
-    let Some(folder) = output else {
-        io::stdout().lock().write_all(markdown.as_bytes())?;
-        eprintln!("{}", serde_json::to_string(&summary)?);
-        return Ok(());
-    };
-    if !folder.is_dir() {
-        if create_output {
-            std::fs::create_dir_all(folder)?;
-        } else {
-            bail!(
-                "Output folder {} does not exist; pass --create-output to create it",
-                folder.display()
-            );
-        }
-    }
-    let stem = source
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .context("Source file has no usable name")?;
-    let md_path = folder.join(format!("{stem}.md"));
-    let json_path = folder.join(format!("{stem}.layout.json"));
-    for path in [&md_path, &json_path] {
-        if path.exists() {
-            bail!(
-                "{} already exists; existing outputs are never replaced",
-                path.display()
-            );
-        }
-    }
-    let document = if words {
-        parsed.document
-    } else {
-        parsed.document.without_word_refs()
-    };
-    let mut body = serde_json::json!({ "summary": summary, "document": document });
-    if words {
-        body["pages"] = serde_json::to_value(&parsed.input.pages)?;
-        body["fonts"] = serde_json::to_value(&parsed.input.fonts)?;
-    }
-    librarian_native::write_new_file(&json_path, &serde_json::to_vec_pretty(&body)?)?;
-    write_new_markdown(&md_path, &markdown)?;
-    if json {
-        println!("{}", serde_json::to_string(&summary)?);
-    } else {
-        let roles = summary["roles"]
-            .as_object()
-            .into_iter()
-            .flatten()
-            .map(|(k, v)| format!("{v} {k}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let tiers = summary["routing"]
-            .as_object()
-            .map(|m| {
-                m.iter()
-                    .map(|(k, v)| format!("{v} {k}"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .unwrap_or_default();
-        println!(
-            "Parsed {} pages ({} words) in {:.0} ms with no model calls",
-            summary["pages"], summary["words"], render_ms
-        );
-        println!("Elements: {roles}");
-        println!("Page routing: {tiers}");
-        println!("Wrote {}", md_path.display());
-        println!("Wrote {}", json_path.display());
-    }
-    Ok(())
-}
-
 fn result_code(library: &Library, ids: &[i64]) -> Result<u8> {
     let mut code = 0;
     for id in ids {
