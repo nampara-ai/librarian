@@ -71,6 +71,12 @@ fn describe(outcome: &parse_cmd::Outcome) -> String {
     if let Some(folder) = &outcome.destination {
         text.push_str(&format!("Results folder\n  {}\n", folder.display()));
     }
+    if outcome.skipped > 0 {
+        text.push_str(&format!(
+            "\nStopped before {} file(s) were parsed.\n",
+            outcome.skipped
+        ));
+    }
     if !outcome.failures.is_empty() {
         text.push_str("\nCould not parse\n");
         for (source, error) in &outcome.failures {
@@ -81,13 +87,22 @@ fn describe(outcome: &parse_cmd::Outcome) -> String {
     text
 }
 
-/// Show an outcome; Enter on a file previews its Markdown. Returns `true` to
-/// parse again.
+/// Where the results screen sends the user next.
+enum Next {
+    /// "Parse something else": the form, focused on the source.
+    Again,
+    /// "Back to Home".
+    Home,
+    /// Esc.
+    Back,
+}
+
+/// Show an outcome; Enter on a file previews its Markdown.
 fn results(
     terminal: &mut ratatui::DefaultTerminal,
     title: &str,
     outcome: &parse_cmd::Outcome,
-) -> Result<bool> {
+) -> Result<Next> {
     let mut selected = 0;
     loop {
         let mut labels: Vec<String> = outcome
@@ -113,14 +128,14 @@ fn results(
         labels.push("Back to Home".into());
         let Some(choice) = ui::choose(terminal, title, &describe(outcome), &labels, selected)?
         else {
-            return Ok(false);
+            return Ok(Next::Back);
         };
         selected = choice;
         if choice == files {
-            return Ok(true);
+            return Ok(Next::Again);
         }
         if choice > files {
-            return Ok(false);
+            return Ok(Next::Home);
         }
         let Some(path) = &outcome.files[choice].markdown else {
             continue;
@@ -269,6 +284,7 @@ pub fn run(terminal: &mut ratatui::DefaultTerminal, root: &Path) -> Result<Optio
                 };
                 options.furniture = draft.furniture;
                 let (recursive, words, library) = (draft.recursive, draft.words, root.to_owned());
+                let record = root.to_owned();
                 let outcome = ui::task(
                     terminal,
                     "Parsing",
@@ -284,16 +300,22 @@ pub fn run(terminal: &mut ratatui::DefaultTerminal, root: &Path) -> Result<Optio
                             words,
                             pdfium: None,
                             json: false,
+                            stop: Some(cancel.as_ref()),
                         };
-                        parse_cmd::execute(
+                        let outcome = parse_cmd::execute(
                             &request,
                             |line| {
                                 let _ = updates.send(line.to_owned());
                             },
-                            |_| {
-                                let _ = cancel.load(std::sync::atomic::Ordering::Relaxed);
-                            },
-                        )
+                            |_| {},
+                        )?;
+                        // Recorded here, by the worker, so that files already
+                        // written stay listed even if this screen is left.
+                        let mut past = history(&record);
+                        past.insert(0, outcome.clone());
+                        past.truncate(HISTORY);
+                        profile::write_json(&history_path(&record), &past)?;
+                        Ok(outcome)
                     },
                 );
                 let outcome = match outcome {
@@ -305,10 +327,6 @@ pub fn run(terminal: &mut ratatui::DefaultTerminal, root: &Path) -> Result<Optio
                         continue;
                     }
                 };
-                let mut past = history(root);
-                past.insert(0, outcome.clone());
-                past.truncate(HISTORY);
-                profile::write_json(&history_path(root), &past)?;
                 message = Some(format!(
                     "Parsed {} file(s), {} pages in {:.1} s. Results in {}",
                     outcome.files.len(),
@@ -316,10 +334,10 @@ pub fn run(terminal: &mut ratatui::DefaultTerminal, root: &Path) -> Result<Optio
                     outcome.seconds,
                     draft.destination
                 ));
-                if !results(terminal, "Parse results", &outcome)? {
-                    return Ok(message);
+                match results(terminal, "Parse results", &outcome)? {
+                    Next::Again => draft.field = 0,
+                    Next::Home | Next::Back => return Ok(message),
                 }
-                draft.field = 0;
             }
             7 => {
                 if past.is_empty() {
@@ -351,7 +369,11 @@ pub fn run(terminal: &mut ratatui::DefaultTerminal, root: &Path) -> Result<Optio
                     &labels,
                     0,
                 )? {
-                    results(terminal, "Earlier result", &past[choice])?;
+                    match results(terminal, "Earlier result", &past[choice])? {
+                        Next::Again => draft.field = 0,
+                        Next::Home => return Ok(message),
+                        Next::Back => {}
+                    }
                 }
             }
             _ => {}

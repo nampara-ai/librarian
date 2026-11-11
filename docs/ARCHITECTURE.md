@@ -1,5 +1,7 @@
 # Architecture
 
+> **Legacy document.** This file describes the Python/Swift application, version 1.10.3, kept under `src/`, `apps/` and `tests/` for reference. It does not describe the Rust terminal program on this branch. See [RUST_FOUNDATION.md](RUST_FOUNDATION.md).
+
 Librarian uses hexagonal architecture so the core can run through a CLI, an API service, tests, or future workers without changing business logic.
 
 ## Design Rules

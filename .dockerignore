@@ -22,3 +22,7 @@ input
 *.sqlite-shm
 *.sqlite-wal
 htmlcov
+target
+target-*
+crates
+.build-assets

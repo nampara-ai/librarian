@@ -38,7 +38,7 @@ impl AppError {
     }
 }
 
-/// UTF-8 input only. This slice does not perform OCR, copyediting, or classification.
+/// UTF-8 input only. No OCR, copyediting or classification is performed here.
 pub fn ingest(format: InputFormat, content: String) -> Result<Document, AppError> {
     if content.len() > MAX_SOURCE_BYTES {
         return Err(DocumentError::TooLarge.into());

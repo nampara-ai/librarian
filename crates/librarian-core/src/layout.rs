@@ -226,7 +226,7 @@ pub enum Evidence {
     Layout,
     /// Lines drawn in the file (table grids).
     Ruling,
-    /// Declared by the author: bookmarks or structure tags.
+    /// Declared by the author in the file's bookmarks.
     Declared,
 }
 

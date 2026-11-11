@@ -327,6 +327,9 @@ impl Preset {
         config.provider.input_price_per_million = None;
         config.provider.cached_input_price_per_million = None;
         config.provider.output_price_per_million = None;
+        config.provider.vision_input_price_per_million = None;
+        config.provider.vision_cached_input_price_per_million = None;
+        config.provider.vision_output_price_per_million = None;
         config.processing.max_cost = None;
     }
 }

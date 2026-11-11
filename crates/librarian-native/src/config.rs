@@ -254,7 +254,7 @@ impl Config {
             || !(1..=16).contains(&self.processing.page_concurrency)
         {
             bail!(
-                "processing.pipeline must be editorial or archival; page_concurrency must be 1..16"
+                "processing.pipeline must be editorial or archival; page_concurrency must be from 1 to 16"
             );
         }
         if self.processing.evidence_rounds > 8 {
@@ -409,16 +409,6 @@ impl Config {
         )
         .map_err(anyhow::Error::msg)?;
         Ok(())
-    }
-    pub fn processing_key(&self) -> Result<String> {
-        // Presentation intentionally excluded. Credentials are never serialized here.
-        let bytes = serde_json::to_vec(&(
-            "pipeline-v1",
-            &self.provider,
-            &self.processing,
-            &self.taxonomy,
-        ))?;
-        Ok(blake3::hash(&bytes).to_hex().to_string())
     }
 }
 

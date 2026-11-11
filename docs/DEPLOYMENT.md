@@ -1,5 +1,7 @@
 # Deployment
 
+> **Legacy document.** This file describes the Python/Swift application, version 1.10.3, kept under `src/`, `apps/` and `tests/` for reference. It does not describe the Rust terminal program on this branch. See [RUST_FOUNDATION.md](RUST_FOUNDATION.md).
+
 Librarian can run as a self-contained Mac app, a local CLI, a single API process, or a split
 API/worker service.
 

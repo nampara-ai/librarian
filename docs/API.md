@@ -1,5 +1,7 @@
 # API Surface
 
+> **Legacy document.** This file describes the Python/Swift application, version 1.10.3, kept under `src/`, `apps/` and `tests/` for reference. It does not describe the Rust terminal program on this branch. See [RUST_FOUNDATION.md](RUST_FOUNDATION.md).
+
 The FastAPI service exposes the same core workflows as the CLI.
 Requests above `LIBRARIAN_API_MAX_REQUEST_BYTES` are rejected before routing, either from
 `Content-Length` or while streaming the request body.

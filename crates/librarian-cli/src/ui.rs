@@ -384,7 +384,7 @@ pub fn browse(
             let items=entries.iter().map(|p|ListItem::new(format!("{} {}",if p.is_dir(){"▸"}else{" "},clean(&p.file_name().unwrap_or_default().to_string_lossy())))).collect::<Vec<_>>();
             let mut state=ListState::default();state.select((!entries.is_empty()).then_some(selected));
             f.render_stateful_widget(List::new(items).highlight_symbol("› ").highlight_style(Style::default().fg(Color::Cyan)),areas[1],&mut state);
-            f.render_widget(Paragraph::new(format!("↑/↓ or Tab/Shift+Tab move · Enter opens a folder/selects a file\nSpace selects this folder · Esc back · Backspace parent · / type path · Ctrl+S exit{}\n{message}",if directories_only{" · n New folder"}else{""})),areas[2]);
+            f.render_widget(Paragraph::new(format!("↑/↓ or Tab/Shift+Tab move · Enter opens a folder/selects a file\nSpace selects this folder · Esc back · Backspace parent · / type path · Ctrl+S save & exit{}\n{message}",if directories_only{" · n New folder"}else{""})),areas[2]);
         })?;
         let Some(k) = key()? else {
             continue;

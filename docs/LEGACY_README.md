@@ -1,9 +1,10 @@
 # Librarian
 
-> **Rust rebuild in progress:** this branch contains the first CLI/WASM foundation.
-> See [implemented scope and commands](docs/RUST_FOUNDATION.md) and the
-> [terminal rebuild architecture](docs/TERMINAL_REBUILD.md). The remaining README
-> describes the legacy Python/Swift application.
+> **Legacy document.** This file describes the Python/Swift application, version 1.10.3,
+> whose sources remain in `src/`, `apps/` and `tests/` for reference. The Rust terminal
+> program on this branch is described in the [terminal reference](RUST_FOUNDATION.md)
+> and the [parsing reference](PARSING_FOUNDATION.md). Commands and settings named below
+> belong to the legacy program and are not commands of the Rust program.
 
 ### Drop in messy documents. Get back a clean, classified, searchable library.
 
@@ -18,7 +19,7 @@ own machine.
 🚀 [Quick start](#-quick-start-60-seconds) ·
 ⌨️ [CLI reference](#cli-reference) ·
 🔌 [API](#-api) ·
-🏛️ [Architecture](docs/ARCHITECTURE.md)
+🏛️ [Architecture](ARCHITECTURE.md)
 
 > This is not just a PDF-to-text converter. Plenty of tools turn a PDF into a wall of text.
 > Librarian's job starts *after* extraction: it copy-edits the result, gives it a clean title and a
@@ -63,7 +64,7 @@ one library, configure the CLI/API with `LIBRARIAN_DATA_DIR` set to the Mac app'
 > dropped Intel macOS wheels). Install via `pip` or Docker below instead.
 
 The app bundles the high-fidelity extraction engine **and** its OCR — scanned PDFs are read fully
-offline, no Homebrew, no `PATH` setup, no first-run downloads. See [apps/macos](apps/macos/README.md)
+offline, no Homebrew, no `PATH` setup, no first-run downloads. See [apps/macos](../apps/macos/README.md)
 for data locations, model-provider setup, and how it's built.
 
 ### The CLI / API (Python 3.12+)
@@ -121,7 +122,7 @@ From import to export, a document goes through these steps:
    Recurring publications are linked into series across editions.
 5. **Search** — successful outputs are indexed for full-text search with facets and citation lookup.
 6. **Export** — completed outputs as Markdown/JSON/text, or the whole library as an
-   [Open Knowledge Format](docs/OKF.md) bundle for handing to another agent or knowledge tool.
+   [Open Knowledge Format](OKF.md) bundle for handing to another agent or knowledge tool.
 
 ---
 
@@ -223,7 +224,7 @@ whole pipeline without scraping tables. Run any command with `--help` for its fu
 | `librarian status run_... [--json]` | Poll a processing run's status, stage, and chunk progress. |
 | `librarian delete doc_... --yes` | Delete a document and its dependent local records. |
 | `librarian export doc_... --format json\|txt\|md [--citation-quote "..."]` | Export one document's cleaned text + metadata. |
-| `librarian export-okf ./bundle [--classification-prefix 6] [--series <key>] [--json]` | Export the whole library as an [Open Knowledge Format](docs/OKF.md) bundle. |
+| `librarian export-okf ./bundle [--classification-prefix 6] [--series <key>] [--json]` | Export the whole library as an [Open Knowledge Format](OKF.md) bundle. |
 
 ### Run the service
 | Command | What it does |
@@ -314,7 +315,7 @@ Primary endpoints:
 
 Set `LIBRARIAN_API_KEY` (or `LIBRARIAN_API_KEYS`) to require a key via `x-api-key` or
 `Authorization: Bearer …`. Read-scoped keys reach document/search endpoints; operational endpoints
-need write scope. Full details in [docs/API.md](docs/API.md).
+need write scope. Full details in [docs/API.md](API.md).
 
 ---
 
@@ -348,7 +349,7 @@ smoke-install, and Docker build checks on every change.
 
 Containerized deployment is optional and aimed at server installs — the Mac app and CLI need none of
 it. Images publish to `ghcr.io/nampara-ai/librarian`; compose/run examples live in
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+[docs/DEPLOYMENT.md](DEPLOYMENT.md).
 
 ---
 
@@ -369,19 +370,19 @@ examples/corpus/          Sample documents to try the pipeline on
 
 ## 📚 Documentation
 
-Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Then: [API](docs/API.md) ·
-[deployment](docs/DEPLOYMENT.md) · [operations runbooks](docs/OPERATIONS.md) ·
-[Open Knowledge Format](docs/OKF.md) · [Mac app](apps/macos/README.md). Release history is in
-[CHANGELOG.md](CHANGELOG.md).
+Start with [docs/ARCHITECTURE.md](ARCHITECTURE.md). Then: [API](API.md) ·
+[deployment](DEPLOYMENT.md) · [operations runbooks](OPERATIONS.md) ·
+[Open Knowledge Format](OKF.md) · [Mac app](../apps/macos/README.md). Release history is in
+[CHANGELOG.md](../CHANGELOG.md).
 
 ---
 
 ## 🤝 Contributing & 📜 License
 
-Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for setup and the quality gate, and
-[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations. To report a vulnerability, follow
-[SECURITY.md](SECURITY.md).
+Contributions welcome — see [CONTRIBUTING.md](../CONTRIBUTING.md) for setup and the quality gate, and
+[CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md) for community expectations. To report a vulnerability, follow
+[SECURITY.md](../SECURITY.md).
 
-Licensed under the **MIT License** — see [LICENSE](LICENSE). Librarian bundles or builds on
+Licensed under the **MIT License** — see [LICENSE](../LICENSE). Librarian bundles or builds on
 third-party components under their own licenses (notably the Apache-2.0 `liteparse` engine); see
-[NOTICE](NOTICE).
+[NOTICE](../NOTICE).

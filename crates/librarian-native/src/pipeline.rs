@@ -31,7 +31,9 @@ pub fn queue(
         if create_output {
             std::fs::create_dir_all(destination)?;
         } else {
-            bail!("Destination does not exist. Select an existing folder or pass --create-output");
+            bail!(
+                "Destination does not exist. Select an existing folder, or allow Librarian to create it (--create-output)"
+            );
         }
     }
     if !destination.is_dir() {

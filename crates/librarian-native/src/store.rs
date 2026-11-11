@@ -51,7 +51,7 @@ impl Library {
     pub fn open(root: &Path) -> Result<Self> {
         std::fs::create_dir_all(root)?;
         let root = root.canonicalize()?;
-        for folder in ["originals", "assets", "engines", "scratch"] {
+        for folder in ["originals", "assets", "engines"] {
             std::fs::create_dir_all(root.join(folder))?;
         }
         let db = Connection::open(root.join("library.sqlite3"))?;
@@ -244,25 +244,6 @@ impl Library {
             |r| r.get(0),
         )?;
         Ok(serde_json::from_str(&s)?)
-    }
-    pub fn segment(&self, document: &str, ordinal: u64) -> Result<Option<Segment>> {
-        let raw: Option<String> = self
-            .db
-            .query_row(
-                "SELECT source FROM segments WHERE document=? AND ordinal=?",
-                params![document, i64::try_from(ordinal)?],
-                |r| r.get(0),
-            )
-            .optional()?;
-        raw.map(|s| serde_json::from_str(&s).map_err(Into::into))
-            .transpose()
-    }
-    pub fn segment_count(&self, document: &str) -> Result<u64> {
-        Ok(self.db.query_row(
-            "SELECT count(*) FROM segments WHERE document=?",
-            [document],
-            |r| r.get::<_, i64>(0),
-        )? as u64)
     }
     pub fn accepted(&self, job: i64, ordinal: u64) -> Result<Option<Segment>> {
         let raw: Option<String> = self

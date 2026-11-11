@@ -1,5 +1,7 @@
 # Editorial reliability evaluation
 
+> **Legacy document.** This file describes the Python/Swift application, version 1.10.3, kept under `src/`, `apps/` and `tests/` for reference. It does not describe the Rust terminal program on this branch. See [RUST_FOUNDATION.md](RUST_FOUNDATION.md).
+
 The legacy phrase-match/classification score is a regression measure, not evidence that prose
 is faithful or publishable. Editorial reliability is assessed separately from classification.
 

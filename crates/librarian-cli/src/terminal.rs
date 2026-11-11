@@ -108,11 +108,8 @@ const ACTIONS: [(char, &str, &str); 6] = [
         "Clean documents with AI",
         "Import, copyedit and publish Markdown.",
     ),
-    (
-        'q',
-        "Start the queue",
-        "Process queued documents, one at a time.",
-    ),
+    // The description of q is composed from the queue when Home is drawn.
+    ('q', "Start the queue", ""),
     (
         's',
         "Search the library",
@@ -160,82 +157,117 @@ pub fn run(root: &Path, config_path: &Path) -> Result<()> {
 const HELP: &str = "TWO WAYS TO WORK
 
 a  Parse PDFs now
-   Local and instant. Each PDF becomes Markdown plus a JSON file of typed
-   blocks: headings, paragraphs, lists, tables, pictures. No provider, no
-   model, no cost. Start here to see what is in a file.
+   Local. No provider, no model call, no charge. Each PDF becomes a
+   Markdown file and a JSON file of typed blocks: headings, paragraphs,
+   lists, tables, pictures.
 
 n  Clean documents with AI
    Import a file or folder and choose a destination. The queue copyedits
-   and publishes Markdown using the provider chosen in Setup.
-   q starts the queue; files run one at a time.
+   and publishes Markdown through the provider chosen in Setup.
+   q starts the queue. Files run one at a time.
 
 HOME
 
-Left pane: actions. Right pane: your documents, newest first.
-Up / Down            Move within the pane
-Tab / Left / Right   Switch between actions and documents
-Enter / Space        Run the action, or open the selected document's menu
-a n q s f h          Run that action from anywhere on Home
-p r c                Pause, resume or retry, cancel the selected document
-Esc                  Close Librarian; a running queue keeps working
-Ctrl+S               Save drafts, pause work in this workspace, and exit
+Left pane: actions. Right pane: documents, newest first.
+Up / Down                    Move within the pane
+Tab / Shift+Tab              Switch between actions and documents
+Left / Right                 Go to actions / go to documents
+Enter / Space                Run the action, or open the document's menu
+a n q s f h                  Run that action from either pane
+p r c                        Pause, resume or run again, cancel the
+                             selected document
+Esc                          Close the dashboard; a running worker continues
+Ctrl+S                       Save drafts, pause all work in this workspace,
+                             and exit
 
 DOCUMENT MENU
 
-Enter on a document lists what you can do with it in its current state:
-read the result, read diagnostics, pause, resume, run again with current
-settings as a new run, or cancel. Originals and earlier results are kept.
+Enter on a document lists what applies in its current state: read the
+result, read diagnostics, pause, resume, run again with current settings
+as a new run, or cancel. Originals and earlier results are kept.
 
-FORMS AND LISTS
+LISTS
 
-Up / Down / Tab / Shift+Tab   Move
-Enter / Space                 Activate a button, toggle or browsable field
-Esc                           Back; answers already given are kept
-x                             Continue after an automatic step completes
+Up / Down / Left / Right / Tab / Shift+Tab   Move
+Enter / Space                                Choose
+Any other character                          Filter the list
+Backspace                                    Delete one filter character
+PgUp / PgDn                                  Scroll the text above the list
+Esc                                          Back
+
+FORMS (Parse PDFs, Clean documents)
+
+Up / Down / Left / Right / Tab / Shift+Tab   Move
+Enter / Space      Activate a button, toggle or path field
+Ctrl+B             Browse from the source or destination field
+e                  Type the path of the source or destination field
+PgUp / PgDn        Scroll the text above the form
+Esc                Back; the form is saved
 
 FILE BROWSER
 
-Enter       Open folder / select file
+Up / Down / Left / Right / Tab / Shift+Tab   Move
+Enter       Open a folder / select a file
 Space       Select the folder you are currently inside
 Esc         Return through folder history, then back to the form
 Backspace   Parent folder
 /           Type a path
-n           Create a folder when selecting a destination or workspace
-Ctrl+B      Browse from a source or destination field
-e           Type the path of a source or destination field
+n           Create a folder (when selecting a destination or workspace)
 
 TEXT FIELDS
 
-Enter accepts; Esc discards the current edit. Spaces are ordinary text.
-Home shortcuts do not fire inside fields. Ctrl+S keeps previously accepted
-answers; an unaccepted edit or unsaved API key is discarded.
+Enter accepts; Esc discards the edit. Left, Right, Home and End move the
+cursor. Backspace and Delete erase. Ctrl+U clears the field. Spaces are
+ordinary text and Home shortcuts do not act inside a field. Paste is
+accepted. Ctrl+S keeps answers already accepted; an edit not yet accepted,
+or an API key not yet saved, is discarded.
+
+READING SCREENS (help, results, diagnostics, messages)
+
+Up / Down / Left / Right / Tab / Shift+Tab   Scroll one line
+PgUp / PgDn                                  Scroll fifteen lines
+Home                                         Return to the top
+Enter / Space / Esc / x                      Close
+
+AUTOMATIC STEPS
+
+A step shows its progress. When it completes, x, Enter or Space continues.
+Esc cancels the step and goes back. A step that fails cannot be passed.
 
 COPY / PASTE
 
-Use your terminal's copy and paste commands (often Ctrl+Shift+C/V on
+Use the terminal's own copy and paste commands (often Ctrl+Shift+C/V on
 Windows and Linux; Cmd+C/V on macOS). Librarian does not bind Ctrl+C here.
 
 RUNTIME
 
-Setup establishes the active workspace, provider, secure credential, model,
+Setup establishes the active workspace, provider, credential, model,
 engines and defaults. Workers load it automatically. Queued jobs keep the
-configuration they were queued with. API keys are never written into config.
+configuration they were queued with. API keys are never written into the
+configuration file.
 
 COMMAND LINE
 
-parse FILE|FOLDER -o FOLDER · clean SOURCE -o FOLDER · status --json
+parse FILE|FOLDER -o FOLDER · clean SOURCE -o FOLDER · status
 show ID · pages ID · print ID · export ID --output FOLDER · doctor
-See the bundled README for the complete terminal guide.";
+Run librarian --help for every command. The README beside the program is
+the complete reference.";
 
 fn pause(app: &mut App, library: &Library, id: i64) -> Result<()> {
-    library.control(Some(id), "pause")?;
-    app.message = format!("Pause requested for #{id}; committed work is kept");
+    app.message = if library.control(Some(id), "pause")? > 0 {
+        format!("Pause requested for #{id}; committed work is kept")
+    } else {
+        format!("#{id} is neither queued nor running; nothing to pause")
+    };
     Ok(())
 }
 
 fn cancel(app: &mut App, library: &Library, id: i64) -> Result<()> {
-    library.control(Some(id), "cancel")?;
-    app.message = format!("Cancel requested for #{id}; the original is kept");
+    app.message = if library.control(Some(id), "cancel")? > 0 {
+        format!("Cancel requested for #{id}; the original is kept")
+    } else {
+        format!("#{id} is not queued, running or paused; nothing to cancel")
+    };
     Ok(())
 }
 
@@ -255,15 +287,19 @@ fn finished(status: &str) -> bool {
 
 /// Resume unfinished work, or run finished work again as a new job.
 fn resume(app: &mut App, library: &Library, config_path: &Path, id: i64) -> Result<()> {
-    if finished(&library.job(id)?.status) {
+    let queued = if finished(&library.job(id)?.status) {
         let new_id = pipeline::retry(library, id, &Config::load(config_path)?)?;
-        app.message = format!(
-            "Queued #{new_id} from #{id} with current settings; the earlier result is kept"
-        );
+        format!("Queued #{new_id} from #{id} with current settings; the earlier result is kept.")
+    } else if library.control(Some(id), "resume")? > 0 {
+        format!("Resumed #{id}.")
     } else {
-        library.control(Some(id), "resume")?;
+        String::new()
+    };
+    start_worker(app, library, config_path)?;
+    if !queued.is_empty() {
+        app.message = format!("{queued} {}", app.message);
     }
-    start_worker(app, library, config_path)
+    Ok(())
 }
 
 fn search(terminal: &mut ratatui::DefaultTerminal, library: &Library) -> Result<()> {
@@ -358,8 +394,9 @@ fn document_menu(
     };
     match choices[choice].0 {
         "open" => {
-            let (title, body) = preview(library, job)?;
-            ui::notice(terminal, &title, &body)?;
+            if let Some(output) = &job.output {
+                ui::notice(terminal, output, &preview(output)?)?;
+            }
         }
         "log" => {
             let body = library
@@ -658,9 +695,12 @@ fn import(
                         // Queue creation succeeded. Do not leave a submit-ready
                         // draft behind if starting the worker subsequently fails.
                         std::fs::remove_file(&path)?;
-                        app.message = format!("Queued {n} file(s). Processing is sequential.");
+                        let queued = format!("Queued {n} file(s).");
                         if w.start {
                             start_worker(app, library, config_path)?;
+                            app.message = format!("{queued} {}", app.message);
+                        } else {
+                            app.message = format!("{queued} Press q to start the queue.");
                         }
                         return Ok(());
                     }
@@ -672,30 +712,19 @@ fn import(
     }
 }
 
-fn preview(library: &Library, job: &Job) -> Result<(String, String)> {
-    if let Some(output) = &job.output {
-        let mut bytes = Vec::new();
-        std::fs::File::open(output)?
-            .take(64 * 1024)
-            .read_to_end(&mut bytes)?;
-        let mut body = String::from_utf8_lossy(&bytes).into_owned();
-        if bytes.len() == 64 * 1024 {
-            body.push_str(
-                "\n\n[Preview limited to 64 KiB. Use librarian print for the full document.]",
-            );
-        }
-        Ok((output.clone(), body))
-    } else {
-        Ok((
-            format!("Job #{}", job.id),
-            library
-                .events(Some(job.id), 30)?
-                .into_iter()
-                .map(|(_, level, message)| format!("{level}: {message}"))
-                .collect::<Vec<_>>()
-                .join("\n\n"),
-        ))
+/// The first 64 KiB of a published result.
+fn preview(output: &str) -> Result<String> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(output)?
+        .take(64 * 1024)
+        .read_to_end(&mut bytes)?;
+    let mut body = String::from_utf8_lossy(&bytes).into_owned();
+    if bytes.len() == 64 * 1024 {
+        body.push_str(
+            "\n\n[Preview limited to 64 KiB. Use librarian print for the full document.]",
+        );
     }
+    Ok(body)
 }
 fn start_worker(app: &mut App, library: &Library, config: &Path) -> Result<()> {
     if app
@@ -708,6 +737,15 @@ fn start_worker(app: &mut App, library: &Library, config: &Path) -> Result<()> {
     }
     if library.worker_running()? {
         app.message = "A worker is already processing this library".into();
+        return Ok(());
+    }
+    // A worker with nothing to do would start and stop at once.
+    if !library
+        .jobs(100_000)?
+        .iter()
+        .any(|j| matches!(j.status.as_str(), "queued" | "running"))
+    {
+        app.message = "Nothing is queued. Import documents first.".into();
         return Ok(());
     }
     let log = std::fs::OpenOptions::new()

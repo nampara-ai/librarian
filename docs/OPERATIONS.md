@@ -1,5 +1,7 @@
 # Operations
 
+> **Legacy document.** This file describes the Python/Swift application, version 1.10.3, kept under `src/`, `apps/` and `tests/` for reference. It does not describe the Rust terminal program on this branch. See [RUST_FOUNDATION.md](RUST_FOUNDATION.md).
+
 This runbook covers the stable single-node production profile: local CLI use, one API process, or an API plus SQLite-backed worker. Source documents, converted files, page manifests, cleaned outputs, and search indexes are private runtime data.
 
 ## Storage

@@ -1,4 +1,4 @@
-//! Native filesystem boundary. Existing files are never replaced by this slice.
+//! Native filesystem boundary. Existing files are never replaced.
 #![forbid(unsafe_code)]
 
 pub mod assets;
@@ -27,11 +27,11 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum NativeError {
-    #[error("Unsupported input format; this foundation build accepts .txt, .md, and .markdown")]
+    #[error("Unsupported input format; convert and inspect accept .txt, .md and .markdown")]
     UnsupportedFormat,
     #[error("Output document must have a .md extension")]
     OutputFormat,
-    #[error("Input exceeds the {MAX_SOURCE_BYTES}-byte foundation batch limit")]
+    #[error("Input exceeds the {MAX_SOURCE_BYTES}-byte limit of convert and inspect")]
     TooLarge,
     #[error("Input is not UTF-8: {0}")]
     Encoding(#[from] std::string::FromUtf8Error),

@@ -182,7 +182,7 @@ def main():
         runtime=windows_runtime(folder) if "windows" in args.target else []
         office = office_bundle(args.target)
         shutil.copytree(office, folder / "engines" / "office", symlinks=True)
-        for source, target in [("LICENSE", "LICENSE"), ("docs/RUST_FOUNDATION.md", "README.md"), ("docs/THIRD_PARTY.md", "THIRD_PARTY.md")]:
+        for source, target in [("LICENSE", "LICENSE"), ("docs/RUST_FOUNDATION.md", "README.md"), ("docs/PARSING_FOUNDATION.md", "PARSING_FOUNDATION.md"), ("docs/THIRD_PARTY.md", "THIRD_PARTY.md")]:
             shutil.copy2(ROOT / source, folder / target)
         rust_licenses(folder / "RUST-LICENSES.txt")
         shutil.copytree(ROOT / "docs/licenses", folder / "licenses")

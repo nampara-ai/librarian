@@ -1,5 +1,7 @@
 # Open Knowledge Format (OKF) export
 
+> **Legacy document.** This file describes the Python/Swift application, version 1.10.3, kept under `src/`, `apps/` and `tests/` for reference. It does not describe the Rust terminal program on this branch. See [RUST_FOUNDATION.md](RUST_FOUNDATION.md).
+
 Librarian can render a processed corpus as an [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf)
 v0.1 bundle: a vendor-neutral directory of markdown "concept" files with YAML
 frontmatter that any OKF-aware agent or tool can consume without a translation

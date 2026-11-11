@@ -22,8 +22,13 @@ We will acknowledge reports within 5 business days and coordinate a fix or discl
 
 - Never commit API keys, `.env` files, private transcripts, provider logs, or eval outputs that
   contain private text.
-- Use environment variables for provider credentials in CLI/API deployments. The Mac app stores
-  provider keys in the macOS Keychain and passes them to its backend through the environment.
+- Legacy Python/Swift application: use environment variables for provider credentials in CLI/API
+  deployments. The Mac app stores provider keys in the macOS Keychain and passes them to its
+  backend through the environment.
+- Rust terminal program: Setup stores the provider key in the system credential store, or holds
+  it for the session only. The key is not written to the configuration file, job records, logs
+  or command-line arguments. A session key is passed to a background worker through an
+  environment variable of that worker process. See `docs/RUST_FOUNDATION.md`.
 - Redact `OPENAI_API_KEY`, custom provider keys, `LIBRARIAN_API_KEY`, and `LIBRARIAN_API_KEYS` in
   issues and logs.
 - Test data must be synthetic, public-domain, or explicitly approved for open-source use.
@@ -36,5 +41,7 @@ archive policy, provider data flow, logging, SQLite operations, and hosted-mode 
 
 ## Dependency Security
 
-GitHub Dependabot and CodeQL are enabled for baseline dependency and code scanning. Maintainers
-should review dependency alerts before cutting releases.
+GitHub Dependabot and CodeQL are enabled for baseline dependency and code scanning of the
+Python sources and the GitHub Actions workflows. Neither is configured for the Rust workspace.
+Rust dependencies are pinned in `Cargo.lock`. Maintainers should review dependency alerts before
+cutting releases.

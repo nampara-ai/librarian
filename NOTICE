@@ -18,3 +18,12 @@ liteparse is distributed as a separate PyPI package and is not bundled in
 Librarian's source distribution. Its license terms apply to that package and
 to the PDFium and Tesseract components it ships. A copy of the Apache License
 2.0 is available at https://www.apache.org/licenses/LICENSE-2.0.
+
+------------------------------------------------------------------------
+Rust terminal program
+------------------------------------------------------------------------
+
+Native packages of the Rust terminal program include PDFium, ONNX Runtime,
+PaddleOCR PP-OCRv5 models, LibreOffice and the Noto Sans font. Their versions,
+sources and licenses are listed in docs/THIRD_PARTY.md, and each package
+carries the upstream license files.

@@ -62,9 +62,9 @@ pub fn save(endpoint: &str, secret: &str, remember: bool) -> Result<CredentialRe
     };
     if remember {
         let entry = keyring::v1::Entry::new(SERVICE, &reference.account).context(
-            "System credential store is unavailable. Unlock it or choose 'This session only'.",
+            "System credential store is unavailable. Unlock it or choose 'New session only'.",
         )?;
-        entry.set_password(secret).context("Could not save the key in the system credential store. Choose 'This session only' to continue without persistent storage.")?;
+        entry.set_password(secret).context("Could not save the key in the system credential store. Choose 'New session only' to continue without persistent storage.")?;
         let loaded = Zeroizing::new(
             entry
                 .get_password()

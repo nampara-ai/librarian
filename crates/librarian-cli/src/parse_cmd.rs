@@ -21,6 +21,8 @@ pub struct Request<'a> {
     pub words: bool,
     pub pdfium: Option<&'a Path>,
     pub json: bool,
+    /// Set by the caller to stop before the next file.
+    pub stop: Option<&'a std::sync::atomic::AtomicBool>,
 }
 
 /// What parsing one file produced.
@@ -69,6 +71,9 @@ pub struct Outcome {
     pub failures: Vec<(PathBuf, String)>,
     pub seconds: f64,
     pub destination: Option<PathBuf>,
+    /// Files found but not parsed because the run was stopped.
+    #[serde(default)]
+    pub skipped: usize,
 }
 
 impl Outcome {
@@ -206,7 +211,8 @@ fn one(
 }
 
 /// Parse a file or every PDF in a folder. One bad file does not stop the rest.
-/// `progress` receives a line before each file.
+/// `progress` receives a line before each file. A stop request takes effect
+/// between files; the file in hand is finished and its outputs are kept.
 pub fn execute(
     request: &Request<'_>,
     mut progress: impl FnMut(&str),
@@ -244,6 +250,13 @@ pub fn execute(
     };
     let total = sources.len();
     for (index, source) in sources.iter().enumerate() {
+        if request
+            .stop
+            .is_some_and(|stop| stop.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            outcome.skipped = total - index;
+            break;
+        }
         let name = source
             .file_name()
             .unwrap_or_default()

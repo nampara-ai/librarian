@@ -11,7 +11,10 @@ on:
       - 'tools/office_bundle.py'
       - 'tools/check_layout.py'
       - 'docs/RUST_FOUNDATION.md'
+      - 'docs/PARSING_FOUNDATION.md'
       - 'docs/THIRD_PARTY.md'
+      - 'docs/licenses/**'
+      - 'LICENSE'
       - '.github/workflows/rust-foundation.yml'
   pull_request:
     paths:
@@ -21,6 +24,11 @@ on:
       - 'tools/package.py'
       - 'tools/office_bundle.py'
       - 'tools/check_layout.py'
+      - 'docs/RUST_FOUNDATION.md'
+      - 'docs/PARSING_FOUNDATION.md'
+      - 'docs/THIRD_PARTY.md'
+      - 'docs/licenses/**'
+      - 'LICENSE'
       - '.github/workflows/rust-foundation.yml'
 
 permissions:

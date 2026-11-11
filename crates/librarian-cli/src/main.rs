@@ -28,8 +28,10 @@ use std::{
     about = "Librarian — turn source documents into a clean, searchable Markdown library"
 )]
 struct Cli {
+    /// Workspace folder to use instead of the active profile's workspace.
     #[arg(long, global = true)]
     library: Option<PathBuf>,
+    /// Configuration file to use instead of config.toml in the workspace.
     #[arg(long, global = true)]
     config: Option<PathBuf>,
     /// Emit machine-readable JSON instead of animated terminal output.
@@ -40,31 +42,39 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
-    /// Interactive setup for processing, providers, metadata and output conventions.
+    /// Run the setup wizard: workspace, provider, credential, model, limits,
+    /// defaults, engines and a connection check.
     Setup,
     #[command(hide = true)]
     SetupVerify,
     /// Interactive dashboard, source/destination picker, queue and live progress.
     Tui,
-    /// Configure processing and output profiles.
+    /// Show, locate, describe, change, edit or reset the configuration file.
     Config {
         #[command(subcommand)]
         action: ConfigCommand,
     },
     /// Choose source/destination, queue files, and process them sequentially.
     Clean {
+        /// Source file or folder. Omit on a terminal to choose it in the browser.
         source: Option<PathBuf>,
+        /// Destination folder for the finished Markdown. Omit on a terminal to
+        /// choose it in the browser.
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Include files in subfolders when the source is a folder.
         #[arg(long)]
         recursive: bool,
+        /// Create the destination folder if it does not exist.
         #[arg(long)]
         create_output: bool,
         /// Extract without paid editing, classification or vision calls.
         #[arg(long)]
         extract_only: bool,
+        /// Send no image requests to the model.
         #[arg(long)]
         no_vision: bool,
+        /// Omit front matter, title, synopsis, page markers and review notes.
         #[arg(long)]
         body_only: bool,
         /// Queue without starting the worker.
@@ -73,71 +83,109 @@ enum Command {
     },
     /// Process queued files, resuming committed work after an interruption.
     Run {
+        /// Show no progress display and print no per-job result lines.
         #[arg(long)]
         quiet: bool,
     },
-    /// Inspect the persisted queue, optionally watching live updates.
+    /// Print the queue as JSON, or open the dashboard with --watch.
     Status {
+        /// Open the dashboard instead of printing. Ignored with --json.
         #[arg(long)]
         watch: bool,
     },
     /// Pause a job, or all active/queued jobs if no id is supplied.
-    Pause { id: Option<i64> },
-    /// Resume paused, failed or cancelled jobs.
-    Resume {
+    Pause {
+        /// Job number. Omit to pause every queued and running job.
         id: Option<i64>,
+    },
+    /// Return paused, cancelled, failed or budget-stopped jobs to the queue.
+    Resume {
+        /// Job number. Omit to resume every eligible job.
+        id: Option<i64>,
+        /// Start the worker after resuming and wait for it to finish.
         #[arg(long)]
         start: bool,
     },
     /// Reprocess an immutable original with current configuration as a new job.
     Retry {
+        /// Job number whose retained original is processed again.
         id: i64,
+        /// Start the worker after queueing and wait for it to finish.
         #[arg(long)]
         start: bool,
     },
     /// Cancel without deleting originals or committed work.
-    Cancel { id: Option<i64> },
+    Cancel {
+        /// Job number. Omit to cancel every queued, running and paused job.
+        id: Option<i64>,
+    },
     /// Full-text search of accepted document content.
     Search {
+        /// Words to find. Every word must occur; each is matched literally.
         query: String,
+        /// Maximum number of results.
         #[arg(short, long, default_value_t = 20)]
         limit: usize,
     },
     /// Show job details, diagnostics and metadata.
-    Show { id: i64 },
+    Show {
+        /// Job number.
+        id: i64,
+    },
     /// Render the source and run local OCR only; no paid calls or document export.
-    Prepare { source: PathBuf },
+    Prepare {
+        /// Source file.
+        source: PathBuf,
+    },
     /// Inspect the ordered image/OCR/visual/copyeditor matrix for a run.
     Pages {
+        /// Job number.
         id: i64,
+        /// Print the full contents of this page instead of the summary.
         #[arg(long)]
         page: Option<i64>,
     },
     /// Print an immutable role prompt; omit the role to list versions and hashes.
-    Prompts { role: Option<String> },
+    Prompts {
+        /// copyeditor, reviewer or protocol.
+        role: Option<String>,
+    },
     /// Inspect editorial request packets, evidence, interventions and revisions.
-    Editorial { id: i64 },
+    Editorial {
+        /// Job number.
+        id: i64,
+    },
     /// Save an expert correction privately for later calibration; does not re-export.
     Feedback {
+        /// Job number.
         id: i64,
+        /// Reviewed segment the correction applies to, in the form review:N.
         #[arg(long)]
         segment: String,
+        /// File holding the corrected text.
         #[arg(long)]
         replacement: PathBuf,
+        /// Why the correction is right. Required.
         #[arg(long)]
         reason: String,
     },
-    /// Browse the document catalog and category accession numbers.
+    /// List finished documents with their metadata, class and accession number.
     Catalog,
     /// Show library totals by status and classification.
     Stats,
     /// Print the resulting Markdown to stdout.
-    Print { id: i64 },
+    Print {
+        /// Job number.
+        id: i64,
+    },
     /// Re-export with current presentation settings, without model calls.
     Export {
+        /// Job number of a complete or needs_review job.
         id: i64,
+        /// Destination folder for the new copy.
         #[arg(short, long)]
         output: PathBuf,
+        /// Create the destination folder if it does not exist.
         #[arg(long)]
         create_output: bool,
     },
@@ -147,7 +195,7 @@ enum Command {
         #[arg(long)]
         load_engines: bool,
     },
-    /// Install or inspect pinned PDF/OCR engine assets.
+    /// Install or list the pinned PDF and OCR engine assets.
     Engines {
         #[command(subcommand)]
         action: EngineCommand,
@@ -155,6 +203,7 @@ enum Command {
     /// Parse a PDF, or a folder of PDFs, locally into typed layout blocks,
     /// Markdown and JSON. No model calls.
     Parse {
+        /// PDF file, or a folder of PDF files.
         source: PathBuf,
         /// Folder for <name>.md and <name>.layout.json; omit to print Markdown.
         #[arg(short, long)]
@@ -183,25 +232,43 @@ enum Command {
     },
     /// Convert UTF-8 text/Markdown directly, without adding it to the library.
     Convert {
+        /// A .txt, .md or .markdown file.
         source: PathBuf,
+        /// Markdown file to write; it must not exist. Omit to print.
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
     /// Report Markdown syntax counts.
-    Inspect { source: PathBuf },
+    Inspect {
+        /// A .txt, .md or .markdown file.
+        source: PathBuf,
+    },
 }
 #[derive(Subcommand)]
 enum ConfigCommand {
+    /// Print the configuration as TOML.
     Show,
+    /// Print the path of the configuration file.
     Path,
+    /// Print the JSON Schema of the configuration.
     Schema,
-    Set { key: String, value: String },
+    /// Set one value, for example processing.page_concurrency 3.
+    Set {
+        /// Dotted key: section.field.
+        key: String,
+        /// New value. JSON is accepted; other text is taken as a string.
+        value: String,
+    },
+    /// Open the file in $VISUAL or $EDITOR, then validate it.
     Edit,
+    /// Copy the file to a dated backup, then write the defaults.
     Reset,
 }
 #[derive(Subcommand)]
 enum EngineCommand {
+    /// Download, verify and install the engines into the workspace.
     Install,
+    /// Print the pinned engine assets for this platform.
     List,
 }
 
@@ -306,6 +373,7 @@ async fn run(cli: Cli) -> Result<u8> {
                 words,
                 pdfium: pdfium.as_deref(),
                 json: cli.json,
+                stop: None,
             });
         }
         Command::Convert { source, output } => {

@@ -815,7 +815,7 @@ fn preferences(
                     if let Some(value) = ui::input(
                         t,
                         "Filename convention",
-                        "Supported placeholders: {class}, {title}, {number}, {id}.",
+                        "Supported placeholders: {class}, {title}, {number}, {sequence}, {id}.",
                         &config.output.filename,
                         false,
                     )? {

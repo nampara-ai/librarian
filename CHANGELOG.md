@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+Rust terminal program, version 0.1.0, on the branch `codex/rust-foundation`. It is not released.
+The entries below this section describe the legacy Python/Swift application.
+
+- Command-line and terminal interface in Rust, with a shared core that also builds to WebAssembly.
+- `parse`: local PDF parsing into Markdown and a typed JSON layout model, with no model calls.
+- `clean`: the editorial pipeline, with a queue, checkpoints, budgets and full-text search.
+- Setup wizard, system credential storage, live model discovery and a connection check.
+- Native packages for Apple Silicon macOS, Intel macOS, Windows x64 and Linux x64.
+
+See `docs/RUST_FOUNDATION.md` and `docs/PARSING_FOUNDATION.md`.
+
 ## 1.10.3 - 2026-11-06
 
 Keep small models' output instead of rejecting it over lost page markers, and stop serving

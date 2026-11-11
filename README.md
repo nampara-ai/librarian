@@ -1,10 +1,34 @@
 # Librarian
 
-A local-first document cleaner and organizer. Import files or folders, extract text and visual material, copyedit with a configured model, classify documents, and export a searchable **Markdown** collection.
+Librarian is a terminal program that turns source documents into Markdown. It runs on the user's own machine. This branch, `codex/rust-foundation`, holds the program as rebuilt in Rust. The program version is 0.1.0. It is a development build and has not been released.
 
-This branch implements the Rust CLI/TUI rebuild. Graphical application work is deferred. The previous Python/Swift implementation remains available as reference; its documentation is in [LEGACY_README.md](docs/LEGACY_README.md).
+## Functions
 
-Native archives are available from successful [Librarian terminal builds](https://github.com/nampara-ai/librarian/actions/workflows/rust-foundation.yml) runs for this branch. Download the artifact matching your platform, unpack the artifact ZIP and the platform archive inside it, and keep `librarian` beside its `engines` folder. Run `./librarian` (`.\librarian.exe` in PowerShell). The bundled distribution includes OCR, PDF and private Office layout engines.
+| Function | Description |
+| --- | --- |
+| Parse | Reads a PDF and writes a Markdown file and a JSON file of typed layout blocks. Local. No model is called |
+| Clean | Queues source documents, copyedits them with a language model through a configured provider, classifies them, and publishes Markdown |
+| Search | Full-text search of the documents that Clean has published |
+
+Both Parse and Clean are available from the command line and from the terminal interface. There is no graphical interface.
+
+## Documents
+
+| Document | Contents |
+| --- | --- |
+| [docs/RUST_FOUNDATION.md](docs/RUST_FOUNDATION.md) | The terminal reference: installation, Setup, every screen and key, every command and option, every configuration key, the pipelines, the limits |
+| [docs/PARSING_FOUNDATION.md](docs/PARSING_FOUNDATION.md) | The PDF parser: output format, method, measurements, limits |
+| [docs/THIRD_PARTY.md](docs/THIRD_PARTY.md) | Bundled engines, models and fonts, with versions and licenses |
+| [AGENTS.md](AGENTS.md) | Rules for work on this branch |
+| [docs/EDITORIAL_PIPELINE.md](docs/EDITORIAL_PIPELINE.md) | The owner's approved contract for the editorial pipeline, and the dated work log |
+| [docs/IMPLEMENTATION_PROGRESS.md](docs/IMPLEMENTATION_PROGRESS.md) | Dated ledger of the first terminal implementation. Historical |
+| [docs/TERMINAL_REBUILD.md](docs/TERMINAL_REBUILD.md) | Design notes written before the rebuild. Historical. Not a description of the program |
+
+The repository also holds the earlier Python and Swift application, version 1.10.3, under `src/`, `apps/` and `tests/`. It is kept for reference and is not built or tested on this branch. Its documents are [docs/LEGACY_README.md](docs/LEGACY_README.md), `docs/API.md`, `docs/ARCHITECTURE.md`, `docs/DEPLOYMENT.md`, `docs/OPERATIONS.md`, `docs/OKF.md` and `docs/EDITORIAL_EVALUATION.md`. The commands and settings they name are not those of the Rust program.
+
+## Installation
+
+Native packages for Apple Silicon macOS, Intel macOS, Windows x64 and Linux x64 are produced by the workflow [Librarian terminal builds](https://github.com/nampara-ai/librarian/actions/workflows/rust-foundation.yml). Download the artifact for the platform, unpack it, and keep the program beside its `engines` folder. Run `./librarian`, or `.\librarian.exe` on Windows.
 
 To build from source:
 
@@ -13,33 +37,76 @@ cargo build --release --locked -p librarian-cli
 ./target/release/librarian
 ```
 
-Source builds can install the OCR/PDF engines during setup; Office layout additionally needs LibreOffice configured through `processing.office_renderer`. The full native packages include that renderer.
+A source build carries no engines. Setup downloads and verifies the PDF and OCR engines. LibreOffice, which is needed for office documents, must be installed separately or named in `processing.office_renderer`.
 
-First launch guides you through a runtime profile: workspace, provider, masked API key, secure/session storage, live model selection, processing/Markdown defaults, engine initialization and an explicit connection/vision check. Later launches load the profile automatically. No environment activation or manual key exports are required.
+## First use
 
-Home has two panes: actions on the left, your documents on the right. `a` Parse PDFs now (local, instant, no AI), `n` Clean documents with AI, `q` Start the queue, `s` Search, `f` Setup, `h` Help. Up/Down moves within a pane; Tab or Left/Right switches panes; Enter/Space runs the action or opens the selected document's menu. `p`, `r` and `c` pause, resume or retry, and cancel the selected document. Esc goes back. Files run sequentially with live progress. Ctrl+S saves accepted drafts, requests a pause for active/queued work, and exits; Esc at Home leaves a worker running. See the [terminal guide](docs/RUST_FOUNDATION.md) for browser behavior, clipboard controls, credentials and recovery.
+Run `librarian`. On first use, Setup asks for a workspace folder, a provider, an API key, a model and processing defaults. It then loads the engines and sends one small billed test request to the model. Home is shown when Setup has completed. Later starts go directly to Home.
+
+To parse a PDF without Setup, use the command line:
 
 ```sh
-librarian parse /path/to/document.pdf -o /path/to/parsed --create-output
-librarian parse /path/to/pdf-folder -o /path/to/parsed --create-output --recursive
-librarian clean /path/to/source-folder -o /path/to/results --create-output --recursive
-librarian search 'a phrase'
-librarian show 12
-librarian print 12
-librarian prepare /path/to/slides.pptx
-librarian pages 12 --page 2
-librarian catalog
-librarian stats
+librarian parse document.pdf -o results --create-output
 ```
 
-Native build targets: Apple Silicon macOS, Intel macOS, Windows x64, and Linux x64. Distribution archives carry pinned PDFium, CPU ONNX Runtime, PaddleOCR models and LibreOffice. Native users do not need Python or Node. The shared document core also builds to WASM; browser hosts supply I/O, inference, and storage.
+## Home
 
-Supported inputs include UTF-8 text/Markdown, transcripts, CSV/TSV, HTML, PDF, DOCX/PPTX and other supported Office formats, plus common raster images including multi-page TIFFs. Native text receives CMOS copyediting while ordered page images receive local OCR and vision interpretation. The Typesetter reconciles these readings, restores continuity and combines narrative visual explanations with CSV, TeX and portable Pele/Mermaid. A final Copyeditor repairs the assembled Markdown before cataloging and publication.
+| Key | Action |
+| --- | --- |
+| a | Parse PDFs now |
+| n | Clean documents with AI |
+| q | Start the queue |
+| s | Search the library |
+| f | Setup |
+| h | Help |
+| p, r, c | Pause, resume or run again, cancel the selected document |
+| Up, Down | Move within a pane |
+| Tab, Shift+Tab, Left, Right | Switch between the actions pane and the documents pane |
+| Enter, Space | Run the action, or open the menu of the document |
+| Esc | Close the terminal interface. A running worker continues |
+| Ctrl+S | Save drafts, pause all work in the workspace, and exit |
 
-Originals remain immutable. SQLite journals page readings, editorial checkpoints, usage reservations, category accessions and exact-result caches. Exports never replace existing files. Contextual spelling, punctuation, quotation and number-format repairs do not trigger archival-fidelity rejection. Technical failures remain explicit and resumable. Old jobs keep their original pipeline; `retry` or **r** on a finished job starts a new run with current settings and preserves the earlier result.
+## Commands
 
-`parse` is the deterministic foundation: it turns a PDF, or a folder of PDFs, into typed layout blocks, reader Markdown and JSON at a few milliseconds per page with no model calls. It keeps bold, italic and links, rebuilds tables and multi-column reading order, and reports which pages would need OCR, vision or review. Scanned pages are reported, not read. The [parsing foundation](docs/PARSING_FOUNDATION.md) describes the architecture, the four ways it is measured, the scores and the limits.
+```sh
+librarian parse document.pdf -o results --create-output
+librarian parse folder -o results --create-output --recursive
+librarian clean source-folder -o finished --create-output --recursive
+librarian run
+librarian status
+librarian show 12
+librarian print 12
+librarian search 'a phrase'
+librarian export 12 -o other-folder --create-output
+librarian doctor
+librarian --help
+```
 
-Read the [terminal guide](docs/RUST_FOUNDATION.md) for configuration, credentials, commands, caching, recovery, limits, and builds. The [editorial contract and work log](docs/EDITORIAL_PIPELINE.md) describe the current architecture. Earlier [architecture notes](docs/TERMINAL_REBUILD.md) and [implementation history](docs/IMPLEMENTATION_PROGRESS.md) remain as background. See [third-party notices](docs/THIRD_PARTY.md) for bundled components.
+The complete list is in section 6 of the [terminal reference](docs/RUST_FOUNDATION.md).
 
-This is a development rebuild. Compilation and targeted invariant checks do not establish OCR accuracy, model quality, or complete cross-platform runtime behavior. Hands-on evaluation with Jake's documents and API keys follows the terminal implementation.
+## Properties
+
+- A source file is never modified. A copy of each imported source is kept in the workspace.
+- A published file is never replaced.
+- An API key is stored in the system credential store, or held for the session only. It is not written to the configuration file, job records, logs or command-line arguments.
+- Work is recorded in a local database as it is done. An interrupted job resumes from its last checkpoint.
+- A job keeps the configuration it was queued with. Changing Setup does not alter queued jobs.
+- Request, token and cost ceilings apply to each job. A job that reaches a ceiling stops and may be resumed.
+
+## Limits
+
+- The parser reads PDF files only, and does not read scanned pages. It reports them.
+- Clean does not yet use the parser. It renders every page to an image and reads it with OCR and the model.
+- The terminal interface requires Setup, including a provider and a key, before Home is shown. This applies to Parse in the terminal interface also.
+- A status of `complete` records that processing reached its end. It does not state that the published text is correct.
+- The developers have made no paid document runs with this build. Acceptance on the owner's documents and keys has not yet been carried out.
+
+## Checking a change
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --locked -p librarian-core -p librarian-native --lib --test persistence
+```
+
+A change to the PDF parser must also be measured as described in section 8 of the [parsing reference](docs/PARSING_FOUNDATION.md).

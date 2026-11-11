@@ -1,0 +1,4 @@
+apted
+beautifulsoup4
+lxml
+rapidfuzz

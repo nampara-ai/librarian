@@ -1,153 +1,271 @@
-# Parsing foundation
+# PDF parsing reference
 
-Direction set by Jake on 2026-11-08. Engine rebuilt and measured 2026-11-09 and 2026-11-10. Numbers below are from the build that includes the brochure fixes.
+This document describes the PDF parser of the Librarian terminal program: what it accepts, what it produces, how it reconstructs a page, how its results were measured, and what it does not do. The commands and screens that run the parser are described in the terminal reference, `RUST_FOUNDATION.md` in the repository and `README.md` in a package.
 
-## Direction
+## 1. Purpose
 
-Librarian starts from a universal, deterministic file cracker. A file is opened, its positioned text and drawn structure are extracted, and a typed, LLM-ready document comes out quickly with no model calls. Intelligence layers (OCR, vision, table confirmation, copyediting of rough prose) sit on top and run only where the deterministic layer reports that they earn their cost.
+The parser reads a PDF file and produces a typed description of its contents in reading order: titles, headings, paragraphs, list items, tables, code, captions, footnotes, pictures and page furniture. It works from the text and drawing instructions in the file. It calls no model and contacts no service. Its output is the same for the same input.
 
-The same typed blocks are the foundation for later uses, including editing documents block by block. None of that is built yet. Everything stays in the terminal.
+The parser is the base layer of the program. On 2026-11-08 the owner directed that every later function, including OCR, picture description and copyediting, be built on it and be applied only to the pages and regions the parser identifies as needing them. Those later functions are not yet connected to it. See section 9.
 
-The reference point is Nutrient's `/extraction/parse`. It reuses the PDF's native text layer, works on a 200 DPI grid, and routes each page to a processing tier. On Jake's two documents it took 11.7 s for 57 pages and 57.5 s for 244 pages. Librarian's earlier editorial pipeline rendered every page and chained model calls: the same 57-page book took 38 minutes and 235 requests.
+## 2. Input
 
-## What `parse` does
+The parser accepts PDF files. A file is refused, with the reason stated, when it is password-protected, when it is damaged or is not a PDF, when it uses a security scheme the PDF engine does not support, or when the PDF engine cannot read it for another reason.
+
+The PDF engine is PDFium. It is found in the workspace `engines` folder or in the `engines` folder beside the program.
+
+## 3. Output
+
+### 3.1 Files
+
+For a source `NAME.pdf` and a results folder, the parser writes `NAME.md` and `NAME.layout.json`. An existing file of either name is not replaced; the source is reported as failed. Without a results folder, one file is parsed and its Markdown is printed.
+
+### 3.2 Markdown
+
+| Element | Written as |
+| --- | --- |
+| Title | `# text` |
+| Heading | One to six `#` characters by level, then the text |
+| Paragraph, caption, footnote | The text |
+| List item | `- text`. A printed number or letter label is kept after the dash |
+| Code | A fenced block |
+| Table | A pipe table. A table with merged cells is written as an HTML table |
+| Picture | An HTML comment giving the page and the position. Labels printed inside the picture follow, when they are of readable size |
+| Header, footer, page number | Omitted, unless furniture is requested |
+| Hidden text | Omitted |
+
+Bold, italic and monospaced runs inside a text are marked with `**`, `*` and backticks. A link is written as `[text](address)`. Marks are omitted where one style covers the whole element. A paragraph that continues on the next page is joined into one. A table that continues on the next page is joined into one, and a repeated header row is dropped. With page markers requested, each page boundary is marked by an HTML comment.
+
+The plain option omits inline marks and picture comments.
+
+### 3.3 JSON
+
+The file `NAME.layout.json` has two top-level members, `summary` and `document`. With the words option it also has `pages`, `fonts` and `outline`. The schema name is `librarian-layout-v2`. Coordinates are in PDF points, with the origin at the top left of the page.
+
+`summary`:
+
+| Member | Meaning |
+| --- | --- |
+| `source` | Path of the PDF |
+| `pages`, `words`, `elements` | Counts |
+| `roles` | Count of elements by role |
+| `routing` | Count of pages by tier. See section 5 |
+| `hyphens` | Line-end hyphens `joined` and `kept` |
+| `model_calls` | Always 0 |
+| `timing_ms` | `open`, `extract`, `layout`, `total` |
+
+`document`:
+
+| Member | Meaning |
+| --- | --- |
+| `schema`, `format` | `librarian-layout-v2`, `pdf` |
+| `pages` | For each page: `number`, `width`, `height`, `words`, `tier` |
+| `elements` | The elements, in reading order |
+| `routing` | For each page: `page`, `tier`, `reasons`, and `regions` where the tier applies to part of the page |
+| `stats` | Totals, the measured body size and line pitch, and the accounting counts of section 6 |
+
+Each element:
+
+| Member | Meaning |
+| --- | --- |
+| `id` | Identifier, unique in the document |
+| `page` | Page number, from 1 |
+| `role` | `title`, `heading`, `paragraph`, `list_item`, `table`, `code`, `caption`, `footnote`, `picture`, `header`, `footer`, `page_number` or `hidden` |
+| `level` | Heading level, 1 to 6 |
+| `text` | The text. For a table, the cell texts |
+| `bbox` | `x`, `y`, `w`, `h` |
+| `order` | Position in the reading order of the document |
+| `font_size`, `bold` | Dominant size and weight |
+| `spans` | Inline styles: `start` and `end` byte offsets into `text`, with `bold`, `italic`, `code` or `link` |
+| `rows`, `cols`, `cells` | For a table. Each cell has `row`, `col`, `rowspan`, `colspan`, `header`, `text`, `bbox` |
+| `continues` | The element is completed by the next body element |
+| `tight` | The join to the next element completes a word and takes no space |
+| `origin` | `native`, or `ocr_layer` for invisible text laid over a scanned page by an earlier OCR |
+| `evidence` | `layout` (measured from the page), `ruling` (lines drawn in the file) or `declared` (the file's bookmarks) |
+| `confidence` | A number from 0 to 1 |
+| `words` | Indices into the page's word list. Present with the words option |
+
+With the words option, `pages` holds for each page its words (text, box, font, size, baseline, and flags for hidden and rotated text), image positions, line segments, filled rectangles, other drawings and links. `fonts` holds each font's name and whether it is bold, italic or monospaced. `outline` holds the bookmarks with level, title and page.
+
+## 4. Method
+
+The parser has two stages. The first, in `crates/librarian-native/src/parse.rs`, reads the file through PDFium. The second, in `crates/librarian-core/src/layout/`, reconstructs the layout. The second stage performs no file access and also compiles to WebAssembly.
+
+### 4.1 Extraction
+
+For each page the first stage records:
+
+- every word, with its box, baseline, font, size, and whether it is drawn invisibly or rotated;
+- every image position;
+- every straight horizontal or vertical line segment, every filled rectangle, and the bounds of all other drawings, including those inside nested forms;
+- every link;
+- the number of characters that could not be decoded.
+
+Positions are corrected for a page whose visible area is an offset or rotated window on its coordinate space. Words are separated where the file has no space characters but leaves a gap between letters. The document's bookmarks are recorded.
+
+### 4.2 Reconstruction
+
+The second stage applies the following steps. Each threshold is a proportion of a quantity measured on the document itself, such as its body type size or its line pitch. No threshold refers to a particular test document.
+
+1. **Measurement.** The body type size, the usual line pitch, the vocabulary, and whether the document breaks words at line ends are determined.
+2. **Text outside the reading flow.** Words outside the page box, invisible words and rotated words are set aside as hidden. If nearly all text of a page is invisible, the page carries an OCR layer; that text is then used and is marked `ocr_layer`.
+3. **Pictures.** Images are grouped into picture regions. A cluster of type much smaller than body size is taken as the content of an illustration. Groups of drawings form vector figures. A single shape that encloses running text is a panel or frame, not a figure, and is ignored. A line of text is never divided by the edge of a figure.
+4. **Captions.** A line beginning "Figure" or "Table" and a number declares the kind of the block beside it. A ruled grid captioned as a figure is treated as a picture.
+5. **Ruled tables.** Line segments are merged into strokes. Where borders are drawn one cell at a time, the points at which they break mark the cell corners. Borders that break at the same position are joined into one grid when a drawn line crosses both or when they share the same extent. Borders that run past the last drawn line to a common end close a row. Cells not separated by a line are merged. Tables with horizontal rules only take their columns from the text.
+6. **Regions.** The remaining words are divided by vertical bands of white space. Each band is classified. If the text on both sides reads as prose, the band separates columns. If the lines on both sides align row for row, the region is a table. Otherwise the band is ignored. A column of bullets beside its text, and a list of titles beside page numbers, are not tables. Text set in widely different sizes within one column is not a table.
+7. **Blocks.** Within a column, lines are grouped into blocks by spacing, indentation, type size and weight, and list markers. A block is a heading when it is larger or heavier than body text, or numbered as a section, and is short. A block opening with a list marker is a list item. Small type low on the page that opens with a reference mark is a footnote. A monospaced block is code.
+8. **Line-end hyphens.** A word divided at a line end is joined. The hyphen is kept when the document writes the hyphenated form elsewhere, or when the document does not divide words at line ends.
+9. **Page furniture.** Text in the top or bottom margin that recurs across pages is a header or footer. A number that advances with the page is a page number.
+10. **Bookmarks.** A block whose text matches a bookmark on its page is a heading at the bookmark's level. Where a document has at least eight such headings and its bookmarks have more than one level, a line that typography alone made a heading is returned to a paragraph if it is of body size, smaller than every bookmarked heading, not numbered as a section, and named by no bookmark.
+11. **Heading levels and title.** Remaining headings are ranked by type size. The largest type on the first pages, used once or twice, is the title.
+12. **Continuation.** A paragraph that ends without closing punctuation at the foot of a column or page is marked as continuing in the next. A table whose columns match the table that opens the next page is marked as continuing.
+
+## 5. Routing
+
+Each page is assigned one tier. The tier states what further processing the page would need. The parser reports the tier and performs none of that processing.
+
+| Tier | Assigned when | Reason text |
+| --- | --- | --- |
+| `ocr` | The page has fewer than 16 letters and digits | "no usable text layer", or "scanned or image-only page: no usable text layer" |
+| `ocr` | More than 2 percent of characters could not be decoded | "text layer contains undecodable characters" |
+| `ocr` | More than one fifth of the readable characters are private-use code points | "much of the text uses a font with no Unicode mapping" |
+| `review` | The text is an OCR layer | "text comes from an embedded OCR layer of unknown quality" |
+| `vision` | The page has a picture covering at least 3 percent of its area | "N figure(s) may carry information not in the text layer" |
+| `review` | A table found from text alignment has low confidence | "sparse table grid: cell structure needs confirmation" |
+| `deterministic` | None of the above | "native text layer reconstructed deterministically" |
+
+Where several apply, the page takes the highest of `ocr`, `vision`, `review`, `deterministic`, and all reasons are listed.
+
+## 6. Accounting
+
+After reconstruction the parser verifies that every word of the file belongs to exactly one element, and that the count of non-space characters in the elements, plus the hyphens removed at line ends, equals the count in the file. If either check fails the parser writes nothing for that file and reports the counts. The parser's automated tests assert this check, and every measurement run of section 7 exercises it.
+
+## 7. Measurements
+
+The figures below were taken on 2026-11-10 with the build that is on the branch. Test documents and the outputs of other products are kept outside the repository. The scripts are in `tools/bench/`. They need Python with the packages in `tools/bench/requirements.txt`.
+
+### 7.1 Human ground truth
+
+The collection is [opendataloader-bench](https://github.com/opendataloader-project/opendataloader-bench) at commit `7af1d8f`: 200 single-page PDFs with hand-made reference Markdown. Three scores are computed. NID measures text and reading order. TEDS measures table structure. MHS measures the heading hierarchy. The overall score is their mean over the documents to which each applies. The scorer in `tools/bench/score.py` was written for this project from the published definitions; it reproduces the published scores of three other engines to four decimal places.
+
+Odd-numbered documents were used during development. Even-numbered documents were held out: their aggregate was read, and no single document was examined.
+
+| Documents | Librarian | Nutrient | Highest published |
+| --- | --- | --- | --- |
+| Development half (100) | 0.887 | 0.876 | 0.901 |
+| Holdout half (100) | 0.866 | 0.894 | 0.912 |
+| All (200) | 0.876 | 0.885 | 0.907 |
+
+| Score, all 200 | Librarian | Nutrient | Highest published |
+| --- | --- | --- | --- |
+| NID | 0.921 | 0.925 | 0.934 |
+| TEDS | 0.707 | 0.708 | 0.928 |
+| MHS | 0.802 | 0.819 | 0.821 |
+
+The parser before the rebuild scored 0.747 and failed on five documents. Of the 14 engines with published results, four score higher on all 200 documents: opendataloader-hybrid (0.907), Nutrient (0.885), docling (0.882) and one opendataloader variant (0.877).
+
+The holdout figure is the better estimate of performance on unseen documents. On the holdout half the parser is 0.028 below Nutrient. The difference is in tables (0.654 against 0.702) and headings (0.793 against 0.848).
 
 ```sh
-librarian parse document.pdf                      # Markdown to stdout, summary to stderr
-librarian parse document.pdf -o results --create-output
-librarian parse folder -o results -r              # every PDF, including subfolders
-librarian parse document.pdf -o results --plain --furniture --page-markers --words
+python3 tools/bench/benchmark.py --librarian target/release/librarian \
+  --bench /path/to/opendataloader-bench --out /path/to/results
 ```
 
-With `-o`, each PDF becomes `<name>.md` and `<name>.layout.json`. Existing files are never replaced. One unreadable file does not stop a folder. `--plain` drops bold, italic, link and picture markup. `--furniture` keeps running headers, footers and page numbers. `--words` adds positioned words, fonts and the outline to the JSON. In the terminal interface the same engine is the first action on Home: **a Parse PDFs now**.
+### 7.2 Structure declared by the author
 
-The JSON model (`librarian-layout-v2`) is a list of elements in reading order. Each has a role (title, heading, paragraph, list item, table, code, caption, footnote, picture, header, footer, page number, hidden), a page box in PDF points, text, inline spans (bold, italic, code, link), table cells with row and column spans, the evidence it rests on, and a per-page routing tier.
+Nine tagged PDFs, 432 pages. Each file's own structure tags are read with Poppler and serve as the reference. On the Apple Style Guide (244 pages): list items, precision 0.99 and recall 1.00; headings, precision 0.82 and recall 1.00; text similarity 0.999. That file has 91 heading tags that carry text. An earlier note in this project gave 203; the other 112 are empty tags.
 
-## Architecture
+The parser itself does not read structure tags. The PDFium interface to them requires unsafe code, which the native crate forbids.
 
-| Layer | Where | Job |
+```sh
+python3 tools/bench/tagged.py --librarian target/release/librarian \
+  --pdfs /path/to/tagged-pdfs --out /path/to/results
+```
+
+### 7.3 Agreement with Nutrient on two of the owner's documents
+
+`crates/librarian-native/examples/layout_bench.rs` matches the parser's words to a Nutrient response for the same file and compares the labels.
+
+| Measure | Make It Rain (57 pages) | Apple Style Guide (244 pages) |
 | --- | --- | --- |
-| Miner | `librarian-native::parse` | PDFium to one input model: words with glyph boxes, baselines and fonts; images; line segments, fills and drawings from every page object including nested forms; links; bookmarks |
-| Geometry | `layout/geom.rs` | Rectangles, clustering, interval arithmetic |
-| Text | `layout/text.rs` | Document statistics, lines, list markers, hyphen decisions, span composition |
-| Drawn grids | `layout/lattice.rs` | Tables from ruled lines: piecewise borders, implied edges, merged cells |
-| Tables | `layout/tables.rs` | Cells from grids, row-ruled and rule-sectioned tables, tables from aligned text |
-| Regions | `layout/regions.rs` | Whitespace gutters, each classified as text columns, a table, or noise |
-| Blocks | `layout/blocks.rs` | Paragraphs, list items, headings, contents entries inside one column |
-| Document | `layout/reconstruct.rs` | Page assembly, furniture, heading levels, joins across pages, routing, accounting |
-| Projections | `layout/render.rs` | Markdown and the JSON model from the same elements |
-
-`librarian-core` has no I/O and compiles to WebAssembly. Other miners (OCR, Office XML, HTML) can feed the same input model.
-
-### Principles that made it accurate
-
-1. **Evidence has an order.** What the author declared beats what was drawn, which beats what is inferred from spacing. Bookmarks declare headings; when a document's bookmarks are rich and multi-level, a body-size bold line they do not name is a label, not a heading. A caption that begins "Table 3" or "Figure 2" declares what the region beside it is. Ruled lines declare a grid. Whitespace is the fallback.
-2. **Every threshold is relative to the document.** Body size, line pitch, vocabulary and hyphenation habits are measured per document. Nothing is tuned to a fixture's coordinates.
-3. **Whitespace is classified, not just found.** A gutter between two strips is text columns if the strips read as prose, a table if rows align across it, and noise otherwise. This one decision replaced separate column and table detectors that disagreed with each other.
-4. **Line-end hyphens follow the document's own vocabulary.** "four-" + "day" stays "four-day" when the document writes "four-day" elsewhere, or when the document does not break words at line ends at all. Only a true soft hyphen is removed without that check.
-5. **Text you cannot see is not read.** Text outside the page box, invisible text, and rotated margin text are kept in the model as hidden and left out of the reading flow. An invisible layer over a scanned image is recognised as an OCR layer and used.
-6. **Accounting is a hard guard.** Every native word must land in exactly one element, and the non-space characters going in must equal the characters coming out plus the hyphens deliberately removed. `parse` refuses to publish otherwise. This guard caught three bugs during the rebuild.
-
-### Routing
-
-Every page gets a tier with reasons: `deterministic`, `review` (a table whose grid is uncertain), `vision` (pictures large enough to carry information), or `ocr` (no usable text layer). `parse` reports routing and processes none of it.
-
-## How it is measured
-
-Fixtures and third-party outputs stay outside the repository. Four independent checks are used, because each one alone can be gamed.
-
-### 1. Human ground truth: opendataloader-bench
-
-200 single-page PDFs with hand-made answers ([opendataloader-bench](https://github.com/opendataloader-project/opendataloader-bench), commit `7af1d8f`). Three scores: NID (reading order and text), TEDS (table structure), MHS (heading hierarchy). The scorer was reimplemented on the same libraries and reproduces the published scores of three engines to four decimals.
-
-Odd-numbered documents were the development set. Even-numbered documents were a holdout: scored in aggregate, never inspected one by one.
-
-| Split | Librarian | Nutrient | Best published engine |
-| --- | --- | --- | --- |
-| Development (100) | 0.887 | 0.876 | 0.901 |
-| Holdout (100) | 0.866 | 0.894 | 0.912 |
-| All 200 | 0.876 | 0.885 | 0.907 |
-
-| All 200, by score | Librarian | Nutrient | Best published engine |
-| --- | --- | --- | --- |
-| Reading order and text (NID) | 0.921 | 0.925 | 0.934 |
-| Table structure (TEDS) | 0.707 | 0.708 | 0.928 |
-| Heading hierarchy (MHS) | 0.802 | 0.819 | 0.821 |
-
-The engine before the rebuild scored 0.747 and crashed on five pages. Among the 14 published engines Librarian now places fifth, behind opendataloader-hybrid (0.907), Nutrient (0.885), docling (0.882) and one opendataloader variant (0.877). Every engine above it uses a trained model. Librarian parses all 200 pages in 1.7 s on one thread.
-
-The honest reading: Librarian beats Nutrient on the pages it was developed on and trails it by 0.028 on pages it never saw. The holdout gap is mostly tables (0.654 against 0.702) and headings (0.793 against 0.848). The development result overstates general accuracy; the holdout result is the one to trust.
-
-### 2. Author truth: tagged PDFs
-
-Nine tagged PDFs (432 pages). The author's own structure tags, read at test time with Poppler, are the answer key. On the Apple Style Guide: list items 0.99 precision and 1.00 recall, text similarity 0.999, headings 1.00 recall and 0.82 precision. The Apple file has 91 real heading tags; an earlier note said 203, but 112 of those are empty tags. Precision was 0.66 until the bookmark rule below: the surplus headings were bold lead-in labels that the author tagged as paragraphs.
-
-The product does not read structure tags. PDFium exposes them only through unsafe bindings, and `librarian-native` forbids unsafe code.
-
-### 3. Agreement with Nutrient on Jake's documents
-
-`crates/librarian-native/examples/layout_bench.rs` aligns our words with a Nutrient spatial response.
-
-| Measure | Make It Rain (57 pp) | Apple Style Guide (244 pp) |
-| --- | --- | --- |
-| Librarian parse | 100 ms | 666 ms |
-| Nutrient | 11,746 ms | 57,532 ms |
-| Our words matched to Nutrient | 99.89% | 99.90% |
+| Librarian parse time | 100 ms | 666 ms |
+| Nutrient response time | 11,746 ms | 57,532 ms |
+| Librarian words matched to Nutrient words | 99.89% | 99.90% |
 | Reading-order discordance | 0.012% | 0.005% |
-| Headings precision / recall | 96.8% / 44.3% | 75.9% / 69.7% |
-| List items precision / recall | 100% / 100% | 99.5% / 99.5% |
-| Table words precision / recall | none in either | 100% / 94.6% |
-| Footers precision / recall | 98.1% / 100% | 100% / 100% |
-| Table pages ours / Nutrient / shared | 0 / 0 / 0 | 12 / 13 / 12 |
+| Headings, precision / recall | 96.8% / 44.3% | 75.9% / 69.7% |
+| List items, precision / recall | 100% / 100% | 99.5% / 99.5% |
+| Table words, precision / recall | no tables | 100% / 94.6% |
+| Footers, precision / recall | 98.1% / 100% | 100% / 100% |
+| Pages with a table: Librarian / Nutrient / both | 0 / 0 / 0 | 12 / 13 / 12 |
 
-This measures agreement, not truth. Nutrient labels emphasised sentences as headings in Make It Rain, which is why recall there is low. On Apple, Nutrient labels bold lead-in labels as headings where the author's tags call them paragraphs. Following the author lowered agreement with Nutrient from 80.6% to 69.7% recall and raised accuracy against the tags. The parse times are higher than the first version (63 ms and 330 ms) because the miner now walks every drawing on the page.
+These figures measure agreement between two programs. They are not a measure of correctness. Nutrient labels emphasized sentences in Make It Rain as headings, and labels bold lead-in lines in the Apple Style Guide as headings where the author's tags mark them as paragraphs. Following the author's tags lowered heading agreement with Nutrient on that file and raised precision against the tags from 0.66 to 0.82.
 
-### 4. Robustness sweep
+```sh
+cargo run --release -p librarian-native --example layout_bench -- \
+  --pdfium /path/to/libpdfium document.pdf nutrient.json
+```
 
-1,869 PDFs from the test suites of pdf.js, pdfminer, pdfplumber, pypdf, camelot, OCRmyPDF, veraPDF, docling and unstructured, each parsed in its own process.
+### 7.4 Robustness
+
+1,869 PDFs from the test collections of pdf.js, pdfminer, pdfplumber, pypdf, camelot, OCRmyPDF, veraPDF, docling and unstructured were parsed, each in its own process.
 
 | Outcome | Files |
 | --- | --- |
 | Parsed | 1,822 |
-| Refused with a plain reason (password-protected, damaged or not a PDF) | 47 |
-| Crashed, timed out, or failed accounting | 0 |
+| Refused with a stated reason | 47 |
+| Crashed, exceeded 60 seconds, or failed accounting | 0 |
 
-Average 3.7 ms per page.
+Of the 47 refused, 24 were damaged or not PDF files and 23 were password-protected. Parse time was between 4 and 14 milliseconds per page on the two machines used.
 
-A further 18 multi-page documents with another engine's output as reference rose from 0.569 to 0.714. That is agreement with a different parser, not truth, and is used only to spot regressions.
+```sh
+python3 tools/bench/sweep.py --librarian target/release/librarian /path/to/pdf-collections
+```
 
-### 5. A real brochure
+### 7.5 One brochure
 
-Jake supplied a six-page product brochure on 2026-11-10: photographs, a shaded panel of illustrations with captions, and a 39-row specification table under a dimensioned drawing. The first parse got three things wrong. Each was fixed with a rule that also raised the benchmark, including the holdout half (0.859 to 0.866).
+On 2026-11-10 the owner supplied a six-page product brochure with photographs, a shaded panel of captioned illustrations, and a 39-row specification table beneath a dimensioned drawing. The first parse was wrong in the ways listed. Each fault was corrected by a rule of section 4.2. With those rules the holdout score of section 7.1 rose from 0.859 to 0.866.
 
-| What went wrong | Rule that fixed it |
+| Fault | Rule |
 | --- | --- |
-| Text inside a shaded panel was read as one picture, its columns interleaved | A single shape that holds running text is a panel, not a figure |
-| The table's label column collapsed into one cell | Borders that break at the same place form one grid when a drawn line crosses both, however far apart they are |
-| The drawing above the table was fused into it | Borders with no line across both and different extents are separate objects |
+| Text in the shaded panel was taken as one picture and its columns were interleaved | A single shape that encloses running text is a panel |
+| The label column of the table became one cell | Borders that break at the same position form one grid when a drawn line crosses both |
+| The drawing above the table was joined to it | Borders with no line across both and with different extents are separate |
 | The shaded header band was left out of the table | Borders that run past the last drawn line to a common end close a row |
-| A line of text was cut where it crossed a figure's box | A figure's edge never cuts a line of text |
-| An italic lead-in was split from its sentence | An italic line that runs on into the sentence is emphasis, not a block |
-| A footer with large type was read as a table | Display type above small print in one column is a layout, not a grid |
-| Footnotes marked †, ‡ merged into one | Reference marks start their own note |
+| A line of text was divided at the edge of a figure | A line of text is never divided by the edge of a figure |
+| An italic lead-in was separated from its sentence | An italic line that runs on into a sentence is not a separate block |
+| The footer, set partly in large type, was taken as a table | Widely different sizes within one column are not a table |
+| Footnotes marked with daggers were merged | A reference mark opens a footnote |
 
-Still wrong on that brochure: photo captions sit after the text of their page instead of beside their photo, a decorative dash under the cover tagline is kept as a line, and the phone number and web address are labelled headings because they are set in display type.
+Three faults remain on that brochure. Photograph captions follow the text of their page instead of standing beside their photograph. A decorative dash under the cover line is kept as a line of text. The telephone number and web address are labelled as headings because they are set in large type.
 
-## Limits
+### 7.6 Regression reference
 
-- **Scanned pages are reported, not read.** `parse` routes them to `ocr` and stops. OCR inside `parse` is not built.
-- **Tables without ruled lines are the weakest area.** The best engines use a trained table model and score 0.93 where Librarian scores 0.71.
-- **Headings are over-detected in documents that use bold lead-in labels and have no bookmarks.**
-- **Structure tags are not read** in the product, for the reason above.
-- **Undecodable fonts are caught only when they show.** A page is routed to `ocr` when its text is replacement characters or mostly private-use code points. A font that maps to wrong but valid letters is not detected.
-- **A printed table of contents is recognised but not used** to confirm heading levels.
-- **PDF only.** Text, Markdown, HTML, DOCX, PPTX and images still go through `librarian clean`.
-- **`clean` still uses the earlier pipeline** that renders and reads every page. It is as slow as before.
+Eighteen multi-page documents from the docling test collection are compared with docling's own output for them. The overall agreement rose from 0.569 to 0.714 during the rebuild. docling's output contains errors of its own. This comparison is used only to detect unintended changes.
 
-## Next milestones
+## 8. Rules for changing the parser
 
-1. A model layer for the pages and regions the routing report names: OCR for `ocr` pages, a table model for `review` regions, descriptions for `vision` pictures. This is the route to the top of the benchmark.
-2. Route `clean` through `parse`, so clean born-digital pages skip OCR and vision entirely.
-3. An editorial layer for rough prose such as transcripts: one copyedit pass per chunk, chunks in parallel, deterministic coverage accounting.
-4. Native miners for DOCX, PPTX, XLSX, HTML and plain text into the same model.
-5. Block editing on the typed model, in the terminal first.
+These rules are stated in `AGENTS.md` and apply to every change to reconstruction.
+
+1. Measure on more than one document. Do not set a threshold to suit one document.
+2. Run the benchmark of section 7.1 and read both halves. Do not examine individual holdout documents.
+3. Run the sweep of section 7.4. It must end with no crash, no timeout and no accounting failure.
+4. Keep test documents and the outputs of other products outside the repository.
+
+## 9. What the parser does not do
+
+- **Scanned pages.** A page without a usable text layer is assigned the tier `ocr` and is not read. OCR is not connected to the parser.
+- **Pictures.** A picture is recorded by position. It is not described.
+- **Tables without ruled lines.** These are the least accurate result. The engines that score highest on table structure use a trained table model.
+- **Bold lead-in lines.** In a document without bookmarks, a short bold line above a paragraph may be labelled a heading.
+- **Fonts without a Unicode mapping.** A page is assigned to `ocr` when its text is replacement characters or mostly private-use code points. A font that yields wrong but valid letters is not detected.
+- **Structure tags.** They are not read.
+- **A printed table of contents.** It is recognized as such. It is not used to confirm headings.
+- **Other formats.** Text, Markdown, HTML, office documents and images are handled only by `clean`.
+- **The editorial pipeline.** `clean` does not use the parser. It renders and reads every page as before.
+
+## 10. Work not yet done
+
+1. A model layer applied to the pages and regions named by routing: OCR for `ocr`, a table model for `review`, description for `vision`.
+2. Passing `clean` through the parser, so that pages reconstructed deterministically are not sent to OCR or to a vision model.
+3. Extraction of office documents, HTML and plain text into the same layout model.
+4. Editing of a document block by block on the layout model, in the terminal interface.
