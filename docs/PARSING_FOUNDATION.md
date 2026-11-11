@@ -10,7 +10,7 @@ The parser is the base layer of the program. On 2026-11-08 the owner directed th
 
 ## 2. Input
 
-The parser accepts PDF files. A file is refused, with the reason stated, when it is password-protected, when it is damaged or is not a PDF, when it uses a security scheme the PDF engine does not support, or when the PDF engine cannot read it for another reason.
+The parser accepts files with the extension `.pdf`, in any letter case. A file is refused, with the reason stated, when it is password-protected, when it is damaged or is not a PDF, when it uses a security scheme the PDF engine does not support, or when the PDF engine cannot read it for another reason.
 
 The PDF engine is PDFium. It is found in the workspace `engines` folder or in the `engines` folder beside the program.
 
@@ -34,7 +34,7 @@ For a source `NAME.pdf` and a results folder, the parser writes `NAME.md` and `N
 | Header, footer, page number | Omitted, unless furniture is requested |
 | Hidden text | Omitted |
 
-Bold, italic and monospaced runs inside a text are marked with `**`, `*` and backticks. A link is written as `[text](address)`. Marks are omitted where one style covers the whole element. A paragraph that continues on the next page is joined into one. A table that continues on the next page is joined into one, and a repeated header row is dropped. With page markers requested, each page boundary is marked by an HTML comment.
+In paragraphs, captions, footnotes and list items, bold, italic and monospaced runs are marked with `**`, `*` (`***` for both) and backticks, and a link is written as `[text](address)`. Marks are omitted where one style covers the whole element. Titles, headings, code and table cells carry no inline marks. In a pipe table the first row is the header row, and a line break inside a cell is written as `<br>`. A paragraph that continues on the next page is joined into one. A table that continues on the next page is joined into one, and a repeated header row is dropped. With page markers requested, `<!-- page N -->` is written before the first element of each page; no marker is written where a paragraph runs on across the boundary.
 
 The plain option omits inline marks and picture comments.
 
@@ -77,19 +77,34 @@ Each element:
 | `order` | Position in the reading order of the document |
 | `font_size`, `bold` | Dominant size and weight |
 | `spans` | Inline styles: `start` and `end` byte offsets into `text`, with `bold`, `italic`, `code` or `link` |
-| `rows`, `cols`, `cells` | For a table. Each cell has `row`, `col`, `rowspan`, `colspan`, `header`, `text`, `bbox` |
+| `rows`, `cols`, `cells` | For a table. Each cell has `row`, `col`, `text`, `bbox` and, where they apply, `rowspan`, `colspan` and `header`; with the words option, `words` |
 | `continues` | The element is completed by the next body element |
 | `tight` | The join to the next element completes a word and takes no space |
-| `origin` | `native`, or `ocr_layer` for invisible text laid over a scanned page by an earlier OCR |
+| `origin` | `native`, or `ocr_layer` for invisible text laid over a scanned page by an earlier OCR. The values `ocr` and `model` are defined for later use and are not produced |
 | `evidence` | `layout` (measured from the page), `ruling` (lines drawn in the file) or `declared` (the file's bookmarks) |
-| `confidence` | A number from 0 to 1 |
+| `confidence` | A number from 0 to 1. At most 0.8 for text from an OCR layer |
 | `words` | Indices into the page's word list. Present with the words option |
 
-With the words option, `pages` holds for each page its words (text, box, font, size, baseline, and flags for hidden and rotated text), image positions, line segments, filled rectangles, other drawings and links. `fonts` holds each font's name and whether it is bold, italic or monospaced. `outline` holds the bookmarks with level, title and page.
+A member at its default is omitted: `level` except on headings; empty `spans`, `cells` and `words`; `rows` and `cols` of 0; false `continues` and `tight`; false span flags and an absent `link`; a cell `header` that is false; `rowspan` and `colspan` of 1.
+
+With the words option, `pages` holds for each page:
+
+| Member | Meaning |
+| --- | --- |
+| `number`, `width`, `height` | The page |
+| `words` | Each word: `text`, `bbox`, `font` (index into `fonts`), `size`, `line`, `baseline`, `hyphen`, `origin`, `confidence`, and `hidden` or `rotated` when true |
+| `images` | Image positions |
+| `rules` | Straight line segments |
+| `fills` | Filled rectangles |
+| `drawings` | Bounds of other drawings |
+| `links` | Each link: `rect`, and `uri` or `page` |
+| `text_chars`, `bad_chars` | Characters in the text layer, and how many could not be decoded |
+
+`fonts` holds each font's `name` and whether it is `bold`, `italic` or `mono`. `outline` holds the bookmarks with `level`, `title`, `page` and, where the bookmark has one, the position `y`.
 
 ## 4. Method
 
-The parser has two stages. The first, in `crates/librarian-native/src/parse.rs`, reads the file through PDFium. The second, in `crates/librarian-core/src/layout/`, reconstructs the layout. The second stage performs no file access and also compiles to WebAssembly.
+The parser has two stages. The first, in `crates/librarian-native/src/parse.rs`, reads the file through PDFium. The second, in `crates/librarian-core/src/layout/`, reconstructs the layout. The second stage performs no file access. It is compiled into the WebAssembly package, but no function of that package calls it yet.
 
 ### 4.1 Extraction
 
@@ -105,20 +120,20 @@ Positions are corrected for a page whose visible area is an offset or rotated wi
 
 ### 4.2 Reconstruction
 
-The second stage applies the following steps. Each threshold is a proportion of a quantity measured on the document itself, such as its body type size or its line pitch. No threshold refers to a particular test document.
+The second stage applies the following steps. Most thresholds are proportions of a quantity measured on the document, such as its body type size or its line pitch, or of the page. A few are fixed lengths in points or fixed counts: for example, an image smaller than 14 points on a side is ignored, and a rule is at most 1.5 points thick. No threshold refers to a particular test document.
 
 1. **Measurement.** The body type size, the usual line pitch, the vocabulary, and whether the document breaks words at line ends are determined.
-2. **Text outside the reading flow.** Words outside the page box, invisible words and rotated words are set aside as hidden. If nearly all text of a page is invisible, the page carries an OCR layer; that text is then used and is marked `ocr_layer`.
-3. **Pictures.** Images are grouped into picture regions. A cluster of type much smaller than body size is taken as the content of an illustration. Groups of drawings form vector figures. A single shape that encloses running text is a panel or frame, not a figure, and is ignored. A line of text is never divided by the edge of a figure.
-4. **Captions.** A line beginning "Figure" or "Table" and a number declares the kind of the block beside it. A ruled grid captioned as a figure is treated as a picture.
+2. **Text outside the reading flow.** Words outside the page box, invisible words and rotated words are set aside as hidden. Rotated words inside a ruled table are cell content and are kept. If a page has at least 8 words and four fifths of them are invisible, the page carries an OCR layer; that text is then used and is marked `ocr_layer`.
+3. **Pictures.** Images are grouped into picture regions. An image covering 60 percent or more of the page is recorded as a background picture. A cluster of type much smaller than body size is taken as the content of an illustration. Groups of drawings form vector figures. A single shape that encloses running text is a panel or frame, not a figure, and is ignored. A line of text is never divided by the edge of a figure.
+4. **Captions.** A line that begins with "Figure" or "Table" (or "Fig", "Abbildung", "Abb", "Tabelle", "Tab") and a number is a caption anchor. A ruled grid smaller than a quarter of the page whose nearest caption, within six body sizes above or below, is a figure caption is treated as a picture.
 5. **Ruled tables.** Line segments are merged into strokes. Where borders are drawn one cell at a time, the points at which they break mark the cell corners. Borders that break at the same position are joined into one grid when a drawn line crosses both or when they share the same extent. Borders that run past the last drawn line to a common end close a row. Cells not separated by a line are merged. Tables with horizontal rules only take their columns from the text.
 6. **Regions.** The remaining words are divided by vertical bands of white space. Each band is classified. If the text on both sides reads as prose, the band separates columns. If the lines on both sides align row for row, the region is a table. Otherwise the band is ignored. A column of bullets beside its text, and a list of titles beside page numbers, are not tables. Text set in widely different sizes within one column is not a table.
 7. **Blocks.** Within a column, lines are grouped into blocks by spacing, indentation, type size and weight, and list markers. A block is a heading when it is larger or heavier than body text, or numbered as a section, and is short. A block opening with a list marker is a list item. Small type low on the page that opens with a reference mark is a footnote. A monospaced block is code.
-8. **Line-end hyphens.** A word divided at a line end is joined. The hyphen is kept when the document writes the hyphenated form elsewhere, or when the document does not divide words at line ends.
+8. **Line-end hyphens.** For a word that ends a line with a hyphen, the cases are taken in this order. A soft hyphen is removed. The hyphen is kept when the next line begins with a capital or with a character that is not a letter. It is removed when the joined form occurs elsewhere in the document. It is kept when the hyphenated form occurs elsewhere in the document. Otherwise it is kept only if the document does not divide words at line ends.
 9. **Page furniture.** Text in the top or bottom margin that recurs across pages is a header or footer. A number that advances with the page is a page number.
 10. **Bookmarks.** A block whose text matches a bookmark on its page is a heading at the bookmark's level. Where a document has at least eight such headings and its bookmarks have more than one level, a line that typography alone made a heading is returned to a paragraph if it is of body size, smaller than every bookmarked heading, not numbered as a section, and named by no bookmark.
-11. **Heading levels and title.** Remaining headings are ranked by type size. The largest type on the first pages, used once or twice, is the title.
-12. **Continuation.** A paragraph that ends without closing punctuation at the foot of a column or page is marked as continuing in the next. A table whose columns match the table that opens the next page is marked as continuing.
+11. **Heading levels and title.** Remaining headings are ranked by type size. In a document of two or more pages, a heading on page 1 or 2 in the largest heading size, at least 1.5 times body size and used at most twice, is the title. A one-page document has no title element.
+12. **Continuation.** A paragraph of at least 40 characters that ends without closing punctuation at the foot of a column or page is marked as continuing in the next paragraph, when the two are of the same type size and either the second begins with a lower-case letter or the first ends with a comma or a hyphen. A table whose columns match the table that opens the next page is marked as continuing.
 
 ## 5. Routing
 
@@ -128,13 +143,13 @@ Each page is assigned one tier. The tier states what further processing the page
 | --- | --- | --- |
 | `ocr` | The page has fewer than 16 letters and digits | "no usable text layer", or "scanned or image-only page: no usable text layer" |
 | `ocr` | More than 2 percent of characters could not be decoded | "text layer contains undecodable characters" |
-| `ocr` | More than one fifth of the readable characters are private-use code points | "much of the text uses a font with no Unicode mapping" |
+| `ocr` | More than one fifth of the letters, digits and private-use characters are private-use code points | "much of the text uses a font with no Unicode mapping" |
 | `review` | The text is an OCR layer | "text comes from an embedded OCR layer of unknown quality" |
-| `vision` | The page has a picture covering at least 3 percent of its area | "N figure(s) may carry information not in the text layer" |
+| `vision` | The page has a picture region covering at least 3 percent of its area, other than a background image | "N figure(s) may carry information not in the text layer" |
 | `review` | A table found from text alignment has low confidence | "sparse table grid: cell structure needs confirmation" |
 | `deterministic` | None of the above | "native text layer reconstructed deterministically" |
 
-Where several apply, the page takes the highest of `ocr`, `vision`, `review`, `deterministic`, and all reasons are listed.
+Of the four conditions on the text layer, only the first that holds, in the order of the table, is recorded. The picture and table reasons are added to it. The page takes the highest tier among those recorded, in the order `ocr`, `vision`, `review`, `deterministic`.
 
 ## 6. Accounting
 
@@ -142,7 +157,7 @@ After reconstruction the parser verifies that every word of the file belongs to 
 
 ## 7. Measurements
 
-The figures below were taken on 2026-11-10 with the build that is on the branch. Test documents and the outputs of other products are kept outside the repository. The scripts are in `tools/bench/`. They need Python with the packages in `tools/bench/requirements.txt`.
+The figures below were taken on 2026-11-10 with the build that is on the branch. Test documents and the outputs of other products are kept outside the repository. The scripts are in `tools/bench/`. They need Python with the packages in `tools/bench/requirements.txt`. Each accepts `--pdfium FILE` to name the PDFium library; without it the engine installed in the workspace is used. `benchmark.py` and `tagged.py` delete an existing `--out` folder before they start. `tagged.py` needs Poppler's `pdfinfo` on the search path. `sweep.py` accepts `--jobs` (default 4) and `--timeout` in seconds (default 60).
 
 ### 7.1 Human ground truth
 
@@ -205,6 +220,8 @@ cargo run --release -p librarian-native --example layout_bench -- \
   --pdfium /path/to/libpdfium document.pdf nutrient.json
 ```
 
+Several pairs of PDF and response may be given. `--explain` lists the disagreements.
+
 ### 7.4 Robustness
 
 1,869 PDFs from the test collections of pdf.js, pdfminer, pdfplumber, pypdf, camelot, OCRmyPDF, veraPDF, docling and unstructured were parsed, each in its own process.
@@ -257,7 +274,7 @@ These rules are stated in `AGENTS.md` and apply to every change to reconstructio
 - **Pictures.** A picture is recorded by position. It is not described.
 - **Tables without ruled lines.** These are the least accurate result. The engines that score highest on table structure use a trained table model.
 - **Bold lead-in lines.** In a document without bookmarks, a short bold line above a paragraph may be labelled a heading.
-- **Fonts without a Unicode mapping.** A page is assigned to `ocr` when its text is replacement characters or mostly private-use code points. A font that yields wrong but valid letters is not detected.
+- **Fonts without a Unicode mapping.** A page is assigned to `ocr` when more than 2 percent of its characters are undecodable or more than one fifth are private-use code points. A font that yields wrong but valid letters is not detected.
 - **Structure tags.** They are not read.
 - **A printed table of contents.** It is recognized as such. It is not used to confirm headings.
 - **Other formats.** Text, Markdown, HTML, office documents and images are handled only by `clean`.

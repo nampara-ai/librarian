@@ -3,8 +3,9 @@ use super::geom::{median, quantile, union_all};
 use super::{DocumentInput, Font, PageInput, Rect, Span, Word};
 use std::collections::{HashMap, HashSet};
 
-/// Statistics measured on the document itself. Every threshold in the layout
-/// engine is expressed relative to these, never as an absolute coordinate.
+/// Statistics measured on the document itself. Most thresholds in the layout
+/// engine are expressed relative to these; a few are fixed lengths in points.
+/// None refers to a particular document.
 pub(crate) struct DocStats {
     /// Size most of the text is set in.
     pub body: f32,

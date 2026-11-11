@@ -43,7 +43,7 @@ A source build carries no engines. Setup downloads and verifies the PDF and OCR 
 
 Run `librarian`. On first use, Setup asks for a workspace folder, a provider, an API key, a model and processing defaults. It then loads the engines and sends one small billed test request to the model. Home is shown when Setup has completed. Later starts go directly to Home.
 
-To parse a PDF without Setup, use the command line:
+To parse a PDF without Setup, use the command line. With a source build, run `librarian engines install` once first.
 
 ```sh
 librarian parse document.pdf -o results --create-output
@@ -86,18 +86,18 @@ The complete list is in section 6 of the [terminal reference](docs/RUST_FOUNDATI
 
 ## Properties
 
-- A source file is never modified. A copy of each imported source is kept in the workspace.
+- A source file is never modified. When a job first runs, a copy of its source is stored in the workspace.
 - A published file is never replaced.
 - An API key is stored in the system credential store, or held for the session only. It is not written to the configuration file, job records, logs or command-line arguments.
 - Work is recorded in a local database as it is done. An interrupted job resumes from its last checkpoint.
 - A job keeps the configuration it was queued with. Changing Setup does not alter queued jobs.
-- Request, token and cost ceilings apply to each job. A job that reaches a ceiling stops and may be resumed.
+- Request, token and cost ceilings apply to each job. A job that reaches a ceiling stops. It keeps the ceilings it was queued with; to continue under higher ceilings, change the configuration and run `librarian retry`.
 
 ## Limits
 
 - The parser reads PDF files only, and does not read scanned pages. It reports them.
 - Clean does not yet use the parser. It renders every page to an image and reads it with OCR and the model.
-- The terminal interface requires Setup, including a provider and a key, before Home is shown. This applies to Parse in the terminal interface also.
+- The terminal interface requires Setup, including a provider and, except for a server on the local host, a key, before Home is shown. This applies to Parse in the terminal interface also.
 - A status of `complete` records that processing reached its end. It does not state that the published text is correct.
 - The developers have made no paid document runs with this build. Acceptance on the owner's documents and keys has not yet been carried out.
 

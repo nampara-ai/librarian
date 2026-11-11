@@ -232,7 +232,8 @@ Enter / Space / Esc / x                      Close
 AUTOMATIC STEPS
 
 A step shows its progress. When it completes, x, Enter or Space continues.
-Esc cancels the step and goes back. A step that fails cannot be passed.
+Esc cancels the step and goes back; pressed after the step has completed,
+it discards the result. A step that fails cannot be passed.
 
 COPY / PASTE
 
@@ -250,8 +251,8 @@ COMMAND LINE
 
 parse FILE|FOLDER -o FOLDER · clean SOURCE -o FOLDER · status
 show ID · pages ID · print ID · export ID --output FOLDER · doctor
-Run librarian --help for every command. The README beside the program is
-the complete reference.";
+Run librarian --help for every command. The complete reference is the
+README in a package, or docs/RUST_FOUNDATION.md in the repository.";
 
 fn pause(app: &mut App, library: &Library, id: i64) -> Result<()> {
     app.message = if library.control(Some(id), "pause")? > 0 {

@@ -34,7 +34,8 @@ struct Cli {
     /// Configuration file to use instead of config.toml in the workspace.
     #[arg(long, global = true)]
     config: Option<PathBuf>,
-    /// Emit machine-readable JSON instead of animated terminal output.
+    /// Print JSON in place of text where a command prints text; most
+    /// inspection commands print JSON in any case.
     #[arg(long, global = true)]
     json: bool,
     #[command(subcommand)]
@@ -121,7 +122,8 @@ enum Command {
     },
     /// Full-text search of accepted document content.
     Search {
-        /// Words to find. Every word must occur; each is matched literally.
+        /// Words to find. Every word must occur in the same passage; each is
+        /// matched literally.
         query: String,
         /// Maximum number of results.
         #[arg(short, long, default_value_t = 20)]
@@ -134,7 +136,7 @@ enum Command {
     },
     /// Render the source and run local OCR only; no paid calls or document export.
     Prepare {
-        /// Source file.
+        /// Source file, or a folder whose files are each prepared.
         source: PathBuf,
     },
     /// Inspect the ordered image/OCR/visual/copyeditor matrix for a run.
@@ -189,9 +191,11 @@ enum Command {
         #[arg(long)]
         create_output: bool,
     },
-    /// Inspect configuration and engine availability without provider requests.
+    /// Print the configuration in use, the pinned engine assets and the office
+    /// renderer found. No provider request is made.
     Doctor {
-        /// Load native libraries and OCR model sessions to diagnose ABI/model errors.
+        /// Also load PDFium and the OCR models, to confirm they are installed
+        /// and usable.
         #[arg(long)]
         load_engines: bool,
     },
@@ -234,7 +238,8 @@ enum Command {
     Convert {
         /// A .txt, .md or .markdown file.
         source: PathBuf,
-        /// Markdown file to write; it must not exist. Omit to print.
+        /// Markdown file to write. It must end in .md and must not exist. Omit
+        /// to print.
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
@@ -261,7 +266,8 @@ enum ConfigCommand {
     },
     /// Open the file in $VISUAL or $EDITOR, then validate it.
     Edit,
-    /// Copy the file to a dated backup, then write the defaults.
+    /// Copy an existing file to config.toml.backup-SECONDS, then write the
+    /// defaults.
     Reset,
 }
 #[derive(Subcommand)]
