@@ -1,0 +1,11 @@
+# Lint settings for the scripts that package and measure the Rust program.
+# The rule selection is inherited from the repository's pyproject.toml.
+extend = "../pyproject.toml"
+
+[lint]
+# These rules are added to the inherited ignore list for this directory only.
+# E501: the scripts hold fixture XML and long argument lists on single lines.
+# S603, S607: the scripts run build tools (cargo, git, rustc, hdiutil, pdfinfo)
+#   found on PATH, with argument lists and without a shell. The two rules flag
+#   every such call and do not identify a defect in any of them.
+ignore = ["E501", "S603", "S607"]

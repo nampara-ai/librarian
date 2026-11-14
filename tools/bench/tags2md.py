@@ -75,7 +75,8 @@ def emit(node, out):
                 out.append("- " + text)
         elif kind == "Table":
             rows = []
-            def walk(n):
+
+            def walk(n, rows=rows):
                 for c in n.children:
                     if isinstance(c, str):
                         continue

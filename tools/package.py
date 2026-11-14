@@ -7,7 +7,6 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
 import shutil
 import subprocess
 import tarfile
@@ -17,6 +16,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+from pathlib import Path, PurePosixPath
+
 from office_bundle import bundle as office_bundle
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,7 +60,9 @@ def download_once(spec, cache, archive):
         with tempfile.NamedTemporaryFile(dir=cache, delete=False) as output:
             pending = Path(output.name)
             print(f"Downloading {spec['name']}", flush=True)
-            with urllib.request.urlopen(spec["url"], timeout=600) as source:
+            # The URL is a pinned https address from engine-assets.json; the archive is
+            # rejected below unless its SHA-256 matches the pinned value.
+            with urllib.request.urlopen(spec["url"], timeout=600) as source:  # noqa: S310
                 expected_size=source.headers.get("Content-Length")
                 shutil.copyfileobj(source, output)
                 if expected_size is not None and output.tell()!=int(expected_size):

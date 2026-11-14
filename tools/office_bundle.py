@@ -3,7 +3,6 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
 import plistlib
 import re
 import shutil
@@ -11,6 +10,7 @@ import subprocess
 import tarfile
 import tempfile
 import urllib.request
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = "26.8.2"
@@ -44,7 +44,9 @@ def bundle(target):
     if not archive.exists() or digest(archive) != expected:
         partial = archive.with_suffix(archive.suffix + ".partial")
         print(f"Downloading LibreOffice {VERSION} for {target}", flush=True)
-        with urllib.request.urlopen(BASE + relative, timeout=600) as response, partial.open("wb") as output:
+        # BASE is a constant https address; the archive is rejected below unless its
+        # SHA-256 matches the pinned value.
+        with urllib.request.urlopen(BASE + relative, timeout=600) as response, partial.open("wb") as output:  # noqa: S310
             shutil.copyfileobj(response, output)
         if digest(partial) != expected:
             raise RuntimeError("Office renderer checksum mismatch")

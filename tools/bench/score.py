@@ -10,7 +10,6 @@ usage: score.py <ground-truth-dir> <prediction-markdown-dir> [--json out.json] [
 import json
 import re
 import sys
-from collections import deque
 from html import escape, unescape
 from multiprocessing import Pool
 from pathlib import Path
@@ -18,7 +17,7 @@ from statistics import fmean
 
 from apted import APTED, Config
 from bs4 import BeautifulSoup
-from lxml import etree, html
+from lxml import html
 from rapidfuzz import fuzz
 from rapidfuzz.distance import Levenshtein
 
@@ -65,10 +64,14 @@ def tables_to_html(md):
     while i < len(lines):
         head = split_row(lines[i])
         if not head or i + 1 >= len(lines):
-            out.append(lines[i]); i += 1; continue
+            out.append(lines[i])
+            i += 1
+            continue
         sep = split_row(lines[i + 1])
         if not sep or not is_separator(sep):
-            out.append(lines[i]); i += 1; continue
+            out.append(lines[i])
+            i += 1
+            continue
         width = max(len(head), len(sep))
         head = fit(head, width)
         rows, j = [], i + 2
@@ -76,7 +79,8 @@ def tables_to_html(md):
             r = split_row(lines[j])
             if not r:
                 break
-            rows.append(fit(r, width)); j += 1
+            rows.append(fit(r, width))
+            j += 1
         if head and all(c == "" for c in head) and rows:
             head = rows.pop(0)
         table = ("<table><tr>" + "".join(f"<th>{escape(c)}</th>" for c in head) + "</tr>"
@@ -171,7 +175,10 @@ def headings(gt, pred):
     n = max(count(g), count(p), 1)
     a = float(APTED(g, p, HeadingCost(True)).compute_edit_distance())
     b = float(APTED(g, p, HeadingCost(False)).compute_edit_distance())
-    clamp = lambda v: max(0.0, min(1.0, v))
+
+    def clamp(v):
+        return max(0.0, min(1.0, v))
+
     return clamp(1 - a / n), clamp(1 - b / n)
 
 
@@ -198,13 +205,13 @@ class TableCost(Config):
 
 
 def tokens(node, acc):
-    acc.append("<%s>" % node.tag)
+    acc.append(f"<{node.tag}>")
     if node.text is not None:
         acc.extend(node.text)
     for child in node.getchildren():
         tokens(child, acc)
     if node.tag != "unk":
-        acc.append("</%s>" % node.tag)
+        acc.append(f"</{node.tag}>")
     if node.tag != "td" and node.tail is not None:
         acc.extend(node.tail)
 

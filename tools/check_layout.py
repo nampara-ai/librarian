@@ -4,11 +4,12 @@ No network/model calls. This checks native-engine interoperability in each relea
 package, page ordering, and whether text survives conversion into the page matrix.
 """
 import json
-from pathlib import Path
 import sqlite3
 import subprocess
 import tempfile
+from pathlib import Path
 from zipfile import ZipFile
+
 
 def documents(folder):
     docx = folder / "layout.docx"

@@ -20,38 +20,46 @@ from rapidfuzz import fuzz
 
 HERE = Path(__file__).resolve().parent
 
-norm=lambda s: re.sub(r"[^0-9a-z\u00c0-\ud7ff]+","",s.lower())
+def norm(s):
+    return re.sub(r"[^0-9a-z\u00c0-\ud7ff]+","",s.lower())
 def blocks(md):
     md=re.sub(r"<table>.*?</table>", lambda m: "\n\n"+m.group(0).replace("\n"," ")+"\n\n", md, flags=re.S)
     out=[]
     for b in re.split(r"\n\s*\n", md):
         b=b.strip()
-        if b: out.append(b)
+        if b:
+            out.append(b)
     return out
 def kinds(md):
     h,li,tables,cells=[],[],0,collections.Counter()
     for b in blocks(md):
-        if b.startswith("#"): h.append(norm(b.lstrip("#")))
+        if b.startswith("#"):
+            h.append(norm(b.lstrip("#")))
         elif b.startswith("<table"):
             tables+=1
             for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", b, re.S):
                 k=norm(re.sub(r"<[^>]+>"," ",c))
-                if k: cells[k]+=1
+                if k:
+                    cells[k]+=1
         elif b.startswith("|"):
             tables+=1
             for row in b.splitlines():
-                if set(row.replace("|","").strip())<=set("-: "): continue
+                if set(row.replace("|","").strip())<=set("-: "):
+                    continue
                 for c in row.strip().strip("|").split("|"):
                     k=norm(c)
-                    if k: cells[k]+=1
+                    if k:
+                        cells[k]+=1
         else:
             for line in b.splitlines():
-                if line.startswith("- "): li.append(norm(re.sub(r"^-\s*[•◦▪·*–-]?\s*","",line))[:60])
+                if line.startswith("- "):
+                    li.append(norm(re.sub(r"^-\s*[•◦▪·*–-]?\s*","",line))[:60])
     return h,li,tables,cells
 def prf(truth,ours):
     t,o=collections.Counter(truth),collections.Counter(ours)
     hit=sum((t&o).values())
-    p=hit/max(sum(o.values()),1); r=hit/max(sum(t.values()),1)
+    p=hit/max(sum(o.values()),1)
+    r=hit/max(sum(t.values()),1)
     return p,r
 
 
@@ -87,10 +95,16 @@ def main():
         lp, lr = prf(tl, ol)
         shared = sum((tc & oc).values())
         cp, cr = shared / max(sum(oc.values()), 1), shared / max(sum(tc.values()), 1)
-        plain = lambda s: re.sub(r"\s+", " ", re.sub(r"<[^>]+>|[#|]", " ", s))
+
+        def plain(s):
+            return re.sub(r"\s+", " ", re.sub(r"<[^>]+>|[#|]", " ", s))
+
         a, c = plain(t), plain(o)
         sim = fuzz.ratio(a[:300000], c[:300000]) / 100 if a else float("nan")
-        cell = lambda p, r, n, m: f"{p:.2f}/{r:.2f} ({n},{m})" if n or m else "  -"
+
+        def cell(p, r, n, m):
+            return f"{p:.2f}/{r:.2f} ({n},{m})" if n or m else "  -"
+
         print(f"{truth.stem[:34]:34} {cell(hp, hr, len(th), len(oh)):28} "
               f"{cell(lp, lr, len(tl), len(ol)):22} {str(tt) + '/' + str(ot):18} "
               f"{(f'{cp:.2f}/{cr:.2f}' if tt else '  -'):14} {sim:.3f}")
