@@ -1,5 +1,16 @@
 name: Librarian terminal builds
 
+# This workflow validates the Rust terminal program and the scripts under
+# tools/. The legacy Python application is validated by ci.yml.
+#
+# There is no path filter on pull requests. A workflow that a path filter
+# skips reports nothing, and a required check that reports nothing never
+# completes. The job "changes" decides which jobs run instead. A job skipped
+# by its "if" condition reports "skipped", which a required check accepts.
+# "Rust required" is the check to require on main. Do not require the
+# "Native (...)" checks one by one: GitHub evaluates a job's "if" before it
+# expands the matrix, so a skipped "native" job reports no per-target check.
+
 on:
   workflow_dispatch:
   push:
@@ -17,19 +28,6 @@ on:
       - 'LICENSE'
       - '.github/workflows/rust-foundation.yml'
   pull_request:
-    paths:
-      - 'Cargo.*'
-      - 'rust-toolchain.toml'
-      - 'crates/**'
-      - 'tools/package.py'
-      - 'tools/office_bundle.py'
-      - 'tools/check_layout.py'
-      - 'docs/RUST_FOUNDATION.md'
-      - 'docs/PARSING_FOUNDATION.md'
-      - 'docs/THIRD_PARTY.md'
-      - 'docs/licenses/**'
-      - 'LICENSE'
-      - '.github/workflows/rust-foundation.yml'
 
 permissions:
   contents: read
@@ -43,8 +41,104 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  changes:
+    name: Rust changes
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.areas.outputs.rust }}
+      tools: ${{ steps.areas.outputs.tools }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Find the areas this change touches
+        id: areas
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # A push that passed the path filter above and a manual run check
+          # everything. A pull request is compared with its merge base. When
+          # the comparison cannot be made, everything is checked.
+          everything=false
+          merge_base=""
+          sha='^[0-9a-f]{40,64}$'
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "Event ${EVENT_NAME}: every area is treated as changed."
+            everything=true
+          elif ! [[ "${BASE_SHA:-}" =~ $sha && "${HEAD_SHA:-}" =~ $sha ]]; then
+            echo "The event names no base or head commit: every area is treated as changed."
+            everything=true
+          elif ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null \
+            || ! git cat-file -e "${HEAD_SHA}^{commit}" 2>/dev/null; then
+            echo "The base or head commit was not fetched: every area is treated as changed."
+            everything=true
+          elif ! merge_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")" || [ -z "$merge_base" ]; then
+            echo "The base and head commits share no history: every area is treated as changed."
+            everything=true
+          fi
+
+          rust=false
+          tools=false
+          if [ "$everything" = true ]; then
+            rust=true
+            tools=true
+          else
+            changed="${RUNNER_TEMP}/changed-paths"
+            git diff --name-only --no-renames -z "$merge_base" "$HEAD_SHA" > "$changed"
+            count=0
+            while IFS= read -r -d '' path; do
+              count=$((count + 1))
+              # The program, its packaging tools and the documents it ships.
+              case "$path" in
+                Cargo.toml|Cargo.lock|rust-toolchain.toml|crates/*) rust=true ;;
+                tools/package.py|tools/office_bundle.py|tools/check_layout.py) rust=true ;;
+                docs/RUST_FOUNDATION.md|docs/PARSING_FOUNDATION.md|docs/THIRD_PARTY.md) rust=true ;;
+                docs/licenses/*|LICENSE|.github/workflows/rust-foundation.yml) rust=true ;;
+              esac
+              # The Python scripts and the lint settings they inherit.
+              case "$path" in
+                tools/*|pyproject.toml|.github/workflows/rust-foundation.yml) tools=true ;;
+              esac
+            done < "$changed"
+            echo "Compared ${merge_base} with ${HEAD_SHA}: ${count} changed paths."
+          fi
+
+          echo "rust=${rust}" | tee -a "$GITHUB_OUTPUT"
+          echo "tools=${tools}" | tee -a "$GITHUB_OUTPUT"
+
+  tools-lint:
+    name: Tools lint
+    needs: changes
+    if: needs.changes.outputs.tools == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install Ruff
+        # The same requirement as the "dev" extra in pyproject.toml, which the
+        # release workflow installs before it runs "ruff check .".
+        run: |
+          python3 -m venv "$RUNNER_TEMP/ruff"
+          "$RUNNER_TEMP/ruff/bin/python" -m pip install "ruff>=0.6.9"
+      - name: Lint the packaging and measurement scripts
+        # Settings: tools/ruff.toml, which extends pyproject.toml.
+        run: |
+          "$RUNNER_TEMP/ruff/bin/ruff" check tools
+
   models:
     name: Verified office renderer and OCR models
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
@@ -75,7 +169,8 @@ jobs:
 
   native:
     name: Native (${{ matrix.target }})
-    needs: models
+    needs: [changes, models]
+    if: needs.changes.outputs.rust == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -131,6 +226,8 @@ jobs:
 
   wasm:
     name: WASM build
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
@@ -155,3 +252,57 @@ jobs:
             crates/librarian-wasm/pkg
             crates/librarian-wasm/pkg-web
           if-no-files-found: error
+
+  # Always runs and always reports. It fails when a job that had to run did
+  # not succeed, and passes when the jobs succeeded or did not apply.
+  rust-required:
+    name: Rust required
+    needs: [changes, tools-lint, models, native, wasm]
+    if: always()
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Report the result of the Rust checks
+        shell: bash
+        env:
+          RUST: ${{ needs.changes.outputs.rust }}
+          TOOLS: ${{ needs.changes.outputs.tools }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          TOOLS_LINT_RESULT: ${{ needs.tools-lint.result }}
+          MODELS_RESULT: ${{ needs.models.result }}
+          NATIVE_RESULT: ${{ needs.native.result }}
+          WASM_RESULT: ${{ needs.wasm.result }}
+        run: |
+          set -euo pipefail
+
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            echo "::error::The job that finds the changed areas ended as ${CHANGES_RESULT}."
+            exit 1
+          fi
+          for area in "$RUST" "$TOOLS"; do
+            if [ "$area" != "true" ] && [ "$area" != "false" ]; then
+              echo "::error::The changed areas were not reported."
+              exit 1
+            fi
+          done
+
+          failed=0
+          # check NAME RESULT APPLIES: a job that applies must have succeeded,
+          # and a job that does not apply must have been skipped.
+          check() {
+            local expected=skipped
+            if [ "$3" = "true" ]; then
+              expected=success
+            fi
+            if [ "$2" = "$expected" ]; then
+              echo "$1: $2"
+            else
+              echo "::error::$1 ended as $2; expected ${expected}."
+              failed=1
+            fi
+          }
+          check "Tools lint" "$TOOLS_LINT_RESULT" "$TOOLS"
+          check "Verified office renderer and OCR models" "$MODELS_RESULT" "$RUST"
+          check "Native, all targets" "$NATIVE_RESULT" "$RUST"
+          check "WASM build" "$WASM_RESULT" "$RUST"
+          exit "$failed"

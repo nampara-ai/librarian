@@ -14,6 +14,9 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --locked -p librarian-core -p librarian-native --lib --test persistence
 ```
 
+The Python scripts under `tools/` package and measure the program. Lint them with
+`ruff check tools`. Their lint settings are in `tools/ruff.toml`.
+
 The collaboration rules, including the testing policy and the rules for measuring changes to the
 PDF parser, are in `AGENTS.md`. The measurement scripts are in `tools/bench/`. Benchmark fixtures
 and third-party outputs are kept outside the repository.
@@ -65,3 +68,17 @@ librarian maintainer eval examples/eval_cases.json
 librarian maintainer benchmark --input-path examples/benchmark_text.txt --repeats 3
 docker compose up --build
 ```
+
+## Pull request checks
+
+The workflows `Librarian terminal builds` and `CI` start on every pull request. Each compares
+the pull request with its merge base and runs only the jobs for the files that changed. A job
+that does not apply is reported as skipped.
+
+| Workflow | File | Runs its jobs when these change | Final check |
+| --- | --- | --- | --- |
+| Librarian terminal builds | `.github/workflows/rust-foundation.yml` | `crates/`, the Cargo files, the packaging tools, the packaged documents. The lint job runs for any file under `tools/` and for `pyproject.toml` | `Rust required` |
+| CI | `.github/workflows/ci.yml` | `src/`, `tests/`, `apps/`, `examples/`, the Python packaging and container files, the workflows, and the documents the tests read | `Legacy required` |
+
+`Rust required` and `Legacy required` always run. Each fails if a job that had to run did
+not succeed. The exact path lists are in the job `changes` of each workflow.
