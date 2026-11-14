@@ -83,7 +83,9 @@ fn describe(outcome: &parse_cmd::Outcome) -> String {
             text.push_str(&format!("  {} — {error}\n", source.display()));
         }
     }
-    text.push_str("\nSelect a file to read its Markdown.");
+    if !outcome.files.is_empty() {
+        text.push_str("\nSelect a file to read its Markdown.");
+    }
     text
 }
 
@@ -273,6 +275,16 @@ pub fn run(terminal: &mut ratatui::DefaultTerminal, root: &Path) -> Result<Optio
                         "Choose a source (step 1) and a destination (step 2) first.",
                     )?;
                     draft.field = usize::from(!draft.source.is_empty());
+                    continue;
+                }
+                // Parsing needs the PDF engine and nothing else. It is
+                // installed here the first time, if the program was not
+                // supplied with one.
+                if !crate::onboarding::ensure_engines(
+                    terminal,
+                    root,
+                    librarian_native::assets::PDF,
+                )? {
                     continue;
                 }
                 let source = crate::setup::expand_path(&draft.source);

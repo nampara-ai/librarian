@@ -38,9 +38,8 @@ pub fn pdfium(library_root: &Path, explicit: Option<&Path>) -> Result<Pdfium> {
             &Pdfium::pdfium_platform_library_name().to_string_lossy(),
         )?,
     };
-    Ok(Pdfium::new(Pdfium::bind_to_library(&path).with_context(
-        || format!("Cannot load PDFium from {}", path.display()),
-    )?))
+    crate::assets::bind_pdfium(&path)
+        .with_context(|| format!("Cannot load PDFium from {}", path.display()))
 }
 
 pub fn supported(path: &Path) -> bool {

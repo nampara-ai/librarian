@@ -341,7 +341,7 @@ when the configured provider is needed for cleaning, classification, OCR correct
 refinement, or figure descriptions. With the default `mock` provider, nothing leaves your machine.
 Keep CLI/API provider keys in environment variables or `.env`, and Mac app keys in Keychain; never
 commit them. CI runs secret scanning, dependency audit, type checking, the full test suite, a wheel
-smoke-install, and Docker build checks on every change.
+smoke-install, and Docker build checks on every change to the legacy application.
 
 ---
 

@@ -344,7 +344,78 @@ fn crop_quad(image: &RgbImage, p: [[f32; 2]; 4]) -> RgbImage {
     }
 }
 
+/// The language names in the output of `tesseract --list-langs`. The first
+/// line is a heading; `osd` is script detection, not a language.
+pub fn parse_tesseract_languages(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .skip(1)
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && *line != "osd" && !line.contains(char::is_whitespace))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The languages for which Tesseract has data on this machine.
+pub fn tesseract_languages() -> Result<Vec<String>> {
+    let output = std::process::Command::new("tesseract")
+        .arg("--list-langs")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .context(
+            "Tesseract could not be started. Install it, or choose the bundled Paddle engine.",
+        )?;
+    if !output.status.success() {
+        bail!("Tesseract did not list its languages; repair the installation or choose Paddle");
+    }
+    // Releases differ on which stream carries the list.
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    if parse_tesseract_languages(&text).is_empty() {
+        text = String::from_utf8_lossy(&output.stderr).into_owned();
+    }
+    let languages = parse_tesseract_languages(&text);
+    if languages.is_empty() {
+        bail!("Tesseract reports no installed language data");
+    }
+    Ok(languages)
+}
+
+/// The value to pass to Tesseract for a configured language. A value whose
+/// parts are all installed is used as it is. The codes `en`, `zh` and `ja`,
+/// which earlier configuration files hold, stand for `eng`, `chi_sim` and
+/// `jpn`. Anything else is an error that names what is installed.
+pub fn tesseract_language(configured: &str, installed: &[String]) -> Result<String> {
+    let has = |name: &str| installed.iter().any(|i| i == name);
+    if !configured.is_empty() && configured.split('+').all(has) {
+        return Ok(configured.to_owned());
+    }
+    let earlier = match configured {
+        "en" => Some("eng"),
+        "zh" => Some("chi_sim"),
+        "ja" => Some("jpn"),
+        _ => None,
+    };
+    if let Some(name) = earlier.filter(|name| has(name)) {
+        return Ok(name.to_owned());
+    }
+    bail!(
+        "Tesseract has no language data for '{configured}'. Installed: {}. Choose one in Setup, under Processing defaults.",
+        installed.join(", ")
+    )
+}
+
+fn resolved_tesseract_language(configured: &str) -> Result<String> {
+    static INSTALLED: std::sync::OnceLock<std::result::Result<Vec<String>, String>> =
+        std::sync::OnceLock::new();
+    match INSTALLED.get_or_init(|| tesseract_languages().map_err(|e| format!("{e:#}"))) {
+        Ok(installed) => tesseract_language(configured, installed),
+        Err(message) => bail!("{message}"),
+    }
+}
+
 pub async fn tesseract(image: &Path, language: &str) -> Result<OcrResult> {
+    let language = resolved_tesseract_language(language)?;
+    let language = language.as_str();
     let mut command = tokio::process::Command::new("tesseract");
     command
         .arg(image)
@@ -396,4 +467,32 @@ pub async fn tesseract(image: &Path, language: &str) -> Result<OcrResult> {
         findings,
         engine: "tesseract-external".into(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The language passed to Tesseract is one it has data for, and values
+    /// from earlier configuration files still select the language they meant.
+    #[test]
+    fn tesseract_language_is_checked_against_installed_data() {
+        let installed = parse_tesseract_languages(
+            "List of available languages in \"/usr/share/tessdata/\" (4):\nchi_sim\ndeu\neng\nosd\n",
+        );
+        assert_eq!(installed, ["chi_sim", "deu", "eng"]);
+        assert_eq!(tesseract_language("deu", &installed).unwrap(), "deu");
+        assert_eq!(
+            tesseract_language("eng+deu", &installed).unwrap(),
+            "eng+deu"
+        );
+        assert_eq!(tesseract_language("en", &installed).unwrap(), "eng");
+        assert_eq!(tesseract_language("zh", &installed).unwrap(), "chi_sim");
+        for absent in ["ja", "auto", "fra", "eng+fra", ""] {
+            let error = tesseract_language(absent, &installed)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("chi_sim, deu, eng"), "{error}");
+        }
+    }
 }

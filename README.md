@@ -24,7 +24,7 @@ Both Parse and Clean are available from the command line and from the terminal i
 | [docs/IMPLEMENTATION_PROGRESS.md](docs/IMPLEMENTATION_PROGRESS.md) | Dated ledger of the first terminal implementation. Historical |
 | [docs/TERMINAL_REBUILD.md](docs/TERMINAL_REBUILD.md) | Design notes written before the rebuild. Historical. Not a description of the program |
 
-The repository also holds the earlier Python and Swift application, version 1.10.3, under `src/`, `apps/` and `tests/`. It is kept for reference and is not built or tested on this branch. Its documents are [docs/LEGACY_README.md](docs/LEGACY_README.md), `docs/API.md`, `docs/ARCHITECTURE.md`, `docs/DEPLOYMENT.md`, `docs/OPERATIONS.md`, `docs/OKF.md` and `docs/EDITORIAL_EVALUATION.md`. The commands and settings they name are not those of the Rust program.
+The repository also holds the earlier Python and Swift application, version 1.10.3, under `src/`, `apps/` and `tests/`. It is kept for reference. The workflow "CI" checks it when its files change. Its documents are [docs/LEGACY_README.md](docs/LEGACY_README.md), `docs/API.md`, `docs/ARCHITECTURE.md`, `docs/DEPLOYMENT.md`, `docs/OPERATIONS.md`, `docs/OKF.md` and `docs/EDITORIAL_EVALUATION.md`. The commands and settings they name are not those of the Rust program.
 
 ## Installation
 
@@ -41,13 +41,17 @@ A source build carries no engines. Setup downloads and verifies the PDF and OCR 
 
 ## First use
 
-Run `librarian`. On first use, Setup asks for a workspace folder, a provider, an API key, a model and processing defaults. It then loads the engines and sends one small billed test request to the model. Home is shown when Setup has completed. Later starts go directly to Home.
+Run `librarian`. The first start asks for a workspace folder and then shows Home. PDFs can be parsed at once: press **a**. Parsing needs no account, no key and no payment. If the program was built from source, the PDF engine is downloaded and verified the first time it is needed.
 
-To parse a PDF without Setup, use the command line. With a source build, run `librarian engines install` once first.
+Cleaning documents with AI needs a provider, a key and a model. Librarian asks for them when such work is first queued, or from Setup (**f**). Connecting a provider ends with one test request that the provider bills. That request is repeated only when the provider, the key or the model changes.
+
+From the command line, without the terminal interface:
 
 ```sh
 librarian parse document.pdf -o results --create-output
 ```
+
+With a source build, run `librarian engines install` once before the first `parse` from the command line.
 
 ## Home
 
@@ -78,6 +82,7 @@ librarian show 12
 librarian print 12
 librarian search 'a phrase'
 librarian export 12 -o other-folder --create-output
+librarian budget 12 --max-requests 20000 --resume --start
 librarian doctor
 librarian --help
 ```
@@ -88,16 +93,15 @@ The complete list is in section 6 of the [terminal reference](docs/RUST_FOUNDATI
 
 - A source file is never modified. When a job first runs, a copy of its source is stored in the workspace.
 - A published file is never replaced.
-- An API key is stored in the system credential store, or held for the session only. It is not written to the configuration file, job records, logs or command-line arguments.
+- An API key is stored in the system credential store, or held for the session only. It is not written to the configuration file, job records, logs or command-line arguments. It is stored only when Setup is saved; leaving Setup earlier changes nothing.
 - Work is recorded in a local database as it is done. An interrupted job resumes from its last checkpoint.
 - A job keeps the configuration it was queued with. Changing Setup does not alter queued jobs.
-- Request, token and cost ceilings apply to each job. A job that reaches a ceiling stops. It keeps the ceilings it was queued with; to continue under higher ceilings, change the configuration and run `librarian retry`.
+- Request, token and cost ceilings apply to each job. A job that reaches a ceiling stops and keeps its work. Its ceiling can then be raised, with explicit authorization, and the job continues from its checkpoint. What was used is not reset, and each change is recorded.
 
 ## Limits
 
 - The parser reads PDF files only, and does not read scanned pages. It reports them.
 - Clean does not yet use the parser. It renders every page to an image and reads it with OCR and the model.
-- The terminal interface requires Setup, including a provider and, except for a server on the local host, a key, before Home is shown. This applies to Parse in the terminal interface also.
 - A status of `complete` records that processing reached its end. It does not state that the published text is correct.
 - The developers have made no paid document runs with this build. Acceptance on the owner's documents and keys has not yet been carried out.
 

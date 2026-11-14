@@ -1,14 +1,17 @@
-use crate::ui;
+use crate::{
+    onboarding::{self, Section},
+    ui,
+};
 use anyhow::{Context, Result};
 use crossterm::event::{KeyCode, KeyModifiers};
 use librarian_native::{
+    assets,
+    budget::{self, Amendment, Limit},
     config::Config,
+    credentials::{self, SystemVault},
     pipeline,
+    profile::{self, Ai, Location},
     store::{Job, Library},
-};
-use librarian_native::{
-    credentials,
-    profile::{self, Location},
 };
 use ratatui::{
     Frame,
@@ -94,6 +97,10 @@ struct App {
     message: String,
     child: Option<Child>,
     tick: u64,
+    /// The state of the provider and of the engines, refreshed now and then.
+    ai: String,
+    ai_ready: bool,
+    engines: String,
 }
 
 /// Home actions: shortcut, label, what it does.
@@ -131,21 +138,29 @@ pub fn run(root: &Path, config_path: &Path) -> Result<()> {
     ui::with_terminal(|terminal| {
         loop {
             let result = (|| -> Result<Option<Location>> {
-                if !location.ready()? {
-                    let Some(ready) = crate::onboarding::run(terminal, location.clone())? else {
+                // A workspace is all that Home needs. The provider is asked
+                // for when work that calls a model is first chosen.
+                if !location.established() {
+                    let Some(ready) =
+                        onboarding::run(terminal, location.clone(), Section::Workspace)?
+                    else {
                         return Ok(None);
                     };
                     location = ready;
                 }
+                // Settle an activation that an earlier process did not finish.
+                let _ = profile::recover(&SystemVault, &location);
                 let library = Library::open(&location.root)?;
-                dashboard(terminal, &library, &location.config)
+                location.root = library.root.clone();
+                dashboard(terminal, &library, &location)
             })();
             match result {
                 Ok(Some(next)) => location = next,
                 Ok(None) => return Ok(()),
                 Err(error) if error.is::<ui::SaveExit>() => {
-                    let library = Library::open(&location.root)?;
-                    library.control(None, "pause")?;
+                    if location.root.join("library.sqlite3").is_file() {
+                        Library::open(&location.root)?.control(None, "pause")?;
+                    }
                     return Ok(());
                 }
                 Err(error) => return Err(error),
@@ -159,11 +174,13 @@ const HELP: &str = "TWO WAYS TO WORK
 a  Parse PDFs now
    Local. No provider, no model call, no charge. Each PDF becomes a
    Markdown file and a JSON file of typed blocks: headings, paragraphs,
-   lists, tables, pictures.
+   lists, tables, pictures. Needs only the workspace; the PDF engine is
+   installed the first time if it is missing.
 
 n  Clean documents with AI
    Import a file or folder and choose a destination. The queue copyedits
-   and publishes Markdown through the provider chosen in Setup.
+   and publishes Markdown through an AI provider. If none is connected
+   and verified, Librarian asks for it when the import is queued.
    q starts the queue. Files run one at a time.
 
 HOME
@@ -183,8 +200,28 @@ Ctrl+S                       Save drafts, pause all work in this workspace,
 DOCUMENT MENU
 
 Enter on a document lists what applies in its current state: read the
-result, read diagnostics, pause, resume, run again with current settings
-as a new run, or cancel. Originals and earlier results are kept.
+result, read diagnostics, pause, resume, raise a limit, run again with
+current settings as a new run, or cancel. Originals and earlier results
+are kept.
+
+LIMITS
+
+A document that reaches its request, token or cost ceiling stops and
+keeps its work. r, or its menu, shows the ceiling and what was used and
+offers to raise the ceiling. Raising it must be authorized on a separate
+screen. The document then continues from its last checkpoint. What was
+used is never reset, and every change is recorded.
+
+SETUP (f)
+
+The Setup menu shows the workspace, the AI provider and the local
+engines, and opens each part on its own: provider, key and model;
+processing defaults; output defaults; engines; workspace. Nothing is
+changed until a part is saved. A key that is entered is kept in memory
+and is stored only when the part is saved.
+A connection check is one request billed by the provider. It is asked
+for only when the provider, the key or the model changes. The menu also
+offers to test the connection again.
 
 LISTS
 
@@ -232,8 +269,9 @@ Enter / Space / Esc / x                      Close
 AUTOMATIC STEPS
 
 A step shows its progress. When it completes, x, Enter or Space continues.
-Esc cancels the step and goes back; pressed after the step has completed,
-it discards the result. A step that fails cannot be passed.
+Esc while it runs stops it and goes back. Esc after it has completed goes
+back and keeps its result, so the step is not repeated. A step that fails
+cannot be passed.
 
 COPY / PASTE
 
@@ -242,8 +280,8 @@ Windows and Linux; Cmd+C/V on macOS). Librarian does not bind Ctrl+C here.
 
 RUNTIME
 
-Setup establishes the active workspace, provider, credential, model,
-engines and defaults. Workers load it automatically. Queued jobs keep the
+The workspace chosen at the first start is opened at every later start.
+Workers load its configuration by themselves. Queued jobs keep the
 configuration they were queued with. API keys are never written into the
 configuration file.
 
@@ -251,6 +289,7 @@ COMMAND LINE
 
 parse FILE|FOLDER -o FOLDER · clean SOURCE -o FOLDER · status
 show ID · pages ID · print ID · export ID --output FOLDER · doctor
+budget ID · budget ID --max-requests N --resume --start
 Run librarian --help for every command. The complete reference is the
 README in a package, or docs/RUST_FOUNDATION.md in the repository.";
 
@@ -286,21 +325,265 @@ fn finished(status: &str) -> bool {
     matches!(status, "complete" | "needs_review" | "prepared" | "failed")
 }
 
-/// Resume unfinished work, or run finished work again as a new job.
-fn resume(app: &mut App, library: &Library, config_path: &Path, id: i64) -> Result<()> {
-    let queued = if finished(&library.job(id)?.status) {
-        let new_id = pipeline::retry(library, id, &Config::load(config_path)?)?;
+/// Resume unfinished work, or run finished work again as a new job. A job
+/// stopped at a ceiling is taken to the screen where the ceiling is raised.
+fn resume(
+    t: &mut ratatui::DefaultTerminal,
+    app: &mut App,
+    library: &Library,
+    location: &Location,
+    id: i64,
+) -> Result<()> {
+    let status = library.job(id)?.status;
+    let queued = if finished(&status) {
+        let config = Config::load(&location.config)?;
+        if !onboarding::ensure_ai(t, location, &config)? {
+            app.message = format!("#{id} was not run again: no verified AI provider");
+            return Ok(());
+        }
+        let new_id = pipeline::retry(library, id, &Config::load(&location.config)?)?;
         format!("Queued #{new_id} from #{id} with current settings; the earlier result is kept.")
-    } else if library.control(Some(id), "resume")? > 0 {
-        format!("Resumed #{id}.")
     } else {
-        String::new()
+        let outcome = budget::resume(library, Some(id))?;
+        if !outcome.blocked.is_empty() {
+            return raise_ceiling(t, app, library, location, id);
+        }
+        if outcome.resumed > 0 {
+            format!("Resumed #{id}.")
+        } else {
+            String::new()
+        }
     };
-    start_worker(app, library, config_path)?;
+    start_worker(t, app, library, location)?;
     if !queued.is_empty() {
         app.message = format!("{queued} {}", app.message);
     }
     Ok(())
+}
+
+/// 12345678 as "12,345,678".
+fn grouped(value: u64) -> String {
+    let digits = value.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// A job stopped at a ceiling: show what was allowed and what was used, and
+/// let the owner authorize a higher ceiling and continue from the checkpoint.
+fn raise_ceiling(
+    t: &mut ratatui::DefaultTerminal,
+    app: &mut App,
+    library: &Library,
+    location: &Location,
+    id: i64,
+) -> Result<()> {
+    loop {
+        let state = budget::state(library, id)?;
+        if state.status != "budget_exhausted" {
+            return Ok(());
+        }
+        if state.exhausted.is_empty() {
+            // Every ceiling now leaves room: continue.
+            budget::resume(library, Some(id))?;
+            start_worker(t, app, library, location)?;
+            app.message = format!("Resumed #{id}. {}", app.message);
+            return Ok(());
+        }
+        let config = library.config(id)?;
+        let mark = |limit: Limit| {
+            if state.exhausted.contains(&limit) {
+                "   reached"
+            } else {
+                ""
+            }
+        };
+        let held = |n: u64| {
+            if n > 0 {
+                format!(" (+{} held)", grouped(n))
+            } else {
+                String::new()
+            }
+        };
+        let cost_row = match state.ceilings.max_cost {
+            Some(cap) => format!(
+                "  Estimated cost   ${cap:<15.4} ${:.4}{}{}",
+                state.used.cost,
+                if state.used.held_cost > 0.0 {
+                    format!(" (+${:.4} held)", state.used.held_cost)
+                } else {
+                    String::new()
+                },
+                mark(Limit::Cost)
+            ),
+            None if state.priced => "  Estimated cost   no ceiling".to_owned(),
+            None => "  Estimated cost   no ceiling; no rates are configured".to_owned(),
+        };
+        let body = format!(
+            "Document #{id} cannot resume as it is. {}
+
+The work already done is kept and is not repeated.
+
+  Limit            Ceiling          Used
+  Requests         {:<16} {}{}
+  Output tokens    {:<16} {}{}{}
+{cost_row}
+
+A held amount is reserved for a request whose outcome the provider never reported.
+Raising a ceiling authorizes that much more use of {} ({}), which the provider bills. What has been used is not reset. The change is recorded with the document.",
+            budget::explain(&state),
+            grouped(state.ceilings.max_requests),
+            grouped(state.used.requests),
+            mark(Limit::Requests),
+            grouped(state.ceilings.max_generated_tokens),
+            grouped(state.used.output_tokens),
+            held(state.used.held_tokens),
+            mark(Limit::GeneratedTokens),
+            config.provider.base_url,
+            config.provider.model,
+        );
+        // One suggested value for each ceiling that stops the job, and a
+        // free value.
+        let mut entries: Vec<(Limit, Option<f64>, String)> = Vec::new();
+        for limit in &state.exhausted {
+            let (suggested, text) = match limit {
+                Limit::Requests => {
+                    let next = (state.ceilings.max_requests * 2).max(state.used.requests + 100);
+                    (next as f64, grouped(next))
+                }
+                Limit::GeneratedTokens => {
+                    let next = (state.ceilings.max_generated_tokens * 2).max(
+                        state.used.output_tokens
+                            + state.used.held_tokens
+                            + 10 * state.next_request_tokens,
+                    );
+                    (next as f64, grouped(next))
+                }
+                Limit::Cost => {
+                    let cap = state.ceilings.max_cost.unwrap_or(0.0);
+                    let next = ((cap * 2.0).max(state.used.cost + state.used.held_cost + 0.25)
+                        * 100.0)
+                        .ceil()
+                        / 100.0;
+                    (next, format!("${next:.2}"))
+                }
+            };
+            entries.push((
+                *limit,
+                Some(suggested),
+                format!("Raise the {} to {text} and resume", limit.label()),
+            ));
+            entries.push((
+                *limit,
+                None,
+                format!("Raise the {} to another value…", limit.label()),
+            ));
+        }
+        let mut labels: Vec<String> = entries.iter().map(|e| e.2.clone()).collect();
+        labels.push("Back".into());
+        let Some(index) = ui::choose(t, &format!("Limits of document #{id}"), &body, &labels, 0)?
+        else {
+            return Ok(());
+        };
+        let Some((limit, suggested, _)) = entries.get(index).cloned() else {
+            return Ok(());
+        };
+        let value = match suggested {
+            Some(value) => value,
+            None => {
+                let Some(typed) = ui::input(
+                    t,
+                    &format!("New {}", limit.label()),
+                    match limit {
+                        Limit::Cost => {
+                            "Enter the new ceiling in dollars, for example 2.50. It must be higher than the present one."
+                        }
+                        _ => {
+                            "Enter the new ceiling as a whole number. It must be higher than the present one."
+                        }
+                    },
+                    "",
+                    false,
+                )?
+                else {
+                    continue;
+                };
+                match typed
+                    .trim()
+                    .trim_start_matches('$')
+                    .replace(',', "")
+                    .parse::<f64>()
+                {
+                    Ok(value) if value.is_finite() && value > 0.0 => value,
+                    _ => {
+                        ui::notice(t, "That value cannot be used", "Enter a number.")?;
+                        continue;
+                    }
+                }
+            }
+        };
+        let (change, from, to) = match limit {
+            Limit::Requests => (
+                Amendment {
+                    max_requests: Some(value as u64),
+                    ..Default::default()
+                },
+                grouped(state.ceilings.max_requests),
+                grouped(value as u64),
+            ),
+            Limit::GeneratedTokens => (
+                Amendment {
+                    max_generated_tokens: Some(value as u64),
+                    ..Default::default()
+                },
+                grouped(state.ceilings.max_generated_tokens),
+                grouped(value as u64),
+            ),
+            Limit::Cost => (
+                Amendment {
+                    max_cost: Some(value),
+                    ..Default::default()
+                },
+                format!("${:.2}", state.ceilings.max_cost.unwrap_or(0.0)),
+                format!("${value:.2}"),
+            ),
+        };
+        let confirm = format!(
+            "Raise the {} of document #{id} from {from} to {to}?
+
+This authorizes further requests to {} ({}) for this document, up to the new ceiling. The provider bills them. Used so far: {} requests, {} output tokens{}.
+
+The change is recorded with the document. Nothing that was used is reset.",
+            limit.label(),
+            config.provider.base_url,
+            config.provider.model,
+            grouped(state.used.requests),
+            grouped(state.used.output_tokens),
+            library
+                .job(id)?
+                .cost
+                .map(|c| format!(", ${c:.4}"))
+                .unwrap_or_default(),
+        );
+        if ui::choose(
+            t,
+            "Authorize a higher ceiling",
+            &confirm,
+            &["Authorize and resume".into(), "Back".into()],
+            1,
+        )? != Some(0)
+        {
+            continue;
+        }
+        if let Err(error) = budget::amend(library, id, &change, "in the terminal interface") {
+            ui::notice(t, "The ceiling was not changed", &format!("{error:#}"))?;
+        }
+    }
 }
 
 fn search(terminal: &mut ratatui::DefaultTerminal, library: &Library) -> Result<()> {
@@ -340,7 +623,7 @@ fn document_menu(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut App,
     library: &Library,
-    config_path: &Path,
+    location: &Location,
     job: &Job,
 ) -> Result<()> {
     let name = Path::new(&job.source)
@@ -356,6 +639,9 @@ fn document_menu(
     choices.push(("log", "Read diagnostics and events".into()));
     if matches!(status, "running" | "queued") {
         choices.push(("pause", "Pause (committed work is kept)".into()));
+    }
+    if status == "budget_exhausted" {
+        choices.push(("raise", "Raise a limit and resume".into()));
     }
     if matches!(status, "paused" | "cancelled" | "budget_exhausted") {
         choices.push(("resume", "Resume from the last checkpoint".into()));
@@ -417,7 +703,8 @@ fn document_menu(
             )?;
         }
         "pause" => pause(app, library, job.id)?,
-        "resume" => resume(app, library, config_path, job.id)?,
+        "raise" => raise_ceiling(terminal, app, library, location, job.id)?,
+        "resume" => resume(terminal, app, library, location, job.id)?,
         "cancel" => cancel(app, library, job.id)?,
         _ => {}
     }
@@ -427,7 +714,7 @@ fn document_menu(
 fn dashboard(
     terminal: &mut ratatui::DefaultTerminal,
     library: &Library,
-    config_path: &Path,
+    location: &Location,
 ) -> Result<Option<Location>> {
     let mut app = App {
         pane: Pane::Actions,
@@ -436,8 +723,21 @@ fn dashboard(
         message: crate::parse_tui::latest(&library.root).unwrap_or_default(),
         child: None,
         tick: 0,
+        ai: String::new(),
+        ai_ready: false,
+        engines: String::new(),
     };
     loop {
+        // Every two seconds, and on return from any screen.
+        if app.tick.is_multiple_of(20) {
+            let config = Config::load(&location.config).unwrap_or_default();
+            app.ai = onboarding::ai_line(location, &config);
+            app.ai_ready = matches!(
+                profile::ai_state(location, &config),
+                Ai::Ready | Ai::NotNeeded
+            );
+            app.engines = onboarding::engines_line(&library.root);
+        }
         let jobs = library.jobs(1000)?;
         app.selected = app.selected.min(jobs.len().saturating_sub(1));
         if jobs.is_empty() {
@@ -499,18 +799,10 @@ fn dashboard(
                         app.message = message;
                     }
                 }
-                Some('n') => import(terminal, &mut app, library, config_path)?,
-                Some('q') => start_worker(&mut app, library, config_path)?,
+                Some('n') => import(terminal, &mut app, library, location)?,
+                Some('q') => start_worker(terminal, &mut app, library, location)?,
                 Some('s') => search(terminal, library)?,
-                Some('f') => {
-                    return crate::onboarding::run(
-                        terminal,
-                        Location {
-                            root: library.root.clone(),
-                            config: config_path.to_owned(),
-                        },
-                    );
-                }
+                Some('f') => return onboarding::menu(terminal, location),
                 Some('h') => ui::notice(terminal, "Librarian help", HELP)?,
                 Some('p') => {
                     if let Some(id) = selected {
@@ -519,7 +811,7 @@ fn dashboard(
                 }
                 Some('r') => {
                     if let Some(id) = selected {
-                        resume(&mut app, library, config_path, id)?;
+                        resume(terminal, &mut app, library, location, id)?;
                     }
                 }
                 Some('c') => {
@@ -529,13 +821,17 @@ fn dashboard(
                 }
                 Some('\n') => {
                     if let Some(job) = jobs.get(app.selected) {
-                        document_menu(terminal, &mut app, library, config_path, job)?;
+                        document_menu(terminal, &mut app, library, location, job)?;
                     }
                 }
                 _ => {}
             }
             Ok(None)
         })();
+        // What a screen changed is shown at once.
+        if command.is_some() {
+            app.tick = 0;
+        }
         match outcome {
             Ok(Some(next)) => return Ok(Some(next)),
             Ok(None) => {}
@@ -549,7 +845,7 @@ fn import(
     t: &mut ratatui::DefaultTerminal,
     app: &mut App,
     library: &Library,
-    config_path: &Path,
+    location: &Location,
 ) -> Result<()> {
     let path = library.root.join("import-draft.json");
     let mut w = std::fs::read(&path)
@@ -601,8 +897,9 @@ fn import(
             t,
             "Clean documents with AI",
             "Choose what to import and where the finished Markdown goes, then queue it.\n\
-             The queue copyedits with the provider chosen in Setup; originals are kept.\n\
-             Esc returns Home with this form saved.",
+             The queue copyedits with the AI provider; if none is connected yet, it is\n\
+             asked for when the import is queued. Extraction only needs no provider.\n\
+             Originals are kept. Esc returns Home with this form saved.",
             &fields,
             w.field,
         )?
@@ -663,12 +960,17 @@ fn import(
             5 => w.body_only = !w.body_only,
             6 => w.start = !w.start,
             7 => {
-                let result = (|| -> Result<usize> {
-                    anyhow::ensure!(
-                        !w.source.is_empty() && !w.destination.is_empty(),
-                        "Select both source and destination first"
-                    );
-                    let mut config = Config::load(config_path)?;
+                if w.source.is_empty() || w.destination.is_empty() {
+                    ui::notice(
+                        t,
+                        "Import needs attention",
+                        "Select both source and destination first",
+                    )?;
+                    continue;
+                }
+                // The settings these jobs will carry.
+                let job_config = |w: &Import| -> Result<Config> {
+                    let mut config = Config::load(&location.config)?;
                     if w.extract_only {
                         config.processing.edit = false;
                         config.processing.classify = false;
@@ -681,6 +983,15 @@ fn import(
                         config.output.page_markers = false;
                         config.output.review_notes = false;
                     }
+                    Ok(config)
+                };
+                // Work that calls a model needs a verified provider. It is
+                // asked for here, when it is first needed.
+                if !onboarding::ensure_ai(t, location, &job_config(&w)?)? {
+                    continue;
+                }
+                let result = (|| -> Result<usize> {
+                    let config = job_config(&w)?;
                     let ids = pipeline::queue(
                         library,
                         &crate::setup::expand_path(&w.source),
@@ -698,7 +1009,7 @@ fn import(
                         std::fs::remove_file(&path)?;
                         let queued = format!("Queued {n} file(s).");
                         if w.start {
-                            start_worker(app, library, config_path)?;
+                            start_worker(t, app, library, location)?;
                             app.message = format!("{queued} {}", app.message);
                         } else {
                             app.message = format!("{queued} Press q to start the queue.");
@@ -727,7 +1038,13 @@ fn preview(output: &str) -> Result<String> {
     }
     Ok(body)
 }
-fn start_worker(app: &mut App, library: &Library, config: &Path) -> Result<()> {
+fn start_worker(
+    t: &mut ratatui::DefaultTerminal,
+    app: &mut App,
+    library: &Library,
+    location: &Location,
+) -> Result<()> {
+    let config = &location.config;
     if app
         .child
         .as_mut()
@@ -747,6 +1064,26 @@ fn start_worker(app: &mut App, library: &Library, config: &Path) -> Result<()> {
         .any(|j| matches!(j.status.as_str(), "queued" | "running"))
     {
         app.message = "Nothing is queued. Import documents first.".into();
+        return Ok(());
+    }
+    // The engines the queued jobs use are installed before the first of them
+    // runs, so that no job fails for want of one.
+    let needs_ocr = {
+        let mut statement = library
+            .db
+            .prepare("SELECT DISTINCT config FROM jobs WHERE status IN ('queued','running')")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .filter_map(|json| json.ok())
+            .filter_map(|json| serde_json::from_str::<Config>(&json).ok())
+            .any(|c| c.processing.ocr == "paddle")
+    };
+    if !onboarding::ensure_engines(
+        t,
+        &library.root,
+        if needs_ocr { assets::ALL } else { assets::PDF },
+    )? {
+        app.message = "The queue was not started: the local engines are not installed.".into();
         return Ok(());
     }
     let log = std::fs::OpenOptions::new()
@@ -877,6 +1214,8 @@ fn draw(frame: &mut Frame<'_>, jobs: &[Job], app: &App, library: &Library) {
                     (0, n) => format!("{n} queued and waiting. Starts one at a time."),
                     (_, n) => format!("Running now; {n} more queued."),
                 }
+            } else if *key == 'n' && !app.ai_ready {
+                "Asks for an AI provider when you queue.".to_owned()
             } else {
                 (*about).to_owned()
             };
@@ -1013,7 +1352,14 @@ fn draw(frame: &mut Frame<'_>, jobs: &[Job], app: &App, library: &Library) {
                     "{}{}\n{}From  {}\nTo    {}\nModel calls {} ({} cached) · tokens {} in / {} out · cost {}",
                     job.error
                         .as_ref()
-                        .map(|e| format!("Error: {e}\n"))
+                        .map(|e| if job.status == "budget_exhausted" {
+                            format!(
+                                "Stopped at a limit; press r to raise it and resume. {}\n",
+                                e.trim_start_matches("budget_exhausted: ")
+                            )
+                        } else {
+                            format!("Error: {e}\n")
+                        })
                         .unwrap_or_default(),
                     state(job),
                     stages,
@@ -1032,8 +1378,9 @@ fn draw(frame: &mut Frame<'_>, jobs: &[Job], app: &App, library: &Library) {
         None => (
             " This workspace ".to_owned(),
             format!(
-                "{}\n{}",
-                library.root.display(),
+                "AI provider    {}\nLocal engines  {}\n{}",
+                app.ai,
+                app.engines,
                 crate::parse_tui::latest(&library.root)
                     .unwrap_or_else(|| "Nothing has been parsed here yet.".into())
             ),

@@ -32,12 +32,47 @@ pub fn defaults() -> Result<Vec<AssetSpec>> {
     Ok(specs)
 }
 
+/// Engine folders, of those named, that are neither installed in the
+/// workspace nor supplied beside the program. Presence only; `locate`
+/// verifies checksums when an engine is used.
+pub fn missing(root: &Path, folders: &[&str]) -> Vec<String> {
+    let bundled = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("engines")));
+    folders
+        .iter()
+        .filter(|folder| {
+            !root.join(folder).join("manifest.json").is_file()
+                && !bundled
+                    .as_ref()
+                    .is_some_and(|dir| dir.join(folder).join("manifest.json").is_file())
+        })
+        .map(|folder| (*folder).to_owned())
+        .collect()
+}
+
+/// The engine folders: PDF, the OCR runtime, and the two OCR models.
+pub const PDF: &[&str] = &["pdfium"];
+pub const ALL: &[&str] = &["pdfium", "onnxruntime", "det", "rec"];
+
 pub async fn install(root: &Path, progress: impl Fn(&str, u64, Option<u64>)) -> Result<()> {
+    install_selected(root, ALL, progress).await
+}
+
+/// Download, verify and install the named engines that the workspace lacks.
+pub async fn install_selected(
+    root: &Path,
+    folders: &[&str],
+    progress: impl Fn(&str, u64, Option<u64>),
+) -> Result<()> {
     std::fs::create_dir_all(root)?;
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
         .build()?;
     for spec in defaults()? {
+        if !folders.contains(&spec.folder.as_str()) {
+            continue;
+        }
         let destination = root.join(&spec.folder);
         if destination.join("manifest.json").exists() {
             progress(&format!("{} already installed", spec.name), 1, Some(1));
@@ -229,11 +264,29 @@ pub fn runtime_name() -> &'static str {
 /// Exercise real dynamic loading and model-session construction, without importing
 /// documents, running inference, or making a provider request.
 pub fn load_engines(root: &Path) -> Result<()> {
-    use pdfium_render::prelude::Pdfium;
-    let name = Pdfium::pdfium_platform_library_name();
-    let library = locate(root, "pdfium", &name.to_string_lossy())?;
-    let _pdfium = Pdfium::new(Pdfium::bind_to_library(library).context("Cannot load PDFium ABI")?);
+    load_pdf(root)?;
     let _ocr = crate::ocr::Paddle::load(root)
         .context("Cannot initialize OCR runtime and model sessions")?;
     Ok(())
+}
+
+/// Load the PDF engine alone. Parsing needs nothing else.
+pub fn load_pdf(root: &Path) -> Result<()> {
+    use pdfium_render::prelude::Pdfium;
+    let name = Pdfium::pdfium_platform_library_name();
+    let library = locate(root, "pdfium", &name.to_string_lossy())?;
+    bind_pdfium(&library).context("Cannot load PDFium ABI")?;
+    Ok(())
+}
+
+/// Bind the PDF engine. The library can be bound once in a process; every
+/// later request for it is given the binding already made. Without this, a
+/// second use in one session of the terminal interface would be refused.
+pub fn bind_pdfium(library: &Path) -> Result<pdfium_render::prelude::Pdfium> {
+    use pdfium_render::prelude::{Pdfium, PdfiumError};
+    match Pdfium::bind_to_library(library) {
+        Ok(bindings) => Ok(Pdfium::new(bindings)),
+        Err(PdfiumError::PdfiumLibraryBindingsAlreadyInitialized) => Ok(Pdfium::default()),
+        Err(error) => Err(error).with_context(|| format!("Cannot load {}", library.display())),
+    }
 }

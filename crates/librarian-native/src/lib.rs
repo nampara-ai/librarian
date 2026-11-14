@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub mod assets;
+pub mod budget;
 pub mod catalog;
 pub mod config;
 pub mod credentials;

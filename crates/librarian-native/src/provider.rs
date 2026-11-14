@@ -164,18 +164,22 @@ impl ModelClient {
         let (tokens,reserved_cost):(i64,f64)=library.db.query_row("SELECT COALESCE(SUM(output_tokens),0),COALESCE(SUM(cost),0) FROM request_reservations WHERE job=? AND settled=0",[job],|r|Ok((r.get(0)?,r.get(1)?)))?;
         let p = &self.config.provider;
         let limits = &self.config.processing;
-        if state.requests as u64 >= limits.max_requests
-            || state.output_tokens as u64 + tokens as u64 + p.max_output_tokens as u64
-                > limits.max_generated_tokens
+        let ceilings = crate::budget::Ceilings {
+            max_requests: limits.max_requests,
+            max_generated_tokens: limits.max_generated_tokens,
+            max_cost: limits.max_cost,
+        };
+        let used = crate::budget::Used {
+            requests: state.requests.max(0) as u64,
+            output_tokens: state.output_tokens.max(0) as u64,
+            held_tokens: tokens.max(0) as u64,
+            cost: state.cost.unwrap_or(0.0),
+            held_cost: reserved_cost,
+        };
+        if let Some(limit) =
+            crate::budget::exceeded(&ceilings, &used, p.max_output_tokens as u64, cost)
         {
-            bail!("budget_exhausted: request or output-token ceiling reached");
-        }
-        if limits
-            .max_cost
-            .zip(cost)
-            .is_some_and(|(cap, next)| state.cost.unwrap_or(0.0) + reserved_cost + next > cap)
-        {
-            bail!("budget_exhausted: estimated next request exceeds cost ceiling");
+            bail!("{}", crate::budget::stop_message(limit, &ceilings, &used));
         }
         library.db.execute(
             "UPDATE jobs SET requests=requests+1,updated=? WHERE id=?",
@@ -1021,5 +1025,103 @@ mod budget_invariants {
             );
             assert_eq!(reopened.job(job).unwrap().requests, 4);
         }
+    }
+
+    // A job stopped at a ceiling continues only after the ceiling is raised,
+    // and the raise neither resets what was used nor goes unrecorded.
+    #[test]
+    fn raised_ceiling_continues_a_stopped_job_without_resetting_its_counters() {
+        use crate::budget::{self, Amendment, Limit};
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.provider.max_output_tokens = 256;
+        config.processing.max_requests = 2;
+        let library = Library::open(temp.path()).unwrap();
+        let job = library
+            .enqueue(&temp.path().join("source.txt"), temp.path(), &config)
+            .unwrap();
+        library.start(job).unwrap();
+        let client = ModelClient::new(&library.config(job).unwrap()).unwrap();
+        for i in 0..2 {
+            client
+                .reserve(&library, job, &format!("r{i}"), "request", None)
+                .unwrap();
+        }
+        let stop = client
+            .reserve(&library, job, "r2", "request", None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            stop.starts_with("budget_exhausted: request ceiling"),
+            "{stop}"
+        );
+        // A running job may not be amended.
+        assert!(
+            budget::amend(
+                &library,
+                job,
+                &Amendment {
+                    max_requests: Some(9),
+                    ..Default::default()
+                },
+                "in a test"
+            )
+            .is_err()
+        );
+        library
+            .finish(job, "budget_exhausted", None, Some(&stop))
+            .unwrap();
+
+        // Resume alone changes nothing and says why.
+        let blocked = budget::resume(&library, Some(job)).unwrap();
+        assert_eq!(blocked.resumed, 0);
+        assert_eq!(blocked.blocked[0].exhausted, vec![Limit::Requests]);
+        assert_eq!(library.job(job).unwrap().status, "budget_exhausted");
+
+        // A ceiling can only go up.
+        for too_low in [1, 2] {
+            assert!(
+                budget::amend(
+                    &library,
+                    job,
+                    &Amendment {
+                        max_requests: Some(too_low),
+                        ..Default::default()
+                    },
+                    "in a test"
+                )
+                .is_err()
+            );
+        }
+        let after = budget::amend(
+            &library,
+            job,
+            &Amendment {
+                max_requests: Some(5),
+                ..Default::default()
+            },
+            "in a test",
+        )
+        .unwrap();
+        assert!(after.exhausted.is_empty());
+        assert_eq!(after.used.requests, 2, "consumption is kept");
+        assert_eq!(after.used.held_tokens, 512, "held reservations are kept");
+        let record = &budget::amendments(&library, job).unwrap()[0];
+        assert_eq!(record["ceiling"], "max_requests");
+        assert_eq!(record["previous"], "2");
+        assert_eq!(record["amended"], "5");
+        assert_eq!(record["requests_used"], 2);
+        assert_eq!(record["authorized"], "in a test");
+
+        // The job now resumes, and a fresh process sees the amended ceiling.
+        assert_eq!(budget::resume(&library, Some(job)).unwrap().resumed, 1);
+        drop(library);
+        let reopened = Library::open(temp.path()).unwrap();
+        reopened.start(job).unwrap();
+        let fresh = ModelClient::new(&reopened.config(job).unwrap()).unwrap();
+        fresh
+            .reserve(&reopened, job, "r3", "after amendment", None)
+            .unwrap();
+        assert_eq!(reopened.job(job).unwrap().requests, 3);
     }
 }

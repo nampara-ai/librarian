@@ -320,14 +320,19 @@ impl Config {
         if !(512..=4096).contains(&self.processing.render_width) {
             bail!("render_width must be 512..4096");
         }
-        if self.processing.ocr == "paddle"
-            && !matches!(
-                self.processing.ocr_language.as_str(),
-                "en" | "zh" | "ja" | "auto"
-            )
+        // `ocr_language` is read only when `ocr` is `tesseract`; it is checked
+        // against the installed language data when Tesseract is used. With any
+        // other engine every value is accepted, so that earlier files load.
+        if self.processing.ocr == "tesseract"
+            && (self.processing.ocr_language.is_empty()
+                || !self
+                    .processing
+                    .ocr_language
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | '-')))
         {
             bail!(
-                "The bundled Paddle recognizer supports English, Chinese and Japanese. Use Tesseract language packs or vision for other languages"
+                "processing.ocr_language must name Tesseract languages, for example eng or eng+deu"
             );
         }
         if self.provider.requests_per_minute == 0 || self.provider.tokens_per_minute < 1024 {

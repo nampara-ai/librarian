@@ -467,12 +467,36 @@ pub fn browse(
     }
 }
 
+/// How an automatic step was left.
+pub enum Ended<T> {
+    /// The work completed and the user continued.
+    Continue(T),
+    /// The user went back. The result is present if the work had completed.
+    Back(Option<T>),
+}
+
+/// Run an automatic step and continue with its result. Esc returns `None`.
 pub fn task<T: Send + 'static>(
     terminal: &mut ratatui::DefaultTerminal,
     title: &str,
     description: &str,
     work: impl FnOnce(mpsc::Sender<String>, Arc<AtomicBool>) -> Result<T> + Send + 'static,
 ) -> Result<Option<T>> {
+    Ok(match task_ended(terminal, title, description, work)? {
+        Ended::Continue(value) => Some(value),
+        Ended::Back(_) => None,
+    })
+}
+
+/// Run an automatic step. Esc while the work runs cancels it. Esc after the
+/// work has completed goes back and still hands over the result, so that a
+/// completed step need not be repeated.
+pub fn task_ended<T: Send + 'static>(
+    terminal: &mut ratatui::DefaultTerminal,
+    title: &str,
+    description: &str,
+    work: impl FnOnce(mpsc::Sender<String>, Arc<AtomicBool>) -> Result<T> + Send + 'static,
+) -> Result<Ended<T>> {
     let (messages, updates) = mpsc::channel();
     let (send, receive) = mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));
@@ -493,8 +517,9 @@ pub fn task<T: Send + 'static>(
             match receive.try_recv() {
                 Ok(result) => {
                     completed = Some(result?);
-                    message =
-                        format!("✓ {message}\n\nComplete. Press x, Enter or Space to continue.");
+                    message = format!(
+                        "✓ {message}\n\nComplete. Press x, Enter or Space to continue. Esc goes back and keeps this result."
+                    );
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     anyhow::bail!("Setup operation ended without a result")
@@ -520,10 +545,12 @@ pub fn task<T: Send + 'static>(
                 if completed.is_none() {
                     let _ = receive.recv_timeout(Duration::from_secs(2));
                 }
-                return Ok(None);
+                return Ok(Ended::Back(completed));
             }
-            if (activate(k.code) || k.code == KeyCode::Char('x')) && completed.is_some() {
-                return Ok(completed);
+            if (activate(k.code) || k.code == KeyCode::Char('x'))
+                && let Some(value) = completed.take()
+            {
+                return Ok(Ended::Continue(value));
             }
         }
     }

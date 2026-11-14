@@ -14,8 +14,7 @@ pub(super) fn extract(
         "pdfium",
         &name.to_string_lossy(),
     )?;
-    let pdfium =
-        Pdfium::new(Pdfium::bind_to_library(lib).context("Cannot load pinned PDFium library")?);
+    let pdfium = crate::assets::bind_pdfium(&lib).context("Cannot load pinned PDFium library")?;
     let pdf = pdfium
         .load_pdf_from_file(path, None)
         .context("Cannot open PDF (encrypted documents require an unencrypted copy)")?;

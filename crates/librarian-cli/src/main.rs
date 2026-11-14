@@ -43,12 +43,13 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
-    /// Run the setup wizard: workspace, provider, credential, model, limits,
-    /// defaults, engines and a connection check.
+    /// Go through every Setup step in order: workspace, provider, key, model,
+    /// limit, defaults, engines and the connection check. Nothing is changed
+    /// until the last step is saved.
     Setup,
     #[command(hide = true)]
     SetupVerify,
-    /// Interactive dashboard, source/destination picker, queue and live progress.
+    /// Open the terminal interface. The first start asks only for a workspace.
     Tui,
     /// Show, locate, describe, change, edit or reset the configuration file.
     Config {
@@ -99,7 +100,9 @@ enum Command {
         /// Job number. Omit to pause every queued and running job.
         id: Option<i64>,
     },
-    /// Return paused, cancelled, failed or budget-stopped jobs to the queue.
+    /// Return paused, cancelled and failed jobs to the queue. A job stopped at
+    /// a ceiling is returned only once the ceiling allows another request;
+    /// see `budget`.
     Resume {
         /// Job number. Omit to resume every eligible job.
         id: Option<i64>,
@@ -112,6 +115,27 @@ enum Command {
         /// Job number whose retained original is processed again.
         id: i64,
         /// Start the worker after queueing and wait for it to finish.
+        #[arg(long)]
+        start: bool,
+    },
+    /// Show the ceilings and consumption of a job, or raise a ceiling so that a
+    /// job stopped at it can continue from its checkpoint.
+    Budget {
+        /// Job number.
+        id: i64,
+        /// New request ceiling. Giving it authorizes that many requests in all.
+        #[arg(long)]
+        max_requests: Option<u64>,
+        /// New ceiling on generated tokens.
+        #[arg(long)]
+        max_generated_tokens: Option<u64>,
+        /// New cost ceiling in dollars. The job must already have one.
+        #[arg(long)]
+        max_cost: Option<f64>,
+        /// Return the job to the queue after raising the ceiling.
+        #[arg(long)]
+        resume: bool,
+        /// Also start the worker and wait for it. Implies --resume.
         #[arg(long)]
         start: bool,
     },
@@ -403,6 +427,16 @@ async fn run(cli: Cli) -> Result<u8> {
             setup::configure(location)?;
             return Ok(0);
         }
+        // The terminal interface establishes the workspace itself, so the
+        // folder is not created before the owner has chosen it.
+        Command::Tui => {
+            terminal::run(&root, &config_path)?;
+            return Ok(0);
+        }
+        Command::Status { watch: true } if !cli.json => {
+            terminal::run(&root, &config_path)?;
+            return Ok(0);
+        }
         Command::SetupVerify => {
             let result = async {
                 let config = Config::load(&config_path)?;
@@ -428,7 +462,6 @@ async fn run(cli: Cli) -> Result<u8> {
     }
     let library = Library::open(&root)?;
     match command {
-        Command::Tui => terminal::run(&library.root, &config_path)?,
         Command::Clean {
             source,
             output,
@@ -487,12 +520,8 @@ async fn run(cli: Cli) -> Result<u8> {
             worker(&library, cli.json, quiet).await?;
             return result_code(&library, &jobs);
         }
-        Command::Status { watch } => {
-            if watch && !cli.json {
-                terminal::run(&library.root, &config_path)?;
-            } else {
-                println!("{}", serde_json::to_string_pretty(&library.jobs(1000)?)?);
-            }
+        Command::Status { .. } => {
+            println!("{}", serde_json::to_string_pretty(&library.jobs(1000)?)?);
         }
         Command::Pause { id } => {
             let n = library.control(id, "pause")?;
@@ -502,9 +531,84 @@ async fn run(cli: Cli) -> Result<u8> {
             let n = library.control(id, "cancel")?;
             println!("{}", serde_json::json!({"cancelled":n}));
         }
+        Command::Budget {
+            id,
+            max_requests,
+            max_generated_tokens,
+            max_cost,
+            resume,
+            start,
+        } => {
+            use librarian_native::budget;
+            let change = budget::Amendment {
+                max_requests,
+                max_generated_tokens,
+                max_cost,
+            };
+            if (resume || start) && change.is_empty() {
+                bail!("Name the ceiling to raise, for example --max-requests N, with --resume");
+            }
+            if !change.is_empty() {
+                // Naming a ceiling on the command line is the authorization.
+                budget::amend(&library, id, &change, "from the command line")?;
+            }
+            let resumed = if resume || start {
+                Some(budget::resume(&library, Some(id))?.resumed)
+            } else {
+                None
+            };
+            let state = budget::state(&library, id)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "explanation": if state.exhausted.is_empty() {
+                        "No ceiling stops the next request.".to_owned()
+                    } else {
+                        budget::explain(&state)
+                    },
+                    "state": state,
+                    "amendments": budget::amendments(&library, id)?,
+                    "resumed": resumed,
+                }))?
+            );
+            if start {
+                worker(&library, cli.json, false).await?;
+                return result_code(&library, &[id]);
+            }
+        }
         Command::Resume { id, start } => {
-            let n = library.control(id, "resume")?;
-            println!("{}", serde_json::json!({"resumed":n}));
+            let outcome = librarian_native::budget::resume(&library, id)?;
+            let blocked: Vec<_> = outcome
+                .blocked
+                .iter()
+                .map(|state| {
+                    serde_json::json!({
+                        "job": state.job,
+                        "reason": librarian_native::budget::explain(state),
+                        "next": format!(
+                            "librarian budget {} --{} N --resume",
+                            state.job,
+                            state.exhausted[0].key().replace('_', "-")
+                        ),
+                    })
+                })
+                .collect();
+            println!(
+                "{}",
+                serde_json::json!({"resumed":outcome.resumed,"blocked":blocked})
+            );
+            for state in &outcome.blocked {
+                eprintln!(
+                    "Job {} was not resumed. {} Raise the ceiling with: librarian budget {} --{} N --resume",
+                    state.job,
+                    librarian_native::budget::explain(state),
+                    state.job,
+                    state.exhausted[0].key().replace('_', "-")
+                );
+            }
+            if id.is_some() && !outcome.blocked.is_empty() {
+                return Ok(1);
+            }
             if start {
                 let jobs = library
                     .jobs(100000)?

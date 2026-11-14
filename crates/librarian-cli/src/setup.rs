@@ -31,11 +31,15 @@ pub fn expand_path(value: &str) -> PathBuf {
 pub fn configure(
     location: librarian_native::profile::Location,
 ) -> Result<Option<librarian_native::profile::Location>> {
-    let result =
-        crate::ui::with_terminal(|terminal| crate::onboarding::run(terminal, location.clone()));
+    // The command runs every step in order. A single part can be opened from
+    // the Setup menu on Home.
+    let result = crate::ui::with_terminal(|terminal| {
+        crate::onboarding::run(terminal, location.clone(), crate::onboarding::Section::All)
+    });
     if result
         .as_ref()
         .is_err_and(|e| e.is::<crate::ui::SaveExit>())
+        && location.root.join("library.sqlite3").is_file()
     {
         librarian_native::store::Library::open(&location.root)?.control(None, "pause")?;
     }

@@ -84,7 +84,8 @@ impl Library {
             CREATE TABLE IF NOT EXISTS editorial_observations(job INTEGER NOT NULL, ordinal INTEGER NOT NULL, PRIMARY KEY(job,ordinal));
             CREATE TABLE IF NOT EXISTS editorial_stages(job INTEGER NOT NULL REFERENCES jobs(id), stage TEXT NOT NULL, unit TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(job,stage,unit));
             CREATE TABLE IF NOT EXISTS category_sequences(class TEXT PRIMARY KEY, next INTEGER NOT NULL);
-            CREATE TABLE IF NOT EXISTS accessions(job INTEGER PRIMARY KEY REFERENCES jobs(id), class TEXT NOT NULL, sequence INTEGER NOT NULL);")?;
+            CREATE TABLE IF NOT EXISTS accessions(job INTEGER PRIMARY KEY REFERENCES jobs(id), class TEXT NOT NULL, sequence INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS budget_amendments(id INTEGER PRIMARY KEY AUTOINCREMENT, job INTEGER NOT NULL REFERENCES jobs(id), field TEXT NOT NULL, previous TEXT NOT NULL, amended TEXT NOT NULL, requests INTEGER NOT NULL, output_tokens INTEGER NOT NULL, cost REAL, origin TEXT NOT NULL, created INTEGER NOT NULL);")?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS editorial_sources(job INTEGER NOT NULL REFERENCES jobs(id), id TEXT NOT NULL, page INTEGER NOT NULL, kind TEXT NOT NULL, parent TEXT NOT NULL, start INTEGER NOT NULL, end INTEGER NOT NULL, sha256 TEXT NOT NULL, content TEXT NOT NULL, PRIMARY KEY(job,id));
             CREATE INDEX IF NOT EXISTS editorial_sources_page ON editorial_sources(job,page,kind);
             CREATE TABLE IF NOT EXISTS editorial_source_links(job INTEGER NOT NULL,child TEXT NOT NULL,parent TEXT NOT NULL,relation TEXT NOT NULL,PRIMARY KEY(job,child,parent,relation));
