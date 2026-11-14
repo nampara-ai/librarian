@@ -13,7 +13,7 @@ use librarian_native::{
     config::Config,
     credentials::{self, CredentialRef, SystemVault},
     ocr,
-    profile::{self, Ai, EngineCheck, Location, ProviderCheck, Verification},
+    profile::{self, Ai, Location, ProviderCheck, SavedIncomplete, Verification},
     store::{Library, now},
 };
 use serde::{Deserialize, Serialize};
@@ -122,8 +122,9 @@ struct Wizard {
     config: Config,
     /// The configuration when Setup began.
     baseline: Config,
-    /// What is on record as verified for `location`.
+    /// What is on record as verified, and the workspace it is on record for.
     stored: Verification,
+    stored_for: Location,
     /// The key as typed in this run, for reconnecting a session reference.
     secret: Zeroizing<String>,
     /// Store the held key in the system credential store on activation.
@@ -408,6 +409,7 @@ impl Wizard {
         // An activation that was cut short is settled before anything else.
         let _ = profile::recover(&SystemVault, &initial);
         let baseline = Config::load(&initial.config)?;
+        Verification::carry_forward(&initial, &baseline);
         let mut config = baseline.clone();
         // Earlier profiles have no preset name. Recognize their endpoint.
         if let Some(preset) = catalog::providers().into_iter().find(|p| {
@@ -418,6 +420,7 @@ impl Wizard {
         let mut wizard = Self {
             section,
             stored: Verification::load(&initial, &baseline),
+            stored_for: initial.clone(),
             start: initial.clone(),
             location: initial,
             config,
@@ -571,7 +574,7 @@ impl Wizard {
             .credential
             .as_ref()
             .is_some_and(|c| self.rekeyed.contains(&c.account));
-        if rekeyed || self.location != self.start {
+        if rekeyed || self.location != self.stored_for {
             return None;
         }
         self.stored.provider_for(&self.config)
@@ -953,6 +956,8 @@ impl Wizard {
                 };
                 // Held in memory under a new reference. Nothing is stored yet.
                 let reference = credentials::hold(&self.config.provider.base_url, &value)?;
+                // A check passed earlier in this run was for another key.
+                self.checked = None;
                 self.rekeyed.insert(reference.account.clone());
                 self.config.provider.namespace = reference.account.clone();
                 self.config.provider.credential = Some(reference);
@@ -998,6 +1003,7 @@ impl Wizard {
                     &self.config.provider.base_url,
                     &self.secret,
                 )?;
+                self.checked = None;
                 self.rekeyed.insert(reference.account.clone());
                 self.config.provider.namespace = reference.account.clone();
                 self.config.provider.credential = Some(reference);
@@ -1156,17 +1162,39 @@ impl Wizard {
         match labels[index] {
             "Continue without a new request" => Ok(Flow::Next),
             "Choose a different model" => Ok(Flow::Go(Step::Model)),
-            _ => match check_task(t, title, &self.location, &self.config)? {
-                ui::Ended::Continue(check) => {
+            _ => match check_task(t, title, &self.location, &self.config) {
+                Ok(ui::Ended::Continue(check)) => {
                     self.checked = Some(check);
                     Ok(Flow::Next)
                 }
-                ui::Ended::Back(check) => {
+                Ok(ui::Ended::Back(check)) => {
                     // A check that passed stays passed; Back returns to the question.
                     if check.is_some() {
                         self.checked = check;
                     }
                     Ok(Flow::Stay)
+                }
+                Err(error) if error.is::<ui::SaveExit>() => Err(error),
+                Err(error) => {
+                    // The test failed: no check covers this configuration now.
+                    // If it is the configuration in force, its record on disk
+                    // is withdrawn as well, as the menu's test would do.
+                    let fingerprint = profile::provider_fingerprint(&self.config);
+                    self.checked = None;
+                    if self
+                        .stored
+                        .provider
+                        .as_ref()
+                        .is_some_and(|c| c.fingerprint == fingerprint)
+                    {
+                        self.stored.provider = None;
+                        if self.location == self.stored_for
+                            && fingerprint == profile::provider_fingerprint(&self.baseline)
+                        {
+                            self.stored.save(&self.location.root)?;
+                        }
+                    }
+                    Err(error)
                 }
             },
         }
@@ -1222,15 +1250,22 @@ impl Wizard {
                         labels.push("Keep the key for this session only, and save");
                     }
                     labels.push("Back");
-                    let picked = choice(
-                        t,
-                        "The setup was not saved",
-                        &format!(
-                            "{error:#}\n\nNothing was changed: the earlier configuration and its key are still in force."
-                        ),
-                        &labels,
-                        0,
-                    )?;
+                    let (heading, text) = if error.is::<SavedIncomplete>() {
+                        (
+                            "The setup was saved, with one record missing",
+                            format!(
+                                "The configuration, and the key if one was to be stored, are saved and in force. But {error:#}\n\n'Try again' writes the missing record."
+                            ),
+                        )
+                    } else {
+                        (
+                            "The setup was not saved",
+                            format!(
+                                "{error:#}\n\nNothing was changed: the earlier configuration and its key are still in force."
+                            ),
+                        )
+                    };
+                    let picked = choice(t, heading, &text, &labels, 0)?;
                     match picked.map(|i| labels[i]) {
                         Some("Try again") => {}
                         Some("Keep the key for this session only, and save") => {
@@ -1256,28 +1291,13 @@ impl Wizard {
             Section::Processing | Section::Output => {
                 self.config.save(&self.location.config)?;
             }
-            Section::Engines => {
-                let mut record = Verification::load(&self.location, &self.config);
-                record.engines = Some(EngineCheck {
-                    checked_at: now(),
-                    ocr: self.config.processing.ocr.clone(),
-                });
-                record.save(&self.location.root)?;
-            }
+            // The engines part has nothing to record: its effect is the
+            // engines themselves, and their state is read from the files.
+            Section::Engines => {}
             Section::Provider | Section::All => {
-                let mut record = if self.location == self.start {
-                    self.stored.clone()
-                } else {
-                    Verification::default()
-                };
+                let mut record = self.stored.clone();
                 if !self.skip_ai {
                     record.provider = self.verified().cloned();
-                }
-                if self.settled(Step::Engines) {
-                    record.engines = Some(EngineCheck {
-                        checked_at: now(),
-                        ocr: self.config.processing.ocr.clone(),
-                    });
                 }
                 let remember = self.remember && self.holding_new_key();
                 let saved = profile::activate(
@@ -1287,8 +1307,14 @@ impl Wizard {
                     remember,
                     &record,
                 )?;
-                self.location.activate()?;
+                // From here the saved configuration is in force.
                 self.config = saved;
+                self.secret = Zeroizing::new(String::new());
+                self.location.activate().map_err(|error| {
+                    anyhow::Error::new(SavedIncomplete(format!(
+                        "the workspace could not be recorded as the active one: {error:#}"
+                    )))
+                })?;
             }
         }
         Ok(())
@@ -1316,12 +1342,21 @@ impl Wizard {
             if picked != 0 {
                 return Ok(());
             }
-            self.config = Config::load(&next.config)?;
+            // An existing workspace is taken with its own settings, its own
+            // key reference and its own record of what was verified.
+            let own = Config::load(&next.config)?;
+            Verification::carry_forward(&next, &own);
+            self.stored = Verification::load(&next, &own);
+            self.config = own.clone();
+            self.baseline = own;
         } else {
             // A new workspace starts from the settings in force. Its provider
             // has no check on record there, so the first use asks for one.
             self.config = self.baseline.clone();
+            self.stored = Verification::default();
         }
+        self.stored_for = next.clone();
+        self.checked = None;
         self.location = next;
         Ok(())
     }

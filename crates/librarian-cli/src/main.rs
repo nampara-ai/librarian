@@ -44,8 +44,8 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Go through every Setup step in order: workspace, provider, key, model,
-    /// limit, defaults, engines and the connection check. Nothing is changed
-    /// until the last step is saved.
+    /// limit, defaults, engines and the connection check. The configuration
+    /// and the stored keys are not changed until the last step is saved.
     Setup,
     #[command(hide = true)]
     SetupVerify,
@@ -132,10 +132,12 @@ enum Command {
         /// New cost ceiling in dollars. The job must already have one.
         #[arg(long)]
         max_cost: Option<f64>,
-        /// Return the job to the queue after raising the ceiling.
+        /// Return the job to the queue after raising the ceiling. Requires a
+        /// ceiling option.
         #[arg(long)]
         resume: bool,
-        /// Also start the worker and wait for it. Implies --resume.
+        /// Also start the worker and wait for it. Implies --resume and requires
+        /// a ceiling option.
         #[arg(long)]
         start: bool,
     },

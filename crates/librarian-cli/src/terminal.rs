@@ -148,8 +148,12 @@ pub fn run(root: &Path, config_path: &Path) -> Result<()> {
                     };
                     location = ready;
                 }
-                // Settle an activation that an earlier process did not finish.
+                // Settle an activation that an earlier process did not finish,
+                // and carry forward a record written by an earlier release.
                 let _ = profile::recover(&SystemVault, &location);
+                if let Ok(config) = Config::load(&location.config) {
+                    profile::Verification::carry_forward(&location, &config);
+                }
                 let library = Library::open(&location.root)?;
                 location.root = library.root.clone();
                 dashboard(terminal, &library, &location)
@@ -216,12 +220,13 @@ SETUP (f)
 
 The Setup menu shows the workspace, the AI provider and the local
 engines, and opens each part on its own: provider, key and model;
-processing defaults; output defaults; engines; workspace. Nothing is
-changed until a part is saved. A key that is entered is kept in memory
-and is stored only when the part is saved.
-A connection check is one request billed by the provider. It is asked
-for only when the provider, the key or the model changes. The menu also
-offers to test the connection again.
+processing defaults; output defaults; engines; workspace. It can also
+go through every step in order. The configuration and the stored keys
+are not changed until a part is saved. A key that is entered is kept in
+memory and is stored only when the part is saved.
+A connection check is one request billed by the provider. It is not
+repeated while a recorded check still covers the provider, endpoint,
+key and model. The menu also offers to test the connection again.
 
 LISTS
 

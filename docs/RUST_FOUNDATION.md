@@ -39,7 +39,7 @@ cargo build --release --locked -p librarian-cli
 ./target/release/librarian
 ```
 
-A source build carries no engines. The PDF engine is downloaded into the workspace, and verified against its pinned checksum, the first time a PDF is parsed. ONNX Runtime and the OCR models are downloaded the first time a queue that uses the bundled OCR is started. `librarian engines install` installs all of them at once. LibreOffice is not downloaded. To process office documents with a source build, install LibreOffice or set `processing.office_renderer` to the `soffice` executable.
+A source build carries no engines. In the terminal interface the PDF engine is downloaded into the workspace, and verified against its pinned checksum, the first time a PDF is parsed or a queue is started; ONNX Runtime and the OCR models are downloaded the first time a queue that uses the bundled OCR is started. The commands `parse`, `run` and `clean` install nothing: run `librarian engines install` once, which installs all of them. LibreOffice is not downloaded. To process office documents with a source build, install LibreOffice or set `processing.office_renderer` to the `soffice` executable.
 
 ## 3. Workspace and files
 
@@ -49,18 +49,18 @@ The workspace is the folder in which the program keeps its configuration, origin
 
 The default workspace is the per-user local application data folder for `librarian-terminal`. On Linux this is `~/.local/share/librarian-terminal`. The command `librarian config path` prints the configuration file in use.
 
-The file `active-profile.json` in the default workspace folder records the workspace and configuration file chosen in Setup. Every later start of the program reads it. The option `--library FOLDER` selects another workspace for one invocation, and with it the configuration file `FOLDER/config.toml`. The option `--config` selects another configuration file for one invocation. No Librarian variable selects the workspace. The default folder is the platform's per-user data folder; on Linux it follows `XDG_DATA_HOME`.
+The file `active-profile.json` in the default workspace folder records the workspace and configuration file chosen in Setup. Every later start of the program reads it. The option `--library FOLDER` selects another workspace for one invocation, and with it the configuration file `FOLDER/config.toml`. If the workspace part, the provider part or the full sequence of Setup is saved in such an invocation, that folder becomes the active workspace. The option `--config` selects another configuration file for one invocation. No Librarian variable selects the workspace. The default folder is the platform's per-user data folder; on Linux it follows `XDG_DATA_HOME`.
 
-Every command except `parse`, `convert`, `inspect`, `prompts`, `config` and `setup` creates the workspace folder, its `originals`, `assets` and `engines` folders and its database if they are absent.
+Every command except `parse`, `convert`, `inspect`, `prompts`, `config`, `setup` and `tui` creates the workspace folder, its `originals`, `assets` and `engines` folders and its database if they are absent. `setup` and `tui` create them when the workspace has been chosen and is prepared.
 
 ### 3.2 Contents
 
 | Path in the workspace | Purpose |
 | --- | --- |
 | `config.toml` | Configuration |
-| `verification.json` | What has been verified for this workspace: the last successful connection check, with the fingerprint of what it covered, and the last successful load of the local engines |
-| `setup-complete.json` | Written by earlier releases. Read once, to carry an earlier verification forward. No longer written |
-| `pending-credential.json` | Present only while a key is being stored. Names the key's account, never the key. See section 4.3 |
+| `verification.json` | The last successful connection check for this workspace: the fingerprint of what it covered, the date, the model and the token counts |
+| `setup-complete.json` | Written by earlier releases. Read while the workspace has no `verification.json`, which the terminal interface and Setup write from it at their next start. No longer written |
+| `pending-credential.json` | Present while a key is being stored, and afterwards only if that was interrupted. Names the key's account and endpoint, never the key. See section 4.3 |
 | `library.sqlite3` | Queue, checkpoints, caches, catalog and search index. The files `library.sqlite3-wal` and `library.sqlite3-shm` beside it belong to the database |
 | `worker.lock` | Held by the one worker that may process the queue |
 | `worker.log` | Error output of a worker started from the terminal interface |
@@ -71,7 +71,8 @@ Every command except `parse`, `convert`, `inspect`, `prompts`, `config` and `set
 | `.librarian-work/job-N/office/` | The PDF made from an office document, and `conversion.log` |
 | `.librarian-work/job-N/editorial-report.json` | Diagnostics of the editorial run |
 | `prepared/` | Destination used by the `prepare` command |
-| `setup-draft.json` | Answers of an unfinished run of the provider section or of the full sequence, kept in the workspace that was active when Setup began. Holds no key. Removed when the section is saved, or when it is left with nothing answered |
+| `setup-draft.json` | Answers of an unfinished run of the provider part or of the full sequence: the workspace chosen, the configuration and the step. Kept in the workspace that was active when Setup began. Holds the account name of a key, never the key. See section 4.2 |
+| `setup-profile-*.toml` and two unnamed temporary items | Present only while a connection check runs |
 | `import-draft.json` | Unsubmitted "Clean documents with AI" form |
 | `parse-draft.json` | Last state of the "Parse PDFs" form |
 | `parse-history.json` | The 20 most recent parse results |
@@ -103,7 +104,7 @@ Setup is in parts. Each part is asked for when it is needed, and each can be ope
 | Local engines | When an engine is first needed, or from the Setup menu | One automatic step |
 | Every step in order | From the Setup menu, or `librarian setup` | All of the above |
 
-The first start of the terminal interface asks for the workspace only. Home is then shown, and PDFs can be parsed at once. No provider, key or payment is involved until work that calls a model is chosen.
+The terminal interface asks for the workspace whenever the configuration file it is to use does not exist: at the first start, and when `--library` names a new folder. Nothing else is asked. Home is then shown, and PDFs can be parsed at once. No provider, key or payment is involved until work that calls a model is chosen. Esc at the first screen of the workspace part, when no workspace exists yet, closes the program.
 
 ### 4.1 The Setup menu
 
@@ -119,32 +120,50 @@ Press **f** on Home. The menu shows three lines of state and the parts.
 | --- | --- |
 | Connect an AI provider, or Change the AI provider, key or model | The provider part |
 | Test the connection again (one billed request) | Shown when a provider is connected. See section 4.4 |
-| Processing defaults | Copyediting, classification, visual reading, OCR engine, Tesseract language, house style, pipeline, pages read at once, class override, office renderer |
+| Processing defaults | Copyediting, classification, visual reading, OCR engine, Tesseract language (shown while the OCR engine is Tesseract), house style, pipeline, pages read at once, class override, office renderer |
 | Markdown output defaults | Front matter, title, synopsis, page markers, review notes, file name pattern |
 | Install or check the local engines | Loads the engines the configuration uses and installs those that are missing |
 | Change the workspace | The workspace part, without the welcome |
 | Go through every step in order | The full sequence |
+| Back to Home | Leaves the menu |
 
 ### 4.2 Navigation and saving
 
 Esc means Back on every screen of Setup. It returns to the previous question. Esc at the first screen of a part leaves the part.
 
-An automatic step shows its progress. After it completes, **x**, Enter or Space continues. Esc while it runs stops it and goes back. Esc after it has completed goes back and keeps the result. Going back never lands on an automatic step: a step whose result still holds is passed over in both directions, and one whose result no longer holds runs again on the way forward.
+An automatic step shows its progress. After it completes, **x**, Enter or Space continues, and Esc goes back and keeps the result. Going back never lands on an automatic step: a step whose result still holds is passed over in both directions, and one whose result no longer holds runs again on the way forward.
+
+Esc while an automatic step runs stops waiting for it and goes back.
+
+| Step | Esc while it runs |
+| --- | --- |
+| Workspace preparation | The folder and database are still created. Their result is not used |
+| Model list | The request is not interrupted. Its result is not used |
+| Engines | The download is abandoned. An engine already installed stays |
+| Connection check | The worker process is stopped. Nothing is recorded. The request may already have been sent and billed. The check question is shown again |
+| Reading a saved key | Returns to the key step |
 
 A result holds for as long as what it depends on is unchanged.
 
 | Result | Depends on |
 | --- | --- |
 | Workspace prepared | The workspace folder |
-| Model list | The provider, the endpoint, the protocol and the key |
+| Model list | The preset, the protocol, the endpoint and the key's account (or the name of the environment variable) |
 | Engines loaded | The workspace folder and the OCR engine setting |
-| Connection check | The fingerprint of section 4.4, and no key having been entered since |
+| Connection check passed in this run | The fingerprint of section 4.4, and no key having been entered or reconnected since |
+| Connection check on record | The fingerprint, no key having been entered in this run, and the record belonging to the workspace now chosen |
 
 A step that fails shows the reason and offers "Try this step again" and "Back". A failed step cannot be passed.
 
-Nothing outside the memory of the program is changed until a part is saved. The provider part and the full sequence end with a summary and one entry, "Save". The single-screen parts end with "Save and return". Leaving a part before that leaves the configuration in force, its key, and the queued jobs exactly as they were. Each job keeps the configuration it was queued with; Setup never alters a queued job.
+Until a part is saved, the configuration file, the credential store, the verification record and the active workspace are unchanged. Three things are written earlier: the answers, in `setup-draft.json`; the workspace folder and its database, by the preparation step; and engines, by the engines step. The connection check writes temporary files in the workspace and removes them. Choosing "Reconnect the previous session key" replaces, in memory, the key held under the earlier reference.
 
-Ctrl+S during the provider part or the full sequence keeps the answers given so far in `setup-draft.json`. The next run of that part offers to resume them. A key is never kept in the draft; a key entered before the interruption must be entered again.
+The provider part and the full sequence end with a summary and one entry, "Save". The single-screen parts end with "Save and return". The workspace part is saved when its preparation step is continued. The engines part has nothing to save; its effect is the installed engines. Leaving a part before it is saved leaves the configuration in force, its stored key and the queued jobs as they were. Each job keeps the configuration it was queued with; Setup never alters a queued job.
+
+The answers of the provider part and of the full sequence are written to `setup-draft.json` before each step. The file is removed when the part is saved, or when the part is left at its first step with nothing changed. Otherwise it remains, also after Ctrl+S, and the next run of that part asks "Resume the saved setup" or "Start from the current configuration". A key is never kept in the draft; a key entered before the interruption must be entered again.
+
+The workspace step offers "Use this workspace", "Browse for a workspace" and "Type a workspace path". A folder that already holds a configuration is offered as "Open this workspace with its settings" or "Choose another folder".
+
+The limit step offers $0.25, $1.00 or $5.00 per document, the current limit, or no dollar limit. Where the model has no prices it offers 100,000 or 1,000,000 output tokens per document, or the current limits.
 
 ### 4.3 Keys
 
@@ -152,28 +171,46 @@ The key step offers the entries that apply.
 
 | Entry | Shown when |
 | --- | --- |
-| Use the key entered a moment ago | A key was entered earlier in this run |
-| Use the saved key | The configuration refers to a stored key, or to a session key present in this process |
+| Use the key entered a moment ago | The configuration still refers to a key entered in this run. Choosing another provider or endpoint discards that key |
+| Use the saved key | The configuration refers to a stored key, or to a session key present in this process, and no key entered in this run is in use. Choosing it reads the key in an automatic step; the system may ask to unlock its store |
 | Paste a new API key | Always |
-| Import the key from VARIABLE | The variable named by `provider.key_env` is set. Setup names one only for OpenAI (`OPENAI_API_KEY`) and Anthropic (`ANTHROPIC_API_KEY`) |
-| This local server needs no key | The endpoint is on the local host |
+| Import the key from VARIABLE | The variable named by `provider.key_env` is set. Setup names one only for OpenAI (`OPENAI_API_KEY`) and Anthropic (`ANTHROPIC_API_KEY`). The value is copied and treated as a newly entered key |
+| This local server needs no key | The endpoint is on the local host. Choosing it clears `credential` and `key_env` |
 | Open the provider's API-key page | The preset has one. It is opened with the system's `open`, `xdg-open` or `rundll32` command |
 
-A pasted key is shown as dots and may not contain white space. It is held in the memory of the program under a new reference. The next step asks whether to remember it.
+A pasted key is shown as dots. White space before and after it is removed; white space inside it is refused. It is held in the memory of the program under a new reference. The next step asks whether to remember it.
 
-| Choice | Effect when the part is saved |
+| Choice | Effect |
 | --- | --- |
-| Remember it in the system credential store | The key is written to the store under the service name `ai.nampara.librarian.terminal` and a new account name, and read back to confirm it. The stores are Keychain on macOS, Credential Manager on Windows and Secret Service on Linux |
-| Keep it for this session only | Nothing is stored. The key stays in memory, and a worker started from the terminal interface receives it through an environment variable of the worker process. It is asked for again at the next start |
-| Reconnect the previous session key, including its queued jobs | Shown when the configuration in force uses a session key. The entered key is placed under that earlier reference, so that jobs queued under it can run |
+| Remember it in the system credential store | When the part is saved, the key is written to the store under the service name `ai.nampara.librarian.terminal` and a new account name, and read back to confirm it. The stores are Keychain on macOS, Credential Manager on Windows and Secret Service on Linux |
+| Keep it for this session only | Nothing is stored. The key stays in memory, and a worker started from the terminal interface receives it through an environment variable of the worker process. It is not available after the program exits. It is then entered again in the provider part, which requires a new connection check |
+| Reconnect the previous session key, including its queued jobs | Shown when the configuration in force uses a session key for the same endpoint; the selection then starts on it. The entered key is placed under that earlier reference at once, in memory, so that jobs queued under it can run. `namespace` is set to the earlier account |
 
-Saving is one transaction, in this order: the key is written to the store, if it is to be remembered; the configuration is written; the verification record is written; the workspace is recorded as the active one.
+Saving proceeds in this order.
 
-- If the store is not available, nothing is written and the part is not saved. The screen offers to try again, to keep the key for the session only and save, or to go back.
-- If the configuration cannot be written, the key written a moment before is removed again, and the earlier configuration and its key stay in force.
-- If the program stops between writing the key and writing the configuration, the file `pending-credential.json` names the account. At the next start the program removes that key, because no configuration refers to it, and removes the file. If a configuration does refer to it, only the file is removed.
+1. An earlier interruption is settled, if there is one and the store can be reached.
+2. The configuration is validated and the workspace folder is created.
+3. If the key is to be remembered: the store is asked whether it is available; `pending-credential.json` is written; the key is written to the store and read back.
+4. The configuration is written.
+5. `pending-credential.json` is removed.
+6. `verification.json` is written.
+7. `active-profile.json` is written.
 
-A key that existed before is never changed or removed. Every entered key has a new account name, so an earlier key stays available to jobs queued with it.
+The key and the configuration take effect together at step 4.
+
+| Failure | Outcome |
+| --- | --- |
+| The store is not available | Nothing is written. The earlier configuration and key stay in force |
+| The key cannot be written, or is not read back as written | The program attempts to remove the entry. The configuration is not written. The earlier configuration and key stay in force |
+| The configuration cannot be written | The key written a moment before is removed again. The earlier configuration and key stay in force |
+| The verification record or the active workspace cannot be written | The configuration and key are already in force. The screen says so and names the record that is missing. "Try again" writes it |
+| The program stops between step 3 and step 4 | `pending-credential.json` remains. See below |
+
+For the first three failures the screen is headed "The setup was not saved" and offers "Try again" and "Back"; when a new key was to be stored it also offers "Keep the key for this session only, and save".
+
+An interruption is settled when the terminal interface next opens Home in that workspace, when a part of Setup is next opened there, or at the next save, provided the store can be reached. If no configuration refers to the account named in `pending-credential.json` as a stored key, that key is removed from the store. The file is then removed. If the removal fails, or the store cannot be reached, the file stays and the attempt is repeated later. The commands `run`, `clean` and the others do not settle it.
+
+A key that existed before is never changed or removed. Every key entered, other than one reconnected to a session reference, has a new account name, so an earlier key stays available to jobs queued with it.
 
 The configuration file holds a reference to the key: the account name, the endpoint and whether it is a session key. The key itself is not written to the configuration file, job records, logs, drafts or command-line arguments. A saved key is bound to its endpoint and is refused for any other. For scripted use without Setup, the key may be supplied in the environment variable named by `provider.key_env`.
 
@@ -181,23 +218,25 @@ The configuration file holds a reference to the key: the account name, the endpo
 
 The connection check sends one request to the provider from a separate worker process: one small built-in image and at most 1,024 generated tokens. The provider bills this request. The check confirms the key, image input and a structured reply. It does not measure the quality of document processing. The screen states the billing before the request is sent. The check is stopped after `timeout_seconds` plus 30 seconds.
 
-A successful check is recorded in `verification.json` with a fingerprint. The fingerprint covers the protocol (`kind`), the endpoint, the account name of the key (or the name of the environment variable when no key is stored), `model`, `vision_model` and `structured_output`.
+A successful check is recorded in `verification.json` with a fingerprint. In the provider part and the full sequence it is recorded when the part is saved; the test in the Setup menu records it at once. The fingerprint covers the protocol (`kind`), the endpoint, the account name of the key (or the name of the environment variable when no key is stored), `model`, `vision_model` and `structured_output`.
 
 | Change | New check required |
 | --- | --- |
-| Output defaults, processing defaults, house style, OCR settings | No |
+| Output defaults, processing defaults, house style, OCR settings | No. One exception: in a workspace set up by an earlier release, before the terminal interface or Setup has been started once with this release, a change of the OCR engine or language through `config set` or `config edit` requires a new check |
 | Request, token and cost limits; prices; concurrency; timeouts; rate limits | No |
 | Storing a session key in the credential store under the same account | No |
 | Provider, endpoint or protocol | Yes |
-| A key entered again or replaced | Yes |
+| A key entered again, replaced or reconnected | Yes, including when a check was passed earlier in the same run |
 | Model, vision model, or structured-output mode | Yes |
-| A workspace that has no record of its own | Yes |
+| A workspace that has no record of its own | Yes. An existing workspace opened in Setup is judged by its own record |
 
-When a check is on record and still covers the configuration, the provider part shows its date and offers "Continue without a new request". It also offers "Test the connection again (one billed request)". The provider part cannot be saved without a check that covers it.
+The check step has two forms. When a check covers the configuration it shows the date and offers "Continue without a new request", "Test the connection again (one billed request)" and "Choose a different model". Otherwise it offers "Run the connection check (one billed request)" and "Choose a different model". The provider part, and the full sequence unless the provider is left for later, cannot be saved without a check that covers the configuration.
 
-"Test the connection again" in the Setup menu sends the same request for the configuration in force. A pass is recorded. A failure withdraws the record, and work that calls a model then asks for a successful check first.
+"Test the connection again" in the Setup menu sends the same request for the configuration in force. A pass is recorded. A failure withdraws the record, and work that calls a model then asks for a successful check first. A failure here includes a timeout, an invalid configuration and a session key that is not present. Esc while the request is in flight records nothing.
 
-Verified provider access, loaded local engines, and the quality of a processed document are three separate things. The first two are recorded separately in `verification.json`. Nothing records the third.
+A test that fails inside the provider part means that no check covers that configuration in the part. If the configuration tested is the one in force, its record is withdrawn on disk as well.
+
+Verified provider access, installed local engines, and the quality of a processed document are three separate things. The first is recorded in `verification.json`. The second is read from the engine files each time it is shown. Nothing records the third.
 
 ### 4.5 Other particulars
 
@@ -206,10 +245,10 @@ Verified provider access, loaded local engines, and the quality of a processed d
 - **Returning to the provider in force.** Choosing another preset and then the original one restores the original settings, including its key reference and model.
 - **Model list.** The list is requested from `{endpoint}/models` (xAI and Fireworks use their own list addresses), with a time limit of 45 seconds and at most 100 pages. Entries marked inactive, entries for embedding, image, audio, moderation or reranking models, and entries that produce no text are dropped. The list always comes from the provider. If the request fails, Setup reports the failure and does not substitute a stored list. Models that report no image input are omitted. A model that does not report its image capability is labelled "image support unverified" and is tested by the connection check. A model with a context below 16,384 tokens or an output limit below 1,024 tokens is refused. "Ask the provider for the list again" repeats the request.
 - **Prices.** Prices are shown only where the provider's list supplies them (OpenRouter, xAI) and for one Anthropic model with a recorded rate. A missing price is not treated as zero. Without prices no dollar limit can be set, and a limit on generated tokens is offered instead.
-- **Values set by the provider part.** Choosing a preset sets `catalog_id`, `base_url`, `kind`, `structured_output`, `key_env` and `prompt_cache`, and clears the prices and `max_cost`. Choosing a model sets `model` and `vision_model`, sets `context_tokens` to the reported context but at most 32,768, sets `max_output_tokens` to the reported limit within 256 to 8,192 and at most a quarter of the context, and copies any prices. Entering a key sets `credential` and sets `namespace` to the account name.
-- **Changing the workspace.** A folder that already holds a configuration is opened with its own settings. A new folder starts from the settings in force; it has no verification record, so its first use of the provider asks for a connection check.
+- **Values set by the provider part.** Choosing a preset sets `catalog_id`, `base_url`, `kind`, `structured_output`, `key_env` and `prompt_cache`, and clears the prices and `max_cost`; a preset with a different endpoint also clears `credential`, `model` and `vision_model`. The custom protocol sets `prompt_cache` to `ephemeral` for Anthropic Messages and to `off` otherwise. Choosing a model sets `model` and `vision_model`, sets `context_tokens` to the reported context but at most 32,768, sets `max_output_tokens` to the reported limit within 256 to 8,192 and at most a quarter of the context, and copies any prices. Entering a key sets `credential` and sets `namespace` to the account name.
+- **Changing the workspace.** A folder that already holds a configuration is opened with its own settings, its own key reference and its own verification record. A new folder starts from the settings in force; it has no verification record, so its first use of the provider asks for a connection check.
 - **`librarian setup`.** The command runs the full sequence and exits when it is saved. It does not open Home.
-- **Workspaces set up by earlier releases.** Their one verification stamp is honoured for as long as the configuration it covered is unchanged.
+- **Workspaces set up by earlier releases.** Their one verification stamp is honoured for as long as the configuration it covered is unchanged. The terminal interface and Setup write `verification.json` from it when they are next started.
 
 ## 5. Terminal interface
 
@@ -219,7 +258,7 @@ Start the terminal interface with `librarian` or `librarian tui`. It requires an
 
 Home has two panes. The left pane, "What do you want to do?", lists six actions. The right pane, "Documents · newest first", lists the jobs of the workspace. Below them are a detail panel for the selected document, a "Now" panel for the running job, a line of key hints, and a message line. The header shows counts of done, to-review, queued and running documents, and the workspace path. The screen refreshes ten times a second. The 1,000 most recent jobs are listed and counted.
 
-Each document line shows the job number, the file name, the status and, while it differs from the status, the stage (section 9.5). With no document in the workspace, the detail panel shows the state of the AI provider, the state of the local engines and the last parse. The detail panel of a document shows any error, the status and stage, the counts of pages rendered, read by OCR, read visually, copyedited, assembled and reviewed, the source, the destination, the number of model calls and of calls answered from the cache, the tokens in and out, and the cost where prices are known. The descriptions of the actions and the longer key hints are shown only when the terminal is large enough. When the terminal interface opens, the message line shows the last parse.
+Each document line shows the job number, the file name, the status and, while it differs from the status, the stage (section 9.5). With no document in the workspace, the detail panel shows the state of the AI provider, the state of the local engines and the last parse. While the provider is not ready, the description of **n** reads "Asks for an AI provider when you queue." The detail panel of a document stopped at a limit begins "Stopped at a limit; press r to raise it and resume." The detail panel of a document shows any error, the status and stage, the counts of pages rendered, read by OCR, read visually, copyedited, assembled and reviewed, the source, the destination, the number of model calls and of calls answered from the cache, the tokens in and out, and the cost where prices are known. The descriptions of the actions and the longer key hints are shown only when the terminal is large enough. When the terminal interface opens, the message line shows the last parse.
 
 | Key | Action |
 | --- | --- |
@@ -242,9 +281,18 @@ Each document line shows the job number, the file name, the status and, while it
 
 Letter keys are lower case. They act from either pane. The keys **p**, **r** and **c** act on the document highlighted in the right pane, whichever pane has focus. The pane cannot be switched while the document list is empty. Ctrl+C has no function in the terminal interface.
 
-**q** starts one background worker for the workspace. If nothing is queued, no worker is started and the message line says so. If a worker is already running, none is started. Before the worker starts, the engines the queued jobs use are installed if they are missing: the PDF engine, and the OCR runtime and models when a queued job uses the bundled OCR. If they cannot be installed the worker is not started and the jobs stay queued.
+**q** starts one background worker for the workspace. If nothing is queued, no worker is started and the message line says so. If a worker is already running, none is started. Before the worker starts, the engines the queued jobs use are installed if they are missing: the PDF engine, and the OCR runtime and models when a queued job uses the bundled OCR. If they cannot be installed the worker is not started and the jobs stay queued. **q** does not check the provider: the provider is checked when work is queued from the import form. If a queued job uses a session key that is not present, the worker is started and the message line gives the number of saved profiles that need a session key; those jobs fail with a credential error and the others proceed.
 
-**r** resumes a paused or cancelled document from its last checkpoint. For a complete, needs-review, prepared or failed document it queues a new job from the retained original, using the current configuration, and keeps the earlier result; if that configuration calls a model and the provider is not ready, the provider is asked for first. For a document stopped at a limit it opens the limits screen of section 5.3. In each case the worker is then started.
+**r** acts on the selected document according to its status.
+
+| Status | Action |
+| --- | --- |
+| Paused, cancelled | Returned to the queue; it continues from its last checkpoint. The provider is not checked |
+| Stopped at a limit | If a ceiling still stops it, the limits screen of section 5.3 opens. If none does, it is returned to the queue |
+| Complete, needs review, prepared, failed | A new job is queued from the retained original with the current configuration; the earlier result is kept. If that configuration calls a model and the provider is not ready, the provider is asked for first; if that is declined, nothing is queued |
+| Queued, running | Unchanged |
+
+The worker is then started if there is work for it, except when the limits screen is left without a raise or the provider question is declined.
 
 ### 5.2 Document menu
 
@@ -269,15 +317,15 @@ A document that reaches its request ceiling, its output-token ceiling or its cos
 
 The limits screen is opened by **r** on such a document, or from its menu. It states which ceiling was reached, and shows for requests, output tokens and estimated cost the ceiling and the amount used. An amount marked "held" is reserved for a request whose outcome the provider never reported; it counts against the ceiling.
 
-For each ceiling that stops the document the screen offers a suggested higher value and "another value". Choosing one opens a second screen, "Authorize a higher ceiling". It names the document, the old and new ceiling, the provider and model that further requests go to, and what has been used. Its entries are "Authorize and resume" and "Back"; the selection starts on "Back". Nothing is changed until "Authorize and resume" is chosen.
+For each ceiling that stops the document the screen offers a suggested higher value and "another value", and it ends with "Back". The suggested value is the larger of double the present ceiling and what is used plus a margin: 100 requests; ten times the output allowance of one request; or $0.25, rounded up to a cent. It is arithmetic and not an estimate of what the document needs. A value typed as "another value" may carry `$` and commas, must be a positive number, and is cut to a whole number for requests and tokens. A value not above the present ceiling is refused when it is authorized, with the message "The ceiling was not changed". Choosing one opens a second screen, "Authorize a higher ceiling". It names the document, the old and new ceiling, the endpoint and the model of the document's stored configuration, to which further requests go, and what has been used. Its entries are "Authorize and resume" and "Back"; the selection starts on "Back". Nothing is changed until "Authorize and resume" is chosen.
 
-On authorization the ceiling is raised for that document only, the change is recorded with the document, the document returns to the queue and the worker is started. It continues from its last checkpoint. Completed work, cached replies and the counts of requests, tokens and cost are untouched. A ceiling can only be raised. The record of each change holds the ceiling, the old and new value, what had been used at the time, when, and whether it was authorized in the terminal interface or from the command line. It is shown by `librarian budget ID`, and as an event of the document.
+On authorization the ceiling is raised for that document only and the change is recorded with the document. If no ceiling stops the document any longer, it returns to the queue and the worker is started; it continues from its last checkpoint. Otherwise the limits screen is shown again. Completed work, cached replies and the counts of requests, tokens and cost are untouched. A ceiling can only be raised. The record of each change holds the ceiling, the old and new value, the requests, output tokens and cost used at the time, when, and whether it was authorized in the terminal interface or from the command line. Held amounts are not part of the record. It is shown by `librarian budget ID`, and as an event of the document.
 
 The command `librarian budget` does the same from the command line. See section 6.2.
 
 ### 5.4 Parse PDFs
 
-Press **a** on Home. Parsing needs the workspace and the PDF engine only. If the PDF engine is neither supplied with the program nor installed in the workspace, it is downloaded and verified when "Parse now" is first chosen.
+Press **a** on Home. Parsing needs the workspace and the PDF engine only. If the PDF engine is neither supplied with the program nor installed in the workspace, it is downloaded and verified when "Parse now" is first chosen. Esc during that download returns to the form. After the installation has completed, Esc continues like **x**.
 
 | Field | Meaning |
 | --- | --- |
@@ -374,7 +422,7 @@ Spaces are ordinary characters. Home shortcuts do not act inside a field. Pasted
 | Home | Return to the top |
 | Enter, Space, Esc, x | Close |
 
-**Automatic steps.** After completion, **x**, Enter or Space continues. Esc while the step runs stops it and goes back. Esc after it has completed goes back and keeps its result.
+**Automatic steps.** After completion, **x**, Enter or Space continues. Esc while the step runs stops waiting for it and goes back; section 4.2 states what each step does then. Esc after it has completed goes back and keeps its result. Two cases differ: after an engine installation started by "Parse now" or by starting the queue, Esc continues; after a parse run, Esc returns to the form and the result is listed under "Earlier results".
 
 **Ctrl+S** acts on every screen. Accepted answers and saved forms are kept. An edit not yet accepted, and a key not yet saved, are lost. All queued and running jobs of the workspace are set to paused. The program exits with status 0. A running worker stops at its next checkpoint.
 
@@ -423,9 +471,9 @@ Only files with the extension `.pdf`, in any letter case, are read. A folder hol
 | `status --watch` | Open the terminal interface |
 | `tui` | Open the terminal interface. The same as giving no command |
 | `pause [ID]` | Pause one job, or every queued and running job |
-| `resume [ID]` | Return one job, or every paused, cancelled and failed job, to the queue. A job stopped at a ceiling is returned only if its ceilings now allow another request. Otherwise it is left as it is and listed under `blocked`, with the reason and the `budget` command that raises the ceiling |
-| `budget ID` | Print the ceilings of the job, what it has used, which ceiling stops it, and the record of every change to its ceilings, as JSON |
-| `budget ID --max-requests N` | Raise a ceiling of that job. Also `--max-generated-tokens N` and `--max-cost DOLLARS`. Naming the new ceiling is the authorization. A ceiling can only be raised; the job must not be running; a cost ceiling can be raised only where one exists |
+| `resume [ID]` | Return one job, or every paused, cancelled and failed job, to the queue. A job stopped at a ceiling is returned only if no ceiling stops it: requests used are below the request ceiling; tokens used and held, plus the output allowance of one request, are within the token ceiling; and cost used and held is below the cost ceiling and, after a stop at the cost ceiling, that ceiling has been raised since. Otherwise it is left as it is and listed under `blocked`, with the reason and the `budget` command that raises the ceiling. The size of the next request is not known in advance, so a job returned after a cost raise may stop again |
+| `budget ID` | Print as JSON: `explanation`; `state` (the job's `status`, `ceilings`, `used` including held amounts, `next_request_tokens`, `priced`, and `exhausted`, the ceilings that stop it); `amendments`, the record of every change; and `resumed` |
+| `budget ID --max-requests N` | Raise a ceiling of that job. Also `--max-generated-tokens N` and `--max-cost DOLLARS`. Naming the new ceiling is the authorization. Several ceilings may be named; they are applied together or not at all. A ceiling can only be raised; the job must not be running; a cost ceiling can be raised only where one exists; the amended configuration must still be valid |
 | `retry ID` | Queue a new job from the retained original with the current configuration |
 | `cancel [ID]` | Cancel one job, or every queued, running and paused job |
 | `prepare SOURCE` | Render page images and run local OCR only, for a file or for each file directly in a folder. No model call, no publication. The job ends as `prepared` |
@@ -440,12 +488,12 @@ Only files with the extension `.pdf`, in any letter case, are read. A folder hol
 | `--body-only` | `clean` | Omit front matter, title, synopsis, page markers and review notes |
 | `--queue-only` | `clean` | Queue without starting the worker |
 | `--quiet` | `run` | No progress display and no result lines |
-| `--start` | `resume`, `retry`, `budget` | Start the worker afterwards and wait for it |
-| `--resume` | `budget` | Return the job to the queue after raising its ceiling |
+| `--start` | `resume`, `retry`, `budget` | Start the worker afterwards and wait for it. For `budget` it implies `--resume`. `resume ID --start` does not start the worker when that job is blocked |
+| `--resume` | `budget` | Return the job to the queue after raising its ceiling. Requires a ceiling option. The job is returned only if no ceiling stops it any longer; `resumed` is then 1, otherwise 0 |
 
 `pause` and `cancel` print the number of jobs changed; `resume` prints the number resumed and the jobs left blocked. A job not in a state the command can change is left as it is, and the exit status is 0. `clean`, `run` and `prepare` do not require Setup and do not check that the provider is verified; they require a usable configuration and, for model work, a key.
 
-Raising a ceiling changes that one job. Its completed work, its cached replies and its counts of requests, tokens and cost are untouched, and the change is recorded with the consumption at the time and the words "from the command line". `resume ID` for a job that a ceiling still stops prints the reason on the error stream and exits with status 1.
+Raising a ceiling changes that one job. Its completed work, its cached replies and its counts of requests, tokens and cost are untouched, and the change is recorded with the consumption at the time and the words "from the command line". `resume ID` for a job that a ceiling still stops prints the reason on the error stream and exits with status 1. `resume` without a job number prints the reason for each blocked job and exits with status 0.
 
 Only one worker may process a workspace at a time. Jobs run one at a time in order of job number. A worker on a terminal shows a progress line. On an interrupt signal the worker pauses all queued and running jobs and stops; committed work is kept.
 
@@ -505,7 +553,7 @@ Only one worker may process a workspace at a time. Jobs run one at a time in ord
 | 2 | A job that needs review. Also an error in the command line |
 | 3 | A job that was paused or cancelled |
 
-Job statuses are returned by `clean`, `run`, `prepare`, `resume --start` and `retry --start`. The jobs considered are: for `clean` and `prepare`, those queued by the command; for `run`, those queued or running when it started; for `resume --start`, all queued jobs; for `retry --start`, the new job. If any of them failed or stopped at its budget the status is 1. Otherwise it is 2 or 3 according to the last such job in the list.
+Job statuses are returned by `clean`, `run`, `prepare`, `resume --start`, `retry --start` and `budget --start`. The jobs considered are: for `clean` and `prepare`, those queued by the command; for `run`, those queued or running when it started; for `resume --start`, all queued jobs; for `retry --start`, the new job; for `budget --start`, the named job. If any of them failed or stopped at its budget the status is 1. Otherwise it is 2 or 3 according to the last such job in the list.
 
 ## 7. Configuration
 
@@ -546,7 +594,7 @@ The configuration file is TOML. Unknown keys are rejected. A missing file yields
 | `vision` | true | Send page images to the model |
 | `prepare_only` | false | Page images and OCR only |
 | `ocr` | `paddle` | `paddle` or `tesseract` (local OCR), `vision` (no local OCR; in the archival pipeline the model reads the page image, in the editorial pipeline the same as `off`), or `off` |
-| `ocr_language` | `en` | Read only when `ocr` is `tesseract`: the Tesseract language, or several joined by `+`, for example `eng+deu`. It must be one for which Tesseract has data on the computer; this is checked when Tesseract is chosen in Setup and when it is used. The values `en`, `zh` and `ja` of earlier files are taken as `eng`, `chi_sim` and `jpn`. With any other OCR engine the key has no effect and every value is accepted. The bundled engine recognizes English, Chinese and Japanese without a setting |
+| `ocr_language` | `en` | Read only when `ocr` is `tesseract`: the Tesseract language, or several joined by `+`, for example `eng+deu`. The value must be non-empty and consist of ASCII letters, digits, `_`, `+` and `-`. It must name languages for which Tesseract has data on the computer; this is checked when Tesseract is chosen in Setup, by the engines step of Setup, and when Tesseract is used. A worker reads the list of installed languages once. The whole values `en`, `zh` and `ja` of earlier files are taken as `eng`, `chi_sim` and `jpn` where those are installed. With any other OCR engine the key has no effect and every value is accepted. The bundled engine recognizes English, Chinese and Japanese without a setting |
 | `page_concurrency` | 3 | Pages read at once, 1 to 16 |
 | `chunk_bytes` | 6000 | Size of a source window, 512 to 32000 |
 | `evidence_rounds` | 3 | Evidence requests allowed per passage, 0 to 8 |
@@ -625,7 +673,7 @@ The presets record each provider's published endpoint. The developers have not e
 
 **Requests.** A request that receives HTTP 429 or a 5xx status, or that fails in transport, is tried at most `attempts` times in all, with increasing delay or the delay the provider states. Each try counts as one request against `max_requests`. A stated delay longer than `timeout_seconds` fails the request. Any other HTTP error fails at once. Redirects are not followed. The connection time limit is 20 seconds. A reply may be at most 16 MiB. A request estimated to exceed `context_tokens`, or the whole of `tokens_per_minute`, is not sent; for an Anthropic endpoint the provider's token-count service is consulted before such a request is refused. Requests are spaced to `requests_per_minute` and held to `tokens_per_minute`. A reply cut off at the output limit causes the source to be divided and the work continued from the source, not from generated text.
 
-**Budgets.** Before each request a reservation is recorded against `max_requests`, `max_generated_tokens` and `max_cost`. A request that would exceed a ceiling is not sent, and the job stops with status `budget_exhausted` and a message that names the ceiling. Reservations survive a restart. A reservation for a request whose outcome was never reported stays held and counts against the ceiling. Cost is computed only when prices are configured and the provider reports token counts. A stopped job continues when its ceiling is raised (sections 5.3 and 6.2); nothing is reset.
+**Budgets.** Before each try of a request a reservation is recorded against `max_requests`, `max_generated_tokens` and `max_cost`: one request, the output allowance `provider.max_output_tokens`, and, where prices are configured, an estimated cost. A job therefore stops at the token ceiling when less than one request's allowance remains. A request that would exceed a ceiling is not sent, and the job stops with status `budget_exhausted` and a message that names the ceiling. Reservations survive a restart. A reservation is released when the reply reports token counts, on HTTP 429 and on other HTTP errors below 500. It stays held, and counts against the ceiling, for a request that failed in transport, received a 5xx status, was answered without token counts, or was in flight when the job was paused or cancelled. Cost is computed only when prices are configured and the provider reports token counts. A stopped job continues when its ceiling is raised (sections 5.3 and 6.2); nothing is reset.
 
 **Caches.** A completed reply is stored in the workspace database under a hash of the request. An identical later request is answered from the store without a provider call. This is separate from the provider's own prompt caching, which is selected by `prompt_cache`.
 
@@ -738,10 +786,10 @@ The crate `librarian-wasm` exports one function, `execute_json`. It gives access
 ## 11. Limits and known conditions
 
 - **Credential stores.** Storing a key in Keychain, Credential Manager or Secret Service has not been exercised by the automated tests, which use a stand-in store to test the order of operations, the rollback and the recovery. On a computer with no credential store the key can be kept for the session only.
-- **Session keys.** A session key is asked for again at each start. Until it is entered, work that calls a model is not queued from the terminal interface.
-- **Workers started from the command line.** `clean`, `run` and `retry --start` do not check that the provider is verified. A job whose provider or key is missing fails when it first calls the model, with a message that says so.
+- **Session keys.** A session key is not available after the program exits. Home then shows "the session key has not been entered in this session". It is entered again in the provider part, which requires a new billed connection check, and until then work that calls a model is not queued from the import form.
+- **Where the provider is not checked.** The provider is checked when work is queued from the import form and when **r** runs a finished document again. It is not checked by **q**, by **r** on a paused or cancelled document, or by the commands `clean`, `run`, `prepare`, `resume --start`, `retry --start` and `budget --start`. A job whose provider or key is missing fails when it first calls the model, with a message that says so.
 - **OCR models.** The bundled OCR models recognize English, Chinese and Japanese. Other languages need Tesseract or the model's own reading of the page.
-- **Suggested ceilings.** The limits screen suggests double the present ceiling. The suggestion is arithmetic and not an estimate of what the document needs.
+- **Engines from the command line.** The commands install no engine by themselves; `librarian engines install` does.
 - **Print layout.** Text printed to page images is set in one font without complex-script shaping. The native text is kept separately and is not affected.
 - **Scanned PDFs in `parse`.** The parser reports pages that need OCR and does not read them.
 - **Quality.** A status of `complete` records that the pipeline ran to its end. It is not a statement that the document is correct. The developers have made no paid document runs; the two document runs on record were made by the owner with an earlier version.
@@ -761,7 +809,7 @@ python3 tools/package.py aarch64-apple-darwin --check-engines
 
 The package is written to `dist/` as `librarian-TARGET.tar.gz`, or `.zip` on Windows, with a `.sha256` file. The options `--binary` and `--output` name another program and another folder; `--fetch-common` only downloads and verifies the OCR models.
 
-The workflow "Librarian terminal builds" starts on every pull request, on each push that changes the Rust sources, the three packaging tools or the packaged documents, and on request. On a pull request a first job finds which files changed. The build jobs run only when the Rust sources, the packaging tools or the packaged documents changed. A lint of the Python scripts under `tools/` runs only when those scripts or `pyproject.toml` changed. A job that does not apply is reported as skipped. The last job, "Rust required", always runs; it fails if a job that had to run did not succeed. It is the check to require on `main`.
+The workflow "Librarian terminal builds" starts on every pull request, on each push that changes the Rust sources, the toolchain file, the three packaging tools, the packaged documents and licenses or the workflow itself, and on request. On a pull request a first job finds which files changed. The build jobs run only when the Rust sources, the packaging tools or the packaged documents changed. A lint of the Python scripts under `tools/` runs only when a file under `tools/`, `pyproject.toml` or the workflow file changed. A job that verifies the office renderer and fetches the OCR models precedes the builds. A job that does not apply is reported as skipped. The last job, "Rust required", always runs; it fails if a job that had to run did not succeed. It is the check to require on `main`.
 
 For each of the four targets the build jobs run the linter with warnings as errors, a release build, the tests, and the package check. The format check runs on Linux. The workflow also builds the WebAssembly package.
 

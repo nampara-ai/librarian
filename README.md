@@ -37,13 +37,13 @@ cargo build --release --locked -p librarian-cli
 ./target/release/librarian
 ```
 
-A source build carries no engines. Setup downloads and verifies the PDF and OCR engines. LibreOffice, which is needed for office documents, must be installed separately or named in `processing.office_renderer`.
+A source build carries no engines. The terminal interface downloads and verifies an engine when it is first needed; from the command line, `librarian engines install` does. LibreOffice, which is needed for office documents, must be installed separately or named in `processing.office_renderer`.
 
 ## First use
 
 Run `librarian`. The first start asks for a workspace folder and then shows Home. PDFs can be parsed at once: press **a**. Parsing needs no account, no key and no payment. If the program was built from source, the PDF engine is downloaded and verified the first time it is needed.
 
-Cleaning documents with AI needs a provider, a key and a model. Librarian asks for them when such work is first queued, or from Setup (**f**). Connecting a provider ends with one test request that the provider bills. That request is repeated only when the provider, the key or the model changes.
+Cleaning documents with AI needs a provider, a key and a model. Librarian asks for them when such work is first queued, or from Setup (**f**). Connecting a provider includes one test request that the provider bills, unless a recorded check still covers the provider, endpoint, key and model. The request is not repeated for other changes.
 
 From the command line, without the terminal interface:
 
@@ -93,7 +93,7 @@ The complete list is in section 6 of the [terminal reference](docs/RUST_FOUNDATI
 
 - A source file is never modified. When a job first runs, a copy of its source is stored in the workspace.
 - A published file is never replaced.
-- An API key is stored in the system credential store, or held for the session only. It is not written to the configuration file, job records, logs or command-line arguments. It is stored only when Setup is saved; leaving Setup earlier changes nothing.
+- An API key is stored in the system credential store, or held for the session only. It is not written to the configuration file, job records, logs or command-line arguments. It is stored only when Setup is saved; leaving Setup earlier leaves the configuration and the stored keys unchanged.
 - Work is recorded in a local database as it is done. An interrupted job resumes from its last checkpoint.
 - A job keeps the configuration it was queued with. Changing Setup does not alter queued jobs.
 - Request, token and cost ceilings apply to each job. A job that reaches a ceiling stops and keeps its work. Its ceiling can then be raised, with explicit authorization, and the job continues from its checkpoint. What was used is not reset, and each change is recorded.

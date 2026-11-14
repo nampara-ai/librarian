@@ -96,24 +96,15 @@ pub struct ProviderCheck {
     pub estimated_cost: Option<f64>,
 }
 
-/// The last time the local engines were loaded successfully.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct EngineCheck {
-    pub checked_at: i64,
-    pub ocr: String,
-}
-
-/// What has been verified for a workspace. Provider access and local engines
-/// are recorded separately. Neither says anything about the quality of a
-/// processed document.
+/// What has been verified for a workspace: provider access. Whether the local
+/// engines are installed is read from the engine files each time it is shown,
+/// and nothing here says anything about the quality of a processed document.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Verification {
     #[serde(default)]
     pub version: u32,
     #[serde(default)]
     pub provider: Option<ProviderCheck>,
-    #[serde(default)]
-    pub engines: Option<EngineCheck>,
 }
 
 impl Verification {
@@ -149,10 +140,16 @@ impl Verification {
                 output_tokens: 0,
                 estimated_cost: None,
             }),
-            engines: Some(EngineCheck {
-                checked_at: at,
-                ocr: config.processing.ocr.clone(),
-            }),
+        }
+    }
+    /// Write the record of a workspace that has only the stamp of an earlier
+    /// release, so that later changes are judged by the present fingerprint.
+    pub fn carry_forward(location: &Location, config: &Config) {
+        if !Self::path(&location.root).exists() && location.root.is_dir() {
+            let record = Self::load(location, config);
+            if record.provider.is_some() {
+                let _ = record.save(&location.root);
+            }
         }
     }
     pub fn save(&self, root: &Path) -> Result<()> {
@@ -220,6 +217,17 @@ pub fn ai_state(location: &Location, config: &Config) -> Ai {
     }
 }
 
+/// The configuration, and the key if one was stored, are in force, but a
+/// record that follows them could not be written.
+#[derive(Debug)]
+pub struct SavedIncomplete(pub String);
+impl std::fmt::Display for SavedIncomplete {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for SavedIncomplete {}
+
 #[derive(Serialize, Deserialize)]
 struct Journal {
     account: String,
@@ -277,6 +285,10 @@ pub fn recover(vault: &dyn Vault, location: &Location) -> Result<bool> {
 /// stops between storing the key and writing the configuration, the journal
 /// lets `recover` remove the key at the next start. Keys that existed before
 /// are never touched: every entered key has a new account name.
+///
+/// Once the configuration is written the key and the configuration are in
+/// force. A failure after that point is returned as `SavedIncomplete`, so
+/// that the caller does not report that nothing changed.
 pub fn activate(
     vault: &dyn Vault,
     location: &Location,
@@ -329,7 +341,11 @@ pub fn activate(
     }
     // The configuration now refers to the key: the transaction is committed.
     let _ = std::fs::remove_file(journal(&location.root));
-    verification.save(&location.root)?;
+    verification.save(&location.root).map_err(|error| {
+        anyhow::Error::new(SavedIncomplete(format!(
+            "the verification record could not be written: {error:#}"
+        )))
+    })?;
     Ok(config)
 }
 
@@ -497,7 +513,6 @@ mod tests {
                 output_tokens: 0,
                 estimated_cost: None,
             }),
-            engines: None,
         };
 
         // Settings that do not bear on access keep the check.
