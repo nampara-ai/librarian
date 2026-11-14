@@ -72,7 +72,9 @@ def test_release_workflow_smoke_installs_with_exported_constraints() -> None:
 
 
 def test_release_docs_describe_stable_surface() -> None:
-    readme = Path("README.md").read_text(encoding="utf-8")
+    # The root README describes the Rust terminal program. The release statements of
+    # this application are in its own README, kept as docs/LEGACY_README.md.
+    readme = Path("docs/LEGACY_README.md").read_text(encoding="utf-8")
     operations = Path("docs/OPERATIONS.md").read_text(encoding="utf-8")
     changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
 
