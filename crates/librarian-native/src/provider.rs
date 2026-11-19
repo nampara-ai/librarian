@@ -28,6 +28,9 @@ pub struct ModelClient {
 struct Rate {
     next: Instant,
     tokens: VecDeque<(Instant, u64)>,
+    /// Per-minute limits the provider last reported in its response headers.
+    reported_requests: Option<u32>,
+    reported_tokens: Option<u64>,
 }
 type RatePools = std::sync::Mutex<HashMap<String, Arc<Mutex<Rate>>>>;
 static RATE_POOLS: OnceLock<RatePools> = OnceLock::new();
@@ -105,6 +108,8 @@ impl ModelClient {
                 Arc::new(Mutex::new(Rate {
                     next: Instant::now(),
                     tokens: VecDeque::new(),
+                    reported_requests: None,
+                    reported_tokens: None,
                 }))
             })
             .clone();
@@ -150,6 +155,7 @@ impl ModelClient {
         key: &str,
         detail: &str,
         cost: Option<f64>,
+        hold: usize,
     ) -> Result<i64> {
         // Own the write lock before reading counters: concurrent requests cannot
         // reuse the same allowance. Unsettled reservations survive worker crashes.
@@ -162,7 +168,6 @@ impl ModelClient {
             bail!("Job paused or cancelled");
         }
         let (tokens,reserved_cost):(i64,f64)=library.db.query_row("SELECT COALESCE(SUM(output_tokens),0),COALESCE(SUM(cost),0) FROM request_reservations WHERE job=? AND settled=0",[job],|r|Ok((r.get(0)?,r.get(1)?)))?;
-        let p = &self.config.provider;
         let limits = &self.config.processing;
         let ceilings = crate::budget::Ceilings {
             max_requests: limits.max_requests,
@@ -176,9 +181,7 @@ impl ModelClient {
             cost: state.cost.unwrap_or(0.0),
             held_cost: reserved_cost,
         };
-        if let Some(limit) =
-            crate::budget::exceeded(&ceilings, &used, p.max_output_tokens as u64, cost)
-        {
+        if let Some(limit) = crate::budget::exceeded(&ceilings, &used, hold as u64, cost) {
             bail!("{}", crate::budget::stop_message(limit, &ceilings, &used));
         }
         library.db.execute(
@@ -192,12 +195,12 @@ impl ModelClient {
         let id = library.db.last_insert_rowid();
         library.db.execute(
             "INSERT INTO request_reservations(attempt,job,output_tokens,cost) VALUES(?,?,?,?)",
-            rusqlite::params![id, job, i64::try_from(p.max_output_tokens)?, cost],
+            rusqlite::params![id, job, i64::try_from(hold)?, cost],
         )?;
         transaction.commit()?;
         Ok(id)
     }
-    fn payload(&self, request: &Request<'_>) -> Result<(Value, String)> {
+    fn payload(&self, request: &Request<'_>, limit: usize) -> Result<(Value, String)> {
         let p = &self.config.provider;
         let image = request
             .image
@@ -239,7 +242,10 @@ impl ModelClient {
                 if let Some((bytes, mime)) = &image {
                     content.push(json!({"type":"input_image","image_url":format!("data:{mime};base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes)),"detail":"high"}));
                 }
-                let mut body = json!({"model":model,"store":false,"input":[{"role":"developer","content":[prefix]},{"role":"user","content":content}],"max_output_tokens":p.max_output_tokens});
+                let mut body = json!({"model":model,"store":false,"input":[{"role":"developer","content":[prefix]},{"role":"user","content":content}],"max_output_tokens":limit});
+                if !p.reasoning_effort.is_empty() {
+                    body["reasoning"] = json!({"effort":p.reasoning_effort});
+                }
                 if let Some(context) = request.context {
                     body["input"][0]["content"]
                         .as_array_mut()
@@ -262,7 +268,7 @@ impl ModelClient {
                 if let Some((bytes, mime)) = &image {
                     content.push(json!({"type":"image","source":{"type":"base64","media_type":mime,"data":base64::engine::general_purpose::STANDARD.encode(bytes)}}));
                 }
-                let mut body = json!({"model":model,"max_tokens":p.max_output_tokens,"system":[prefix],"messages":[{"role":"user","content":content}]});
+                let mut body = json!({"model":model,"max_tokens":limit,"system":[prefix],"messages":[{"role":"user","content":content}]});
                 if let Some(context) = request.context {
                     body["system"]
                         .as_array_mut()
@@ -280,7 +286,10 @@ impl ModelClient {
                 if let Some((bytes, mime)) = &image {
                     content.push(json!({"type":"image_url","image_url":{"url":format!("data:{mime};base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes))}}));
                 }
-                let mut body = json!({"model":model,"messages":[{"role":"system","content":instructions},{"role":"user","content":content}],"max_tokens":p.max_output_tokens});
+                let mut body = json!({"model":model,"messages":[{"role":"system","content":instructions},{"role":"user","content":content}],"max_tokens":limit});
+                if !p.reasoning_effort.is_empty() {
+                    body["reasoning_effort"] = json!(p.reasoning_effort);
+                }
                 if let Some(context) = request.context {
                     body["messages"]
                         .as_array_mut()
@@ -386,7 +395,10 @@ impl ModelClient {
             }
         }
     }
-    async fn throttle(&self, estimated: u64, library: &Library, job: i64) -> Result<()> {
+    /// Wait for room under the per-minute limits: the configured ceilings, lowered
+    /// to what the provider reports when it reports less. Returns the entry's
+    /// time stamp so that the estimate can be replaced by the billed count.
+    async fn throttle(&self, estimated: u64, library: &Library, job: i64) -> Result<Instant> {
         let p = &self.config.provider;
         if estimated > p.tokens_per_minute {
             bail!(
@@ -408,7 +420,15 @@ impl ModelClient {
             }
             let wait_rate = rate.next.saturating_duration_since(now);
             let used: u64 = rate.tokens.iter().map(|(_, n)| n).sum();
-            let wait_tokens = if used + estimated > p.tokens_per_minute {
+            let tokens_per_minute = rate
+                .reported_tokens
+                .map_or(p.tokens_per_minute, |n| n.min(p.tokens_per_minute))
+                .max(estimated);
+            let requests_per_minute = rate
+                .reported_requests
+                .map_or(p.requests_per_minute, |n| n.min(p.requests_per_minute))
+                .max(1);
+            let wait_tokens = if used + estimated > tokens_per_minute {
                 rate.tokens
                     .front()
                     .map(|(at, _)| Duration::from_secs(60).saturating_sub(now.duration_since(*at)))
@@ -419,8 +439,8 @@ impl ModelClient {
             let wait = wait_rate.max(wait_tokens);
             if wait.is_zero() {
                 rate.tokens.push_back((now, estimated));
-                rate.next = now + Duration::from_secs_f64(60.0 / f64::from(p.requests_per_minute));
-                return Ok(());
+                rate.next = now + Duration::from_secs_f64(60.0 / f64::from(requests_per_minute));
+                return Ok(now);
             }
             drop(rate);
             tokio::time::sleep(wait.min(Duration::from_secs(1))).await;
@@ -432,8 +452,23 @@ impl ModelClient {
         job: i64,
         request: Request<'_>,
     ) -> Result<Value> {
-        let (body, url) = self.payload(&request)?;
+        self.request_bounded(library, job, request, None).await
+    }
+    /// As `request`, with a smaller ceiling on generated tokens for this one
+    /// request. The ceiling bounds the response, the budget hold and the rate
+    /// estimate, so many small requests can run side by side.
+    pub async fn request_bounded(
+        &self,
+        library: &Library,
+        job: i64,
+        request: Request<'_>,
+        max_output: Option<usize>,
+    ) -> Result<Value> {
         let p = &self.config.provider;
+        let limit = max_output
+            .unwrap_or(p.max_output_tokens)
+            .clamp(1, p.max_output_tokens.max(1));
+        let (body, url) = self.payload(&request, limit)?;
         let separate_vision =
             request.image.is_some() && !p.vision_model.is_empty() && p.vision_model != p.model;
         let (input_price, cached_price, output_price) = if separate_vision {
@@ -510,7 +545,7 @@ impl ModelClient {
             );
         }
         let mut context_input = input_estimate;
-        if context_input + p.max_output_tokens as u64 > p.context_tokens as u64
+        if context_input + limit as u64 > p.context_tokens as u64
             && let Some(count) = self
                 .counted_input(
                     library,
@@ -525,20 +560,25 @@ impl ModelClient {
             // formatting. Cost reservations keep the original conservative bound.
             context_input = count.saturating_add(256).saturating_add(count / 20);
         }
-        if context_input + p.max_output_tokens as u64 > p.context_tokens as u64 {
+        if context_input + limit as u64 > p.context_tokens as u64 {
             bail!("Request exceeds the configured context budget");
         }
-        let estimated = context_input + p.max_output_tokens as u64;
+        // Text is counted at three bytes to a token for pacing. The entry is
+        // replaced by the billed count when the response arrives.
+        let estimated = if max_output.is_some() {
+            context_input / 3 + limit as u64
+        } else {
+            context_input + limit as u64
+        };
         for attempt in 0..p.attempts {
-            self.throttle(estimated, library, job).await?;
+            let stamp = self.throttle(estimated, library, job).await?;
             if !library.active(job)? {
                 bail!("Job paused or cancelled");
             }
             let reserve_cost = match (input_price, output_price) {
-                (Some(i), Some(o)) => Some(
-                    (input_estimate as f64 * i * 2.5 + p.max_output_tokens as f64 * o)
-                        / 1_000_000.0,
-                ),
+                (Some(i), Some(o)) => {
+                    Some((input_estimate as f64 * i * 2.5 + limit as f64 * o) / 1_000_000.0)
+                }
                 _ => None,
             };
             let attempt_id = self.reserve(
@@ -547,6 +587,7 @@ impl ModelClient {
                 &key,
                 &format!("{} attempt {}", request.task, attempt + 1),
                 reserve_cost,
+                limit,
             )?;
             let mut req = self.http.post(&url).json(&body);
             if let Some(value) = &key_value {
@@ -573,11 +614,36 @@ impl ModelClient {
             let value = match response {
                 Ok(mut response) => {
                     let status = response.status();
-                    retry_after = response
-                        .headers()
-                        .get("retry-after")
-                        .and_then(|h| h.to_str().ok())
-                        .and_then(|s| s.parse::<u64>().ok());
+                    let header = |names: &[&str]| -> Option<u64> {
+                        names.iter().find_map(|name| {
+                            response
+                                .headers()
+                                .get(*name)
+                                .and_then(|h| h.to_str().ok())
+                                .and_then(|s| s.trim().parse::<f64>().ok())
+                                .map(|n| n.max(0.0) as u64)
+                        })
+                    };
+                    retry_after = header(&["retry-after"]);
+                    let requests = header(&[
+                        "x-ratelimit-limit-requests-minute",
+                        "x-ratelimit-limit-requests",
+                    ]);
+                    let tokens = header(&[
+                        "x-ratelimit-limit-tokens-minute",
+                        "x-ratelimit-limit-tokens",
+                    ]);
+                    if requests.is_some() || tokens.is_some() {
+                        let mut rate = self.rate.lock().await;
+                        // Stay a little under what the provider allows.
+                        if let Some(n) = requests {
+                            rate.reported_requests =
+                                Some(u32::try_from(n * 9 / 10).unwrap_or(u32::MAX).max(1));
+                        }
+                        if let Some(n) = tokens {
+                            rate.reported_tokens = Some((n * 9 / 10).max(1));
+                        }
+                    }
                     if response
                         .content_length()
                         .is_some_and(|n| n > 16 * 1024 * 1024)
@@ -624,8 +690,13 @@ impl ModelClient {
                             rusqlite::params![format!("HTTP {}", status.as_u16()), attempt_id],
                         )?;
                         bail!(
-                            "Provider HTTP {}. Check credentials, model access and endpoint configuration.",
-                            status.as_u16()
+                            "Provider HTTP {}. Check credentials, model access and endpoint configuration.{}",
+                            status.as_u16(),
+                            if status.as_u16() == 400 && !p.reasoning_effort.is_empty() {
+                                " The request carried provider.reasoning_effort; the model may not accept that value."
+                            } else {
+                                ""
+                            }
                         );
                     }
                 }
@@ -671,6 +742,16 @@ impl ModelClient {
                     input
                 };
                 let uncached = (total_input - cached - writes).max(0);
+                if reported_input.is_some() && reported_output.is_some() {
+                    let mut rate = self.rate.lock().await;
+                    if let Some(entry) = rate
+                        .tokens
+                        .iter_mut()
+                        .find(|(at, n)| *at == stamp && *n == estimated)
+                    {
+                        entry.1 = (total_input + output) as u64;
+                    }
+                }
                 let cost = match (input_price, output_price, reported_input, reported_output) {
                     (Some(i), Some(o), Some(_), Some(_)) => Some(
                         (uncached as f64 * i
@@ -916,15 +997,18 @@ mod budget_invariants {
         config.provider.model = "transport-invariant".into();
         let client = ModelClient::new(&config).unwrap();
         let (body, _) = client
-            .payload(&Request {
-                task: "vision",
-                instructions: "Read the source image.",
-                context: None,
-                input: Value::String("Page evidence".into()),
-                schema: Value::Null,
-                image: Some((png.get_ref(), "image/png")),
-                validate: &|_| Ok(()),
-            })
+            .payload(
+                &Request {
+                    task: "vision",
+                    instructions: "Read the source image.",
+                    context: None,
+                    input: Value::String("Page evidence".into()),
+                    schema: Value::Null,
+                    image: Some((png.get_ref(), "image/png")),
+                    validate: &|_| Ok(()),
+                },
+                8192,
+            )
             .unwrap();
         let source = &body["messages"][0]["content"][1]["source"];
         let data = source["data"].as_str().unwrap();
@@ -987,6 +1071,7 @@ mod budget_invariants {
                             &format!("request-{i}"),
                             "parallel request",
                             Some(0.125),
+                            client.config.provider.max_output_tokens,
                         )
                     })
                 })
@@ -1017,7 +1102,8 @@ mod budget_invariants {
                         job,
                         "after-restart",
                         "unknown billing must remain reserved",
-                        Some(0.125)
+                        Some(0.125),
+                        fresh.config.provider.max_output_tokens
                     )
                     .unwrap_err()
                     .to_string()
@@ -1044,11 +1130,25 @@ mod budget_invariants {
         let client = ModelClient::new(&library.config(job).unwrap()).unwrap();
         for i in 0..2 {
             client
-                .reserve(&library, job, &format!("r{i}"), "request", None)
+                .reserve(
+                    &library,
+                    job,
+                    &format!("r{i}"),
+                    "request",
+                    None,
+                    client.config.provider.max_output_tokens,
+                )
                 .unwrap();
         }
         let stop = client
-            .reserve(&library, job, "r2", "request", None)
+            .reserve(
+                &library,
+                job,
+                "r2",
+                "request",
+                None,
+                client.config.provider.max_output_tokens,
+            )
             .unwrap_err()
             .to_string();
         assert!(
@@ -1120,7 +1220,14 @@ mod budget_invariants {
         reopened.start(job).unwrap();
         let fresh = ModelClient::new(&reopened.config(job).unwrap()).unwrap();
         fresh
-            .reserve(&reopened, job, "r3", "after amendment", None)
+            .reserve(
+                &reopened,
+                job,
+                "r3",
+                "after amendment",
+                None,
+                fresh.config.provider.max_output_tokens,
+            )
             .unwrap();
         assert_eq!(reopened.job(job).unwrap().requests, 3);
     }

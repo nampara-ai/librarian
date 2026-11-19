@@ -413,6 +413,130 @@ fn resolved_tesseract_language(configured: &str) -> Result<String> {
     }
 }
 
+/// One recognized word: text, box (x, y, width, height) in image pixels with
+/// the height of its line, the number of its line, and a score from 0 to 1.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OcrWord {
+    pub text: String,
+    pub rect: [f32; 4],
+    pub line: u32,
+    pub score: f32,
+}
+
+/// Words out of recognized lines. A line's box is shared among its words in
+/// proportion to their lengths, which is exact enough to place words in
+/// columns and rows; the recognizer reports no finer positions.
+pub fn words_from_lines(lines: &[OcrLine]) -> Vec<OcrWord> {
+    let mut words = Vec::new();
+    for (number, line) in lines.iter().enumerate() {
+        let xs = line.polygon.iter().map(|p| p[0]);
+        let ys = line.polygon.iter().map(|p| p[1]);
+        let (left, right) = (
+            xs.clone().fold(f32::MAX, f32::min),
+            xs.fold(f32::MIN, f32::max),
+        );
+        let (top, bottom) = (
+            ys.clone().fold(f32::MAX, f32::min),
+            ys.fold(f32::MIN, f32::max),
+        );
+        let parts: Vec<&str> = line.text.split_whitespace().collect();
+        let units: usize = parts.iter().map(|p| p.chars().count() + 1).sum();
+        if units == 0 || right <= left || bottom <= top {
+            continue;
+        }
+        let unit = (right - left) / units as f32;
+        let mut x = left;
+        for part in parts {
+            let width = unit * part.chars().count() as f32;
+            words.push(OcrWord {
+                text: part.to_owned(),
+                rect: [x, top, width, bottom - top],
+                line: number as u32,
+                score: line.score,
+            });
+            x += width + unit;
+        }
+    }
+    words
+}
+
+/// Tesseract's own word boxes, read without an async runtime. Each word takes
+/// the top and height of its line, so that words of a line share a baseline.
+pub fn tesseract_words(image: &Path, language: &str) -> Result<Vec<OcrWord>> {
+    let language = resolved_tesseract_language(language)?;
+    let mut child = std::process::Command::new("tesseract")
+        .arg(image)
+        .args(["stdout", "-l", &language, "tsv"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .context("Tesseract could not be started")?;
+    // Read on another thread so that a full pipe cannot stall the program.
+    let mut pipe = child.stdout.take().context("Tesseract has no output")?;
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut pipe, &mut text).map(|_| text)
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            bail!("Tesseract timed out");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(40));
+    };
+    let text = reader
+        .join()
+        .map_err(|_| anyhow::anyhow!("Tesseract output could not be read"))??;
+    if !status.success() {
+        bail!("Tesseract failed; check installation and language data");
+    }
+    let mut words: Vec<(OcrWord, [u32; 4])> = Vec::new();
+    for row in text.lines().skip(1) {
+        let c: Vec<_> = row.splitn(12, '\t').collect();
+        if c.len() != 12 || c[0] != "5" || c[11].trim().is_empty() {
+            continue;
+        }
+        let key = [c[1].parse()?, c[2].parse()?, c[3].parse()?, c[4].parse()?];
+        words.push((
+            OcrWord {
+                text: c[11].trim().to_owned(),
+                rect: [c[6].parse()?, c[7].parse()?, c[8].parse()?, c[9].parse()?],
+                line: 0,
+                score: (c[10].parse::<f32>()? / 100.0).clamp(0.0, 1.0),
+            },
+            key,
+        ));
+    }
+    let mut lines: Vec<[u32; 4]> = Vec::new();
+    let mut result = Vec::with_capacity(words.len());
+    for index in 0..words.len() {
+        let key = words[index].1;
+        let line = lines.iter().position(|k| *k == key).unwrap_or_else(|| {
+            lines.push(key);
+            lines.len() - 1
+        });
+        let members = words.iter().filter(|w| w.1 == key);
+        let top = members
+            .clone()
+            .map(|w| w.0.rect[1])
+            .fold(f32::MAX, f32::min);
+        let bottom = members
+            .map(|w| w.0.rect[1] + w.0.rect[3])
+            .fold(f32::MIN, f32::max);
+        let mut word = words[index].0.clone();
+        word.rect[1] = top;
+        word.rect[3] = bottom - top;
+        word.line = line as u32;
+        result.push(word);
+    }
+    Ok(result)
+}
+
 pub async fn tesseract(image: &Path, language: &str) -> Result<OcrResult> {
     let language = resolved_tesseract_language(language)?;
     let language = language.as_str();

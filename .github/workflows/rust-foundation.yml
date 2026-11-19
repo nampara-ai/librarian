@@ -48,6 +48,7 @@ jobs:
     outputs:
       rust: ${{ steps.areas.outputs.rust }}
       tools: ${{ steps.areas.outputs.tools }}
+      targets: ${{ steps.areas.outputs.targets }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         if: github.event_name == 'pull_request'
@@ -59,6 +60,7 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
@@ -113,6 +115,17 @@ jobs:
 
           echo "rust=${rust}" | tee -a "$GITHUB_OUTPUT"
           echo "tools=${tools}" | tee -a "$GITHUB_OUTPUT"
+
+          # macOS and Windows minutes are billed at a multiple of Linux minutes.
+          # A push to a working branch builds and tests on Linux only. A pull
+          # request, a push to main and a manual run use all four targets.
+          linux='{"runner":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","suffix":""}'
+          others='{"runner":"macos-15","target":"aarch64-apple-darwin","suffix":""},{"runner":"macos-15-intel","target":"x86_64-apple-darwin","suffix":""},{"runner":"windows-2022","target":"x86_64-pc-windows-msvc","suffix":".exe"}'
+          if [ "$EVENT_NAME" = "push" ] && [ "$REF" != "refs/heads/main" ]; then
+            echo "targets=[${linux}]" | tee -a "$GITHUB_OUTPUT"
+          else
+            echo "targets=[${others},${linux}]" | tee -a "$GITHUB_OUTPUT"
+          fi
 
   tools-lint:
     name: Tools lint
@@ -174,19 +187,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: macos-15
-            target: aarch64-apple-darwin
-            suffix: ''
-          - runner: macos-15-intel
-            target: x86_64-apple-darwin
-            suffix: ''
-          - runner: windows-2022
-            target: x86_64-pc-windows-msvc
-            suffix: '.exe'
-          - runner: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            suffix: ''
+        # The targets are chosen by the job "changes": all four, or Linux only
+        # for a push to a working branch.
+        include: ${{ fromJSON(needs.changes.outputs.targets) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     steps:

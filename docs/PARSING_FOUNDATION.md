@@ -4,15 +4,15 @@ This document describes the PDF parser of the Librarian terminal program: what i
 
 ## 1. Purpose
 
-The parser reads a PDF file and produces a typed description of its contents in reading order: titles, headings, paragraphs, list items, tables, code, captions, footnotes, pictures and page furniture. It works from the text and drawing instructions in the file. It calls no model and contacts no service. Its output is the same for the same input.
+The parser reads a PDF file and produces a typed description of its contents in reading order: titles, headings, paragraphs, list items, tables, code, captions, footnotes, pictures and page furniture. It works from the text and drawing instructions in the file. On request it also reads scanned pages with a local OCR engine. It calls no model and contacts no service. Without OCR its output is the same for the same input.
 
-The parser is the base layer of the program. On 2026-11-08 the owner directed that every later function, including OCR, picture description and copyediting, be built on it and be applied only to the pages and regions the parser identifies as needing them. Those later functions are not yet connected to it. See section 9.
+The parser is the base layer of the program. On 2026-11-08 the owner directed that every later function, including OCR, picture description and copyediting, be built on it and be applied only to the pages and regions the parser identifies as needing them. Two of them are connected. Local OCR reads scanned pages on request (section 4.1). The fast pipeline of `clean` takes the parser's Markdown for a PDF and copyedits it. Picture description, and the application of a model to the pages and regions that routing names, are not connected. See sections 9 and 10.
 
 ## 2. Input
 
 The parser accepts files with the extension `.pdf`, in any letter case. A file is refused, with the reason stated, when it is password-protected, when it is damaged or is not a PDF, when it uses a security scheme the PDF engine does not support, or when the PDF engine cannot read it for another reason.
 
-The PDF engine is PDFium. It is found in the workspace `engines` folder or in the `engines` folder beside the program.
+The PDF engine is PDFium. It is found in the workspace `engines` folder or in the `engines` folder beside the program. Reading scanned pages needs a local OCR engine as well: the bundled OCR engine, found in the same folders, or the Tesseract program on the search path.
 
 ## 3. Output
 
@@ -48,6 +48,7 @@ The file `NAME.layout.json` has two top-level members, `summary` and `document`.
 | --- | --- |
 | `source` | Path of the PDF |
 | `pages`, `words`, `elements` | Counts |
+| `ocr_pages` | Count of pages read by local OCR |
 | `roles` | Count of elements by role |
 | `routing` | Count of pages by tier. See section 5 |
 | `hyphens` | Line-end hyphens `joined` and `kept` |
@@ -80,9 +81,9 @@ Each element:
 | `rows`, `cols`, `cells` | For a table. Each cell has `row`, `col`, `text`, `bbox` and, where they apply, `rowspan`, `colspan` and `header`; with the words option, `words` |
 | `continues` | The element is completed by the next body element |
 | `tight` | The join to the next element completes a word and takes no space |
-| `origin` | `native`, or `ocr_layer` for invisible text laid over a scanned page by an earlier OCR. The values `ocr` and `model` are defined for later use and are not produced |
+| `origin` | `native`; `ocr_layer` for invisible text laid over a scanned page by an earlier OCR; or `ocr` for text read from the page image by local OCR. The value `model` is defined for later use and is not produced |
 | `evidence` | `layout` (measured from the page), `ruling` (lines drawn in the file) or `declared` (the file's bookmarks) |
-| `confidence` | A number from 0 to 1. At most 0.8 for text from an OCR layer |
+| `confidence` | A number from 0 to 1. At most 0.8 for text from an OCR layer and for text read by local OCR |
 | `words` | Indices into the page's word list. Present with the words option |
 
 A member at its default is omitted: `level` except on headings; empty `spans`, `cells` and `words`; `rows` and `cols` of 0; false `continues` and `tight`; false span flags and an absent `link`; a cell `header` that is false; `rowspan` and `colspan` of 1.
@@ -118,12 +119,23 @@ For each page the first stage records:
 
 Positions are corrected for a page whose visible area is an offset or rotated window on its coordinate space. Words are separated where the file has no space characters but leaves a gap between letters. The document's bookmarks are recorded.
 
+**Scanned pages.** This step runs only on request: with `parse --ocr`, with the box "Read scanned pages with local OCR" of the Parse form, and in the fast pipeline of `clean` when `processing.ocr` is `paddle` or `tesseract`. A page that has a picture and fewer than 16 letters and digits of text is rendered at about 200 dots per inch, with a width of 900 to 2,600 pixels, and read by a local engine.
+
+| Request | Engine |
+| --- | --- |
+| `parse --ocr`, the Parse form, and the fast pipeline with `processing.ocr` set to `paddle` | The bundled OCR engine when it is installed, otherwise Tesseract when it is installed |
+| The fast pipeline with `processing.ocr` set to `tesseract` | Tesseract |
+
+With no engine found, the step is left out; `parse` and the form say so in one line. The Tesseract language is `processing.ocr_language` of the configuration, or `en` when `parse` finds no configuration. Tesseract is allowed 180 seconds a page.
+
+The words read are added to the page with the origin `ocr` and the engine's score as their confidence. Tesseract reports a box for each word; each word is given the top and the height of its line. The bundled engine reports lines; the box of a line is shared among its words in proportion to their lengths. A word that ends its line with a hyphen is marked as a line-end hyphen. The second stage then treats these words like any others. An engine that fails on a page fails the file.
+
 ### 4.2 Reconstruction
 
 The second stage applies the following steps. Most thresholds are proportions of a quantity measured on the document, such as its body type size or its line pitch, or of the page. A few are fixed lengths in points or fixed counts: for example, an image smaller than 14 points on a side is ignored, and a rule is at most 1.5 points thick. No threshold refers to a particular test document.
 
 1. **Measurement.** The body type size, the usual line pitch, the vocabulary, and whether the document breaks words at line ends are determined.
-2. **Text outside the reading flow.** Words outside the page box, invisible words and rotated words are set aside as hidden. Rotated words inside a ruled table are cell content and are kept. If a page has at least 8 words and four fifths of them are invisible, the page carries an OCR layer; that text is then used and is marked `ocr_layer`.
+2. **Text outside the reading flow.** Words outside the page box, invisible words and rotated words are set aside as hidden. Rotated words inside a ruled table are cell content and are kept. If a page has at least 8 words and four fifths of them are invisible, the page carries an OCR layer; that text is then used and is marked `ocr_layer`. The elements of a page that holds words read by local OCR are marked `ocr`.
 3. **Pictures.** Images are grouped into picture regions. An image covering 60 percent or more of the page is recorded as a background picture. A cluster of type much smaller than body size is taken as the content of an illustration. Groups of drawings form vector figures. A single shape that encloses running text is a panel or frame, not a figure, and is ignored. A line of text is never divided by the edge of a figure.
 4. **Captions.** A line that begins with "Figure" or "Table" (or "Fig", "Abbildung", "Abb", "Tabelle", "Tab") and a number is a caption anchor. A ruled grid smaller than a quarter of the page whose nearest caption, within six body sizes above or below, is a figure caption is treated as a picture.
 5. **Ruled tables.** Line segments are merged into strokes. Where borders are drawn one cell at a time, the points at which they break mark the cell corners. Borders that break at the same position are joined into one grid when a drawn line crosses both or when they share the same extent. Borders that run past the last drawn line to a common end close a row. Cells not separated by a line are merged. Tables with horizontal rules only take their columns from the text.
@@ -137,23 +149,24 @@ The second stage applies the following steps. Most thresholds are proportions of
 
 ## 5. Routing
 
-Each page is assigned one tier. The tier states what further processing the page would need. The parser reports the tier and performs none of that processing.
+Each page is assigned one tier. The tier states what further processing the page would need. The parser reports the tier. It performs none of that processing, except the reading of scanned pages by local OCR when that is requested (section 4.1); the tier is then assigned to the page as read.
 
 | Tier | Assigned when | Reason text |
 | --- | --- | --- |
 | `ocr` | The page has fewer than 16 letters and digits | "no usable text layer", or "scanned or image-only page: no usable text layer" |
 | `ocr` | More than 2 percent of characters could not be decoded | "text layer contains undecodable characters" |
 | `ocr` | More than one fifth of the letters, digits and private-use characters are private-use code points | "much of the text uses a font with no Unicode mapping" |
+| `review` | The page holds words read by local OCR | "text was read from the page image by local OCR" |
 | `review` | The text is an OCR layer | "text comes from an embedded OCR layer of unknown quality" |
 | `vision` | The page has a picture region covering at least 3 percent of its area, other than a background image | "N figure(s) may carry information not in the text layer" |
 | `review` | A table found from text alignment has low confidence | "sparse table grid: cell structure needs confirmation" |
 | `deterministic` | None of the above | "native text layer reconstructed deterministically" |
 
-Of the four conditions on the text layer, only the first that holds, in the order of the table, is recorded. The picture and table reasons are added to it. The page takes the highest tier among those recorded, in the order `ocr`, `vision`, `review`, `deterministic`.
+Of the five conditions on the text, only the first that holds, in the order of the table, is recorded. The picture and table reasons are added to it. The page takes the highest tier among those recorded, in the order `ocr`, `vision`, `review`, `deterministic`.
 
 ## 6. Accounting
 
-After reconstruction the parser verifies that every word of the file belongs to exactly one element, and that the count of non-space characters in the elements, plus the hyphens removed at line ends, equals the count in the file. If either check fails the parser writes nothing for that file and reports the counts. The parser's automated tests assert this check, and every measurement run of section 7 exercises it.
+After reconstruction the parser verifies that every word of the file, and every word read by local OCR, belongs to exactly one element, and that the count of non-space characters in the elements, plus the hyphens removed at line ends, equals the count in the file. If either check fails the parser writes nothing for that file and reports the counts. The parser's automated tests assert this check, and every measurement run of section 7 exercises it.
 
 ## 7. Measurements
 
@@ -176,6 +189,8 @@ Odd-numbered documents were used during development. Even-numbered documents wer
 | NID | 0.921 | 0.925 | 0.934 |
 | TEDS | 0.707 | 0.708 | 0.928 |
 | MHS | 0.802 | 0.819 | 0.821 |
+
+The scores were taken again on 2026-11-19, after the reading of scanned pages by local OCR was added, without the OCR option. They were unchanged: 0.8868 on the development half, 0.8660 on the holdout half and 0.8764 on all 200.
 
 The parser before the rebuild scored 0.747 and failed on five documents. Of the 14 engines with published results, four score higher on all 200 documents: opendataloader-hybrid (0.907), Nutrient (0.885), docling (0.882) and one opendataloader variant (0.877).
 
@@ -259,6 +274,10 @@ Three faults remain on that brochure. Photograph captions follow the text of the
 
 Eighteen multi-page documents from the docling test collection are compared with docling's own output for them. The overall agreement rose from 0.569 to 0.714 during the rebuild. docling's output contains errors of its own. This comparison is used only to detect unintended changes.
 
+### 7.7 One scanned document
+
+On 2026-11-19 a two-page PDF of page images only, holding 811 words, was parsed with `--ocr`. Tesseract read the pages. The run took 4.1 s. The heading and five paragraphs were reconstructed. This is one document and one run. The bundled OCR engine was not run on this path, because its models could not be downloaded in the development container. The accuracy of the words read was not measured.
+
 ## 8. Rules for changing the parser
 
 These rules are stated in `AGENTS.md` and apply to every change to reconstruction.
@@ -270,19 +289,19 @@ These rules are stated in `AGENTS.md` and apply to every change to reconstructio
 
 ## 9. What the parser does not do
 
-- **Scanned pages.** A page without a usable text layer is assigned the tier `ocr` and is not read. OCR is not connected to the parser.
+- **Scanned pages.** Without the OCR request of section 4.1, a page without a usable text layer is assigned the tier `ocr` and is not read. With it, such a page is read only when it has a picture and a local OCR engine is installed. The reading has been run on one document, with Tesseract (section 7.7). The bundled engine has not been run on this path. No model reads a page.
 - **Pictures.** A picture is recorded by position. It is not described.
 - **Tables without ruled lines.** These are the least accurate result. The engines that score highest on table structure use a trained table model.
 - **Bold lead-in lines.** In a document without bookmarks, a short bold line above a paragraph may be labelled a heading.
-- **Fonts without a Unicode mapping.** A page is assigned to `ocr` when more than 2 percent of its characters are undecodable or more than one fifth are private-use code points. A font that yields wrong but valid letters is not detected.
+- **Fonts without a Unicode mapping.** A page is assigned to `ocr` when more than 2 percent of its characters are undecodable or more than one fifth are private-use code points. Such a page is not read by local OCR. A font that yields wrong but valid letters is not detected.
 - **Structure tags.** They are not read.
 - **A printed table of contents.** It is recognized as such. It is not used to confirm headings.
 - **Other formats.** Text, Markdown, HTML, office documents and images are handled only by `clean`.
-- **The editorial pipeline.** `clean` does not use the parser. It renders and reads every page as before.
+- **The pipelines of `clean`.** The fast pipeline takes the parser's Markdown for a PDF, with its default options, and reads scanned pages as described in section 4.1. The editorial and archival pipelines do not use the parser. The editorial pipeline renders and reads every page as before.
 
 ## 10. Work not yet done
 
-1. A model layer applied to the pages and regions named by routing: OCR for `ocr`, a table model for `review`, description for `vision`.
-2. Passing `clean` through the parser, so that pages reconstructed deterministically are not sent to OCR or to a vision model.
+1. A model layer applied to the pages and regions named by routing: a table model for `review`, description for `vision`, and a reading of the pages routed `ocr` that local OCR does not read.
+2. Passing the editorial pipeline of `clean` through the parser, so that pages reconstructed deterministically are not sent to OCR or to a vision model. The fast pipeline already takes a PDF from the parser.
 3. Extraction of office documents, HTML and plain text into the same layout model.
 4. Editing of a document block by block on the layout model, in the terminal interface.

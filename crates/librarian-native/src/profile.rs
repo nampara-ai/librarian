@@ -94,6 +94,20 @@ pub struct ProviderCheck {
     pub output_tokens: i64,
     #[serde(default)]
     pub estimated_cost: Option<f64>,
+    /// The check sent an image. A check without one covers only the fast
+    /// pipeline with image reading off. Records written before this field
+    /// existed were all image checks.
+    #[serde(default = "image_check")]
+    pub image: bool,
+}
+fn image_check() -> bool {
+    true
+}
+
+/// Whether the configuration can be verified without an image: the fast
+/// pipeline sends text only when image reading is off.
+pub fn text_only(config: &Config) -> bool {
+    config.processing.pipeline == "fast" && !config.processing.vision
 }
 
 /// What has been verified for a workspace: provider access. Whether the local
@@ -139,6 +153,7 @@ impl Verification {
                 input_tokens: 0,
                 output_tokens: 0,
                 estimated_cost: None,
+                image: true,
             }),
         }
     }
@@ -166,6 +181,7 @@ impl Verification {
         self.provider
             .as_ref()
             .filter(|check| check.fingerprint == provider_fingerprint(config))
+            .filter(|check| check.image || text_only(config))
     }
 }
 
@@ -512,6 +528,7 @@ mod tests {
                 input_tokens: 0,
                 output_tokens: 0,
                 estimated_cost: None,
+                image: true,
             }),
         };
 

@@ -284,6 +284,74 @@ pub fn observed(library: &Library, document: &str, ordinal: u64) -> Result<bool>
         .is_some())
 }
 
+/// A PDF for the fast pipeline: the deterministic parser's reading, as blocks.
+/// Tables, code and picture marks are not editable and are never sent to a
+/// model. Pages the parser could not read are named in a finding.
+fn parsed_pdf(
+    library: &Library,
+    job: i64,
+    document: &str,
+    path: &Path,
+    config: &Config,
+) -> Result<()> {
+    use librarian_core::layout::{RenderOptions, Tier, markdown};
+    let engine = crate::parse::pdfium(&library.root, None)?;
+    // Scanned pages are read by the configured local OCR engine when it is installed.
+    let mut reader = crate::parse::Reader::find(
+        &library.root,
+        &config.processing.ocr,
+        &config.processing.ocr_language,
+    );
+    let parsed = crate::parse::parse_with(&engine, path, reader.as_mut())?;
+    if !parsed.ocr_pages.is_empty() {
+        library.event(
+            job,
+            "info",
+            &format!(
+                "Read {} scanned page(s) with {}",
+                parsed.ocr_pages.len(),
+                reader.as_ref().map_or("OCR", |r| r.name())
+            ),
+        )?;
+    }
+    let text = markdown(&parsed.document, RenderOptions::default());
+    let mut blocks = markdown_blocks(&text, "parser", 0);
+    let unread: Vec<String> = parsed
+        .document
+        .routing
+        .iter()
+        .filter(|route| route.tier == Tier::Ocr)
+        .map(|route| route.page.to_string())
+        .collect();
+    let mut findings = Vec::new();
+    if !unread.is_empty() {
+        findings.push(format!(
+            "No text could be read from page {}. A scanned page needs a local OCR engine: install the engines, or install Tesseract and set processing.ocr",
+            unread.join(", ")
+        ));
+    }
+    if blocks.is_empty() {
+        bail!(
+            "No text could be read from this PDF. If it is a scan, install the local OCR engines (`librarian engines install`) or Tesseract, and run the job again"
+        );
+    }
+    blocks[0].findings.extend(findings.clone());
+    persist(
+        library,
+        job,
+        document,
+        0,
+        &Observation {
+            page: 0,
+            method: "parser".into(),
+            raw_text: text,
+            blocks,
+            visuals: vec![],
+            findings: vec![],
+        },
+    )
+}
+
 pub fn extract_file(
     library: &Library,
     job: i64,
@@ -300,6 +368,9 @@ pub fn extract_file(
     {
         let pdf = crate::editorial::pages::office_pdf(library, job, path, config)?;
         return pdf::extract(library, job, document, &pdf, config);
+    }
+    if config.processing.pipeline == "fast" && extension == "pdf" {
+        return parsed_pdf(library, job, document, path, config);
     }
     match extension {
         "txt" | "text" | "log" => text_file(library, job, document, path, extension, config),

@@ -171,6 +171,17 @@ pub fn providers() -> Vec<Preset> {
             "",
         ),
         (
+            "cerebras",
+            "Cerebras",
+            "https://api.cerebras.ai/v1",
+            "chat",
+            "",
+            "https://cloud.cerebras.ai/",
+            "json",
+            0,
+            "",
+        ),
+        (
             "groq",
             "Groq",
             "https://api.groq.com/openai/v1",
@@ -331,6 +342,22 @@ impl Preset {
         config.provider.vision_cached_input_price_per_million = None;
         config.provider.vision_output_price_per_million = None;
         config.processing.max_cost = None;
+        // Providers built for throughput serve many requests side by side. These
+        // are ceilings: the client lowers itself to the limits a provider reports.
+        let defaults = crate::config::Provider::default();
+        let fast = matches!(self.id.as_str(), "cerebras" | "groq");
+        config.provider.concurrency = if fast { 16 } else { defaults.concurrency };
+        config.provider.requests_per_minute = if fast {
+            900
+        } else {
+            defaults.requests_per_minute
+        };
+        config.provider.tokens_per_minute = if fast {
+            450_000
+        } else {
+            defaults.tokens_per_minute
+        };
+        config.provider.reasoning_effort.clear();
     }
 }
 
@@ -534,6 +561,21 @@ pub async fn discover(config: &Config) -> Result<Vec<Model>> {
     Ok(models)
 }
 
+/// The reasoning effort set when a model is chosen. Copyediting needs little
+/// deliberation, and deliberation is billed and slow. Only model families whose
+/// accepted values are known are given one; for the rest nothing is sent and
+/// the model's own default applies.
+pub fn reasoning_default(model: &str) -> &'static str {
+    let id = model.to_lowercase();
+    if id.contains("gpt-oss") {
+        "low"
+    } else if id.contains("qwen-3") || id.contains("qwen3") {
+        "none"
+    } else {
+        ""
+    }
+}
+
 pub fn select(config: &mut Config, model: &Model) -> Result<()> {
     if model.context.is_some_and(|v| v < 16384) || model.max_output.is_some_and(|v| v < 1024) {
         bail!(
@@ -542,6 +584,7 @@ pub fn select(config: &mut Config, model: &Model) -> Result<()> {
     }
     config.provider.model = model.id.clone();
     config.provider.vision_model = model.id.clone();
+    config.provider.reasoning_effort = reasoning_default(&model.id).into();
     // Keep bounded page requests even when the model advertises a huge context.
     config.provider.context_tokens = model.context.unwrap_or(32768).min(32768);
     config.provider.max_output_tokens = model
@@ -585,6 +628,37 @@ pub async fn verify(config: &Config, root: &std::path::Path) -> Result<Value> {
         &probe,
     )?;
     library.start(job)?;
+    if crate::profile::text_only(config) {
+        // The fast pipeline with image reading off sends text only, so the
+        // check is of text: the key, the model and a structured reply.
+        let schema = object_schema(json!({"repaired":{"type":"string"}}), &["repaired"]);
+        let client = ModelClient::new(&probe)?;
+        client
+            .request(
+                &library,
+                job,
+                Request {
+                    context: None,
+                    task: "setup_text_check",
+                    instructions: "Repair the damaged sentence: correct the wrong words, the capitals and the punctuation. Keep every number. Return JSON with the repaired sentence in `repaired`.",
+                    input: json!({"sentence":"teh govern mint of the untied states was was founded in 1787"}),
+                    schema,
+                    image: None,
+                    validate: &|value| {
+                        let text = value["repaired"].as_str().unwrap_or_default().to_lowercase();
+                        if !(text.contains("government") && text.contains("1787")) {
+                            bail!("The model's reply did not repair the connection-check sentence. Choose a different model or retry.");
+                        }
+                        Ok(())
+                    },
+                },
+            )
+            .await?;
+        let usage = library.job(job)?;
+        return Ok(
+            json!({"model":config.provider.model,"image_input_and_structured_output":false,"text_and_structured_output":true,"input_tokens":usage.input_tokens,"output_tokens":usage.output_tokens,"estimated_cost":usage.cost}),
+        );
+    }
     let colors = [
         ("red", [255u8, 0, 0]),
         ("green", [0, 180, 0]),

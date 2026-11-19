@@ -20,6 +20,9 @@ pub struct Request<'a> {
     pub options: RenderOptions,
     pub words: bool,
     pub pdfium: Option<&'a Path>,
+    /// Read pages that have no text with local OCR. The value is the Tesseract
+    /// language to use when the bundled engine is not installed.
+    pub ocr: Option<&'a str>,
     pub json: bool,
     /// Set by the caller to stop before the next file.
     pub stop: Option<&'a std::sync::atomic::AtomicBool>,
@@ -32,6 +35,9 @@ pub struct Parsed {
     pub markdown: Option<PathBuf>,
     pub json: Option<PathBuf>,
     pub pages: u32,
+    /// Pages read by local OCR.
+    #[serde(default)]
+    pub ocr_pages: u32,
     pub words: u32,
     pub elements: u32,
     pub roles: BTreeMap<String, u32>,
@@ -49,6 +55,7 @@ impl Parsed {
         serde_json::json!({
             "source": self.source.display().to_string(),
             "pages": self.pages,
+            "ocr_pages": self.ocr_pages,
             "words": self.words,
             "elements": self.elements,
             "roles": self.roles,
@@ -151,13 +158,14 @@ pub fn routing_words(routing: &BTreeMap<String, u32>) -> String {
 /// is given. Existing files are never replaced.
 fn one(
     engine: &parse::Pdfium,
+    reader: Option<&mut parse::Reader>,
     source: &Path,
     folder: Option<&Path>,
     options: RenderOptions,
     words: bool,
 ) -> Result<(Parsed, String)> {
     let started = Instant::now();
-    let parsed = parse::parse(engine, source)?;
+    let parsed = parse::parse_with(engine, source, reader)?;
     let markdown = layout::markdown(&parsed.document, options);
     let stats = &parsed.document.stats;
     let mut result = Parsed {
@@ -165,6 +173,7 @@ fn one(
         markdown: None,
         json: None,
         pages: stats.pages,
+        ocr_pages: parsed.ocr_pages.len() as u32,
         words: stats.words,
         elements: stats.elements,
         roles: stats.roles.clone(),
@@ -211,6 +220,20 @@ fn one(
 }
 
 /// Parse a file or every PDF in a folder. One bad file does not stop the rest.
+/// The OCR engine for a request that asks for one: the bundled engine when it
+/// is installed in the workspace, otherwise Tesseract. When neither is found
+/// the request goes on without OCR and says so.
+fn reader(request: &Request<'_>, progress: &mut impl FnMut(&str)) -> Option<parse::Reader> {
+    let language = request.ocr?;
+    let reader = parse::Reader::find(request.root, "paddle", language);
+    if reader.is_none() {
+        progress(
+            "No local OCR engine was found. Scanned pages are reported and not read. Install the engines, or install Tesseract.",
+        );
+    }
+    reader
+}
+
 /// `progress` receives a line before each file. A stop request takes effect
 /// between files; the file in hand is finished and its outputs are kept.
 pub fn execute(
@@ -219,6 +242,7 @@ pub fn execute(
     mut each: impl FnMut(&Result<Parsed, (PathBuf, String)>),
 ) -> Result<Outcome> {
     let engine = parse::pdfium(request.root, request.pdfium)?;
+    let mut reader = reader(request, &mut progress);
     if let Some(folder) = request.output
         && !folder.is_dir()
     {
@@ -265,6 +289,7 @@ pub fn execute(
         progress(&format!("Parsing {} of {total}: {name}", index + 1));
         match one(
             &engine,
+            reader.as_mut(),
             source,
             request.output,
             request.options,
@@ -289,7 +314,15 @@ pub fn run(request: Request<'_>) -> Result<u8> {
     // A single file without an output folder prints its Markdown.
     if !request.source.is_dir() && request.output.is_none() {
         let engine = parse::pdfium(request.root, request.pdfium)?;
-        let (parsed, markdown) = one(&engine, request.source, None, request.options, false)?;
+        let mut reader = reader(&request, &mut |line: &str| eprintln!("{line}"));
+        let (parsed, markdown) = one(
+            &engine,
+            reader.as_mut(),
+            request.source,
+            None,
+            request.options,
+            false,
+        )?;
         io::stdout().lock().write_all(markdown.as_bytes())?;
         eprintln!("{}", serde_json::to_string(&parsed.summary())?);
         return Ok(0);
@@ -341,6 +374,9 @@ pub fn run(request: Request<'_>) -> Result<u8> {
             );
             println!("Elements: {}", counts(&file.roles));
             println!("Pages: {}", routing_words(&file.routing));
+            if file.ocr_pages > 0 {
+                println!("Pages read by local OCR: {}", file.ocr_pages);
+            }
             for path in [&file.markdown, &file.json].into_iter().flatten() {
                 println!("Wrote {}", path.display());
             }

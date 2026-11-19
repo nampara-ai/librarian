@@ -6,8 +6,8 @@ Librarian is a terminal program that turns source documents into Markdown. It ru
 
 | Function | Description |
 | --- | --- |
-| Parse | Reads a PDF and writes a Markdown file and a JSON file of typed layout blocks. Local. No model is called |
-| Clean | Queues source documents, copyedits them with a language model through a configured provider, classifies them, and publishes Markdown |
+| Parse | Reads a PDF and writes a Markdown file and a JSON file of typed layout blocks. Local. No model is called. Scanned pages are read on request, by a local OCR engine |
+| Clean | Queues source documents, copyedits them with a language model through a configured provider, classifies them, and publishes Markdown. Three pipelines exist. The fast pipeline, which a new configuration uses, reads a PDF with the parser, sends each passage of text to the model in one request, and accounts for every source word of the reply. The editorial pipeline renders every page to an image and reads it with OCR and the model. The archival pipeline is kept so that older jobs can resume |
 | Search | Full-text search of the documents that Clean has published |
 
 Both Parse and Clean are available from the command line and from the terminal interface. There is no graphical interface.
@@ -24,7 +24,7 @@ Both Parse and Clean are available from the command line and from the terminal i
 | [docs/IMPLEMENTATION_PROGRESS.md](docs/IMPLEMENTATION_PROGRESS.md) | Dated ledger of the first terminal implementation. Historical |
 | [docs/TERMINAL_REBUILD.md](docs/TERMINAL_REBUILD.md) | Design notes written before the rebuild. Historical. Not a description of the program |
 
-The repository also holds the earlier Python and Swift application, version 1.10.3, under `src/`, `apps/` and `tests/`. It is kept for reference. The workflow "CI" checks it when its files change. Its documents are [docs/LEGACY_README.md](docs/LEGACY_README.md), `docs/API.md`, `docs/ARCHITECTURE.md`, `docs/DEPLOYMENT.md`, `docs/OPERATIONS.md`, `docs/OKF.md` and `docs/EDITORIAL_EVALUATION.md`. The commands and settings they name are not those of the Rust program.
+The repository also holds the earlier Python and Swift application, version 1.10.3, under `src/`, `apps/` and `tests/`. It is kept for reference. The workflow "CI" checks it when its files change, and the workflow "Mac App" builds the Swift application when a pull request changes it. Its documents are [docs/LEGACY_README.md](docs/LEGACY_README.md), `docs/API.md`, `docs/ARCHITECTURE.md`, `docs/DEPLOYMENT.md`, `docs/OPERATIONS.md`, `docs/OKF.md` and `docs/EDITORIAL_EVALUATION.md`. The commands and settings they name are not those of the Rust program.
 
 ## Installation
 
@@ -43,7 +43,7 @@ A source build carries no engines. The terminal interface downloads and verifies
 
 Run `librarian`. The first start asks for a workspace folder and then shows Home. PDFs can be parsed at once: press **a**. Parsing needs no account, no key and no payment. If the program was built from source, the PDF engine is downloaded and verified the first time it is needed.
 
-Cleaning documents with AI needs a provider, a key and a model. Librarian asks for them when such work is first queued, or from Setup (**f**). Connecting a provider includes one test request that the provider bills, unless a recorded check still covers the provider, endpoint, key and model. The request is not repeated for other changes.
+Cleaning documents with AI needs a provider, a key and a model. Librarian asks for them when such work is first queued or started, or from Setup (**f**). Connecting a provider includes one test request that the provider bills, unless a recorded check still covers the provider, endpoint, key and model. The request sends a small built-in image. With the fast pipeline and image reading off it sends a built-in sentence and no image, and a model that accepts no images can then be used. The request is not repeated for other changes, with one exception: after a check that sent no image, turning image reading on or choosing another pipeline requires a new check.
 
 From the command line, without the terminal interface:
 
@@ -75,11 +75,13 @@ With a source build, run `librarian engines install` once before the first `pars
 ```sh
 librarian parse document.pdf -o results --create-output
 librarian parse folder -o results --create-output --recursive
+librarian parse scan.pdf -o results --ocr
 librarian clean source-folder -o finished --create-output --recursive
 librarian run
 librarian status
 librarian show 12
 librarian print 12
+librarian changes 12
 librarian search 'a phrase'
 librarian export 12 -o other-folder --create-output
 librarian budget 12 --max-requests 20000 --resume --start
@@ -100,10 +102,11 @@ The complete list is in section 6 of the [terminal reference](docs/RUST_FOUNDATI
 
 ## Limits
 
-- The parser reads PDF files only, and does not read scanned pages. It reports them.
-- Clean does not yet use the parser. It renders every page to an image and reads it with OCR and the model.
+- The parser reads PDF files only. It reads scanned pages only on request: with `parse --ocr`, with the box "Read scanned pages with local OCR" of the Parse form, and in the fast pipeline of Clean when `processing.ocr` is `paddle` or `tesseract`. The reading is done by a local OCR engine, which must be installed: the bundled engine, or Tesseract. Otherwise scanned pages are reported and not read.
+- In the fast pipeline no model reads a page of a PDF, and pictures in a PDF are not described. Of the office formats it reads only `docx`. The editorial pipeline reads the others.
+- The editorial and archival pipelines do not use the parser.
 - A status of `complete` records that processing reached its end. It does not state that the published text is correct.
-- The developers have made no paid document runs with this build. Acceptance on the owner's documents and keys has not yet been carried out.
+- The developers' paid runs with this build were made on synthetic damage of public-domain text and on one scanned test document. They are recorded in section 9.9 of the terminal reference. No run was made on the owner's documents. Acceptance on the owner's documents and keys has not yet been carried out.
 
 ## Checking a change
 

@@ -19,6 +19,7 @@ struct Draft {
     furniture: bool,
     plain: bool,
     words: bool,
+    ocr: bool,
     field: usize,
 }
 
@@ -196,6 +197,7 @@ pub fn run(terminal: &mut ratatui::DefaultTerminal, root: &Path) -> Result<Optio
                 "   {} Include word positions in the JSON",
                 check(draft.words)
             ),
+            format!("   {} Read scanned pages with local OCR", check(draft.ocr)),
             "3  Parse now".into(),
             format!("   Earlier results ({})", past.len()),
         ];
@@ -267,7 +269,8 @@ pub fn run(terminal: &mut ratatui::DefaultTerminal, root: &Path) -> Result<Optio
             3 => draft.furniture = !draft.furniture,
             4 => draft.plain = !draft.plain,
             5 => draft.words = !draft.words,
-            6 => {
+            6 => draft.ocr = !draft.ocr,
+            7 => {
                 if draft.source.is_empty() || draft.destination.is_empty() {
                     ui::notice(
                         terminal,
@@ -296,6 +299,12 @@ pub fn run(terminal: &mut ratatui::DefaultTerminal, root: &Path) -> Result<Optio
                 };
                 options.furniture = draft.furniture;
                 let (recursive, words, library) = (draft.recursive, draft.words, root.to_owned());
+                // The Tesseract language is the configured one.
+                let language = draft.ocr.then(|| {
+                    librarian_native::config::Config::load(&root.join("config.toml"))
+                        .map(|c| c.processing.ocr_language)
+                        .unwrap_or_else(|_| "en".into())
+                });
                 let record = root.to_owned();
                 let outcome = ui::task(
                     terminal,
@@ -310,6 +319,7 @@ pub fn run(terminal: &mut ratatui::DefaultTerminal, root: &Path) -> Result<Optio
                             recursive,
                             options,
                             words,
+                            ocr: language.as_deref(),
                             pdfium: None,
                             json: false,
                             stop: Some(cancel.as_ref()),
@@ -351,7 +361,7 @@ pub fn run(terminal: &mut ratatui::DefaultTerminal, root: &Path) -> Result<Optio
                     Next::Home | Next::Back => return Ok(message),
                 }
             }
-            7 => {
+            8 => {
                 if past.is_empty() {
                     ui::notice(
                         terminal,

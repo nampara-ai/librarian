@@ -284,6 +284,10 @@ async fn process(
     .to_string();
     let mut segment_ordinal = 0u64;
     let mut pending: Option<Segment> = None;
+    // The fast pipeline plans passages from the whole run of blocks. Without
+    // copyediting there is nothing to send, and the ordinary plan is kept.
+    let fast = config.processing.pipeline == "fast" && config.processing.edit;
+    let mut blocks: Vec<Segment> = Vec::new();
     for ordinal in 0..count {
         checkpoint(library, job, stop)?;
         library.progress(job, "interpreting", ordinal as u64, count as u64)?;
@@ -343,6 +347,11 @@ async fn process(
                         .trim_end()
                         .ends_with(['-', '\u{ad}']);
                 }
+                if fast {
+                    blocks.push(previous);
+                    pending = Some(block);
+                    continue;
+                }
                 segment_ordinal += persist_segment(
                     library,
                     job,
@@ -353,6 +362,10 @@ async fn process(
             }
             pending = Some(block);
         }
+    }
+    if fast {
+        blocks.extend(pending.take());
+        segment_ordinal = crate::fast::plan(library, job, blocks, config.processing.chunk_bytes)?;
     }
     if let Some(block) = pending {
         segment_ordinal += persist_segment(
@@ -370,6 +383,10 @@ async fn process(
     // A single file owns the worker. Batches remain bounded and accepted work is
     // committed after every response; no document-sized request is constructed.
     let mut position = 0u64;
+    if fast {
+        crate::fast::clean(library, job, &client, &config, segment_ordinal, stop).await?;
+        position = segment_ordinal;
+    }
     while position < segment_ordinal {
         checkpoint(library, job, stop)?;
         let mut pending_batches = Vec::new();

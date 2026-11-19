@@ -1,13 +1,20 @@
 # Changelog
 
-## Unreleased
+## Rust terminal program 0.1.0 - in development
 
 Rust terminal program, version 0.1.0, on the branch `codex/rust-foundation`. It is not released.
-The entries below this section describe the legacy Python/Swift application.
+The entries below this section describe the legacy Python/Swift application. This section is not
+named "Unreleased" because the release workflow of the legacy application refuses a tag while
+entries stand under that name, and these entries belong to a different program.
 
 - Command-line and terminal interface in Rust, with a shared core that also builds to WebAssembly.
 - `parse`: local PDF parsing into Markdown and a typed JSON layout model, with no model calls.
-- `clean`: the editorial pipeline, with a queue, checkpoints, budgets and full-text search.
+  With `--ocr`, scanned pages are read by a local OCR engine.
+- `clean`: a queue with checkpoints, budgets and full-text search, and three pipelines. The fast
+  pipeline reads a PDF with the parser, repairs every passage with one bounded model request, runs
+  the requests side by side and accounts for every source word. The editorial pipeline reads page
+  images. The archival pipeline is kept so that older jobs can resume.
+- `changes`: the word account of a job cleaned by the fast pipeline.
 - Setup wizard, system credential storage, live model discovery and a connection check.
 - Native packages for Apple Silicon macOS, Intel macOS, Windows x64 and Linux x64.
 

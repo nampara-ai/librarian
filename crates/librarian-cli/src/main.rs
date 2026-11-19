@@ -160,6 +160,11 @@ enum Command {
         /// Job number.
         id: i64,
     },
+    /// Show what the fast pipeline's cleaning did to a job, counted in words.
+    Changes {
+        /// Job number.
+        id: i64,
+    },
     /// Render the source and run local OCR only; no paid calls or document export.
     Prepare {
         /// Source file, or a folder whose files are each prepared.
@@ -175,7 +180,7 @@ enum Command {
     },
     /// Print an immutable role prompt; omit the role to list versions and hashes.
     Prompts {
-        /// copyeditor, reviewer or protocol.
+        /// copyeditor, reviewer, protocol or fast.
         role: Option<String>,
     },
     /// Inspect editorial request packets, evidence, interventions and revisions.
@@ -256,6 +261,10 @@ enum Command {
         /// Include word indices and positioned words in the JSON.
         #[arg(long)]
         words: bool,
+        /// Read pages that have no text with local OCR: the bundled engine when
+        /// it is installed, otherwise Tesseract. Such pages are routed `review`.
+        #[arg(long)]
+        ocr: bool,
         /// Use this PDFium library instead of the installed engine.
         #[arg(long, hide = true)]
         pdfium: Option<PathBuf>,
@@ -358,12 +367,17 @@ async fn run(cli: Cli) -> Result<u8> {
                     "editorial-protocol-v2",
                     editorial::contract::PROTOCOL,
                 ),
+                (
+                    "fast",
+                    librarian_core::clean::VERSION,
+                    librarian_core::clean::PROMPT,
+                ),
             ];
             if let Some(name) = role {
                 let (_, version, text) = roles
                     .iter()
                     .find(|(r, v, _)| r == name || v == name)
-                    .context("Role must be copyeditor, reviewer or protocol")?;
+                    .context("Role must be copyeditor, reviewer, protocol or fast")?;
                 if cli.json {
                     println!(
                         "{}",
@@ -386,8 +400,13 @@ async fn run(cli: Cli) -> Result<u8> {
             page_markers,
             plain,
             words,
+            ocr,
             ref pdfium,
         } => {
+            // The Tesseract language is the configured one, when there is a configuration.
+            let language = Config::load(&config_path)
+                .map(|c| c.processing.ocr_language)
+                .unwrap_or_else(|_| "en".into());
             let mut options = if plain {
                 librarian_core::layout::RenderOptions::plain()
             } else {
@@ -403,6 +422,7 @@ async fn run(cli: Cli) -> Result<u8> {
                 recursive,
                 options,
                 words,
+                ocr: ocr.then_some(language.as_str()),
                 pdfium: pdfium.as_deref(),
                 json: cli.json,
                 stop: None,
@@ -508,7 +528,7 @@ async fn run(cli: Cli) -> Result<u8> {
                 eprintln!("==> Queued {} file(s) → {}", jobs.len(), output.display());
             }
             if !queue_only {
-                worker(&library, cli.json, false).await?;
+                worker(&library, &config_path, cli.json, false).await?;
                 return result_code(&library, &jobs);
             }
         }
@@ -519,7 +539,7 @@ async fn run(cli: Cli) -> Result<u8> {
                 .filter(|j| matches!(j.status.as_str(), "queued" | "running"))
                 .map(|j| j.id)
                 .collect::<Vec<_>>();
-            worker(&library, cli.json, quiet).await?;
+            worker(&library, &config_path, cli.json, quiet).await?;
             return result_code(&library, &jobs);
         }
         Command::Status { .. } => {
@@ -574,7 +594,7 @@ async fn run(cli: Cli) -> Result<u8> {
                 }))?
             );
             if start {
-                worker(&library, cli.json, false).await?;
+                worker(&library, &config_path, cli.json, false).await?;
                 return result_code(&library, &[id]);
             }
         }
@@ -618,7 +638,7 @@ async fn run(cli: Cli) -> Result<u8> {
                     .filter(|j| matches!(j.status.as_str(), "queued" | "running"))
                     .map(|j| j.id)
                     .collect::<Vec<_>>();
-                worker(&library, cli.json, false).await?;
+                worker(&library, &config_path, cli.json, false).await?;
                 return result_code(&library, &jobs);
             }
         }
@@ -627,7 +647,7 @@ async fn run(cli: Cli) -> Result<u8> {
             let new_id = pipeline::retry(&library, id, &config)?;
             println!("{}", serde_json::json!({"queued":new_id,"retry_of":id}));
             if start {
-                worker(&library, cli.json, false).await?;
+                worker(&library, &config_path, cli.json, false).await?;
                 return result_code(&library, &[new_id]);
             }
         }
@@ -644,6 +664,15 @@ async fn run(cli: Cli) -> Result<u8> {
                         hit["snippet"].as_str().unwrap_or("")
                     );
                 }
+            }
+        }
+        Command::Changes { id } => {
+            library.job(id)?;
+            let report = librarian_native::fast::report(&library, id)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", librarian_native::fast::report_text(&report));
             }
         }
         Command::Show { id } => {
@@ -673,7 +702,7 @@ async fn run(cli: Cli) -> Result<u8> {
                 "{}",
                 serde_json::json!({"queued":jobs,"mode":"page images and local OCR only"})
             );
-            worker(&library, cli.json, false).await?;
+            worker(&library, &config_path, cli.json, false).await?;
             return result_code(&library, &jobs);
         }
         Command::Pages { id, page } => {
@@ -814,7 +843,50 @@ async fn run(cli: Cli) -> Result<u8> {
     Ok(0)
 }
 
-async fn worker(library: &Library, json: bool, quiet: bool) -> Result<()> {
+/// The command line starts the worker whatever the state of the connection
+/// check, because a key supplied in the environment has no record. It says so
+/// when queued work calls a model and the workspace's provider is not verified.
+fn provider_notice(library: &Library, config_path: &std::path::Path) {
+    use librarian_native::profile::{Ai, Location, ai_state};
+    let Ok(jobs) = library.jobs(100_000) else {
+        return;
+    };
+    let needs_model = jobs
+        .iter()
+        .filter(|j| matches!(j.status.as_str(), "queued" | "running"))
+        .filter_map(|j| library.config(j.id).ok())
+        .any(|c| c.processing.edit || c.processing.classify || c.processing.vision);
+    let Ok(config) = Config::load(config_path) else {
+        return;
+    };
+    let location = Location {
+        root: library.root.clone(),
+        config: config_path.to_owned(),
+    };
+    let state = match ai_state(&location, &config) {
+        Ai::Ready | Ai::NotNeeded => return,
+        Ai::NotConnected => "no provider, key or model is configured",
+        Ai::KeyMissing => "the key was kept for one session and is not present",
+        Ai::Unverified => {
+            "the provider has not passed a connection check with its present settings"
+        }
+    };
+    if needs_model {
+        eprintln!(
+            "Notice: {state}. Queued work that calls a model may fail at its first request; its committed work is kept. `librarian tui` checks the connection under Setup."
+        );
+    }
+}
+
+async fn worker(
+    library: &Library,
+    config_path: &std::path::Path,
+    json: bool,
+    quiet: bool,
+) -> Result<()> {
+    if !quiet {
+        provider_notice(library, config_path);
+    }
     let started = librarian_native::store::now();
     let stop = Arc::new(AtomicBool::new(false));
     let signal = stop.clone();

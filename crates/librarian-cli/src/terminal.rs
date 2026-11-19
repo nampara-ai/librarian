@@ -179,12 +179,18 @@ a  Parse PDFs now
    Local. No provider, no model call, no charge. Each PDF becomes a
    Markdown file and a JSON file of typed blocks: headings, paragraphs,
    lists, tables, pictures. Needs only the workspace; the PDF engine is
-   installed the first time if it is missing.
+   installed the first time if it is missing. Scanned pages are read
+   only when the box in the form is set, by a local OCR engine that is
+   already installed.
 
 n  Clean documents with AI
    Import a file or folder and choose a destination. The queue copyedits
-   and publishes Markdown through an AI provider. If none is connected
-   and verified, Librarian asks for it when the import is queued.
+   and publishes Markdown through an AI provider. The fast pipeline, the
+   default, reads a PDF with the parser, sends each passage of text to
+   the model in one request, and accounts for every word of the reply.
+   The editorial pipeline reads every page as an image; Setup selects it.
+   If no provider is connected and verified, Librarian asks for it when
+   the import is queued and when the queue is started.
    q starts the queue. Files run one at a time.
 
 HOME
@@ -195,6 +201,10 @@ Tab / Shift+Tab              Switch between actions and documents
 Left / Right                 Go to actions / go to documents
 Enter / Space                Run the action, or open the document's menu
 a n q s f h                  Run that action from either pane
+q                            Start the queue. If queued work calls a model
+                             and the AI provider is not ready, Librarian
+                             asks for it first; if that is declined, the
+                             queue is not started
 p r c                        Pause, resume or run again, cancel the
                              selected document
 Esc                          Close the dashboard; a running worker continues
@@ -204,9 +214,11 @@ Ctrl+S                       Save drafts, pause all work in this workspace,
 DOCUMENT MENU
 
 Enter on a document lists what applies in its current state: read the
-result, read diagnostics, pause, resume, raise a limit, run again with
-current settings as a new run, or cancel. Originals and earlier results
-are kept.
+result, read what the cleaning changed, read diagnostics, pause, resume,
+raise a limit, run again with current settings as a new run, or cancel.
+Originals and earlier results are kept. What the cleaning changed is the
+word account of the fast pipeline: words kept, repaired, replaced,
+removed and added, and the passages kept as extracted.
 
 LIMITS
 
@@ -226,7 +238,9 @@ are not changed until a part is saved. A key that is entered is kept in
 memory and is stored only when the part is saved.
 A connection check is one request billed by the provider. It is not
 repeated while a recorded check still covers the provider, endpoint,
-key and model. The menu also offers to test the connection again.
+key and model. With the fast pipeline and image reading off, the check
+sends text and no image; such a check does not cover image reading or
+another pipeline. The menu also offers to test the connection again.
 
 LISTS
 
@@ -292,8 +306,9 @@ configuration file.
 
 COMMAND LINE
 
-parse FILE|FOLDER -o FOLDER · clean SOURCE -o FOLDER · status
-show ID · pages ID · print ID · export ID --output FOLDER · doctor
+parse FILE|FOLDER -o FOLDER [--ocr] · clean SOURCE -o FOLDER · status
+show ID · pages ID · print ID · changes ID · doctor
+export ID --output FOLDER
 budget ID · budget ID --max-requests N --resume --start
 Run librarian --help for every command. The complete reference is the
 README in a package, or docs/RUST_FOUNDATION.md in the repository.";
@@ -641,6 +656,14 @@ fn document_menu(
     if job.output.is_some() {
         choices.push(("open", "Read the result".into()));
     }
+    let cleaned: i64 = library.db.query_row(
+        "SELECT count(*) FROM clean_ledger WHERE job=?",
+        [job.id],
+        |row| row.get(0),
+    )?;
+    if cleaned > 0 {
+        choices.push(("changes", "Read what the cleaning changed".into()));
+    }
     choices.push(("log", "Read diagnostics and events".into()));
     if matches!(status, "running" | "queued") {
         choices.push(("pause", "Pause (committed work is kept)".into()));
@@ -705,6 +728,14 @@ fn document_menu(
                 } else {
                     &body
                 },
+            )?;
+        }
+        "changes" => {
+            let report = librarian_native::fast::report(library, job.id)?;
+            ui::notice(
+                terminal,
+                &format!("What the cleaning changed in #{}", job.id),
+                &librarian_native::fast::report_text(&report),
             )?;
         }
         "pause" => pause(app, library, job.id)?,
@@ -1069,6 +1100,22 @@ fn start_worker(
         .any(|j| matches!(j.status.as_str(), "queued" | "running"))
     {
         app.message = "Nothing is queued. Import documents first.".into();
+        return Ok(());
+    }
+    // Work that calls a model is not started on a provider that has not passed
+    // its connection check; the owner is taken to the check instead.
+    let needs_model = {
+        let mut statement = library
+            .db
+            .prepare("SELECT DISTINCT config FROM jobs WHERE status IN ('queued','running')")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .filter_map(|json| json.ok())
+            .filter_map(|json| serde_json::from_str::<Config>(&json).ok())
+            .any(|c| c.processing.edit || c.processing.classify || c.processing.vision)
+    };
+    if needs_model && !onboarding::ensure_ai(t, location, &Config::load(config)?)? {
+        app.message = "The queue was not started: the AI provider is not connected.".into();
         return Ok(());
     }
     // The engines the queued jobs use are installed before the first of them

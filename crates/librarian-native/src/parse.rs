@@ -24,6 +24,8 @@ pub struct Timing {
 pub struct Parsed {
     pub input: DocumentInput,
     pub document: Document,
+    /// Pages read by local OCR, one-based.
+    pub ocr_pages: Vec<u32>,
     pub timing: Timing,
 }
 
@@ -46,7 +48,130 @@ pub fn supported(path: &Path) -> bool {
     crate::extract::format(path) == "pdf"
 }
 
+/// The local engine that reads pages which have no text of their own.
+pub enum Reader {
+    Paddle(Box<crate::ocr::Paddle>),
+    /// The Tesseract program on PATH, with the configured language.
+    Tesseract(String),
+}
+
+impl Reader {
+    /// The engine to use: the bundled one when its files are installed in the
+    /// workspace, otherwise Tesseract when the program is installed. `prefer`
+    /// is `paddle` or `tesseract`; any other value means no reading.
+    pub fn find(library_root: &Path, prefer: &str, language: &str) -> Option<Self> {
+        let tesseract = || {
+            crate::ocr::tesseract_languages()
+                .ok()
+                .filter(|languages| !languages.is_empty())
+                .map(|_| Reader::Tesseract(language.to_owned()))
+        };
+        match prefer {
+            "paddle" => crate::ocr::Paddle::load(&library_root.join("engines"))
+                .ok()
+                .map(|engine| Reader::Paddle(Box::new(engine)))
+                .or_else(tesseract),
+            "tesseract" => tesseract(),
+            _ => None,
+        }
+    }
+    pub fn name(&self) -> &'static str {
+        match self {
+            Reader::Paddle(_) => "the bundled OCR engine",
+            Reader::Tesseract(_) => "Tesseract",
+        }
+    }
+    fn read(&mut self, image: &image::DynamicImage) -> Result<Vec<crate::ocr::OcrWord>> {
+        match self {
+            Reader::Paddle(engine) => Ok(crate::ocr::words_from_lines(
+                &engine.recognize(image, || Ok(()))?.lines,
+            )),
+            Reader::Tesseract(language) => {
+                let file = tempfile::Builder::new().suffix(".png").tempfile()?;
+                image.save_with_format(file.path(), image::ImageFormat::Png)?;
+                crate::ocr::tesseract_words(file.path(), language)
+            }
+        }
+    }
+}
+
+/// Read with OCR every page that has a picture and almost no text, and add
+/// the words to the page as words of origin `ocr`. Returns the pages read.
+fn read_scanned(
+    pdf: &PdfDocument<'_>,
+    input: &mut DocumentInput,
+    reader: &mut Reader,
+) -> Result<Vec<u32>> {
+    let font = input.fonts.len() as u32;
+    let mut read = Vec::new();
+    for (index, page) in input.pages.iter_mut().enumerate() {
+        let letters: usize = page
+            .words
+            .iter()
+            .map(|w| w.text.chars().filter(|c| c.is_alphanumeric()).count())
+            .sum();
+        if letters >= 16 || page.images.is_empty() || page.width <= 0.0 {
+            continue;
+        }
+        // About 200 dots to the inch, within what the engines read well.
+        let width = ((page.width / 72.0 * 200.0) as i32).clamp(900, 2600);
+        let image = pdf
+            .pages()
+            .get(index as i32)?
+            .render_with_config(&PdfRenderConfig::new().set_target_width(width))?
+            .as_image()?;
+        let scale = page.width / image.width().max(1) as f32;
+        let words = reader.read(&image)?;
+        let line_base = page.words.iter().map(|w| w.line).max().map_or(0, |n| n + 1);
+        let last_of_line: std::collections::HashMap<u32, usize> = words
+            .iter()
+            .enumerate()
+            .map(|(at, word)| (word.line, at))
+            .collect();
+        for (at, word) in words.iter().enumerate() {
+            let [x, y, w, h] = word.rect.map(|v| v * scale);
+            let text: String = word.text.chars().filter(|c| !c.is_control()).collect();
+            if text.is_empty() || w <= 0.0 || h <= 0.0 {
+                continue;
+            }
+            page.text_chars += text.chars().count() as u32;
+            page.words.push(Word {
+                hyphen: last_of_line.get(&word.line) == Some(&at)
+                    && text.len() > 1
+                    && text.ends_with('-'),
+                text,
+                bbox: Rect::new(x, y, w, h),
+                font,
+                // A line box spans ascenders and descenders.
+                size: h * 0.8,
+                line: line_base + word.line,
+                baseline: 0.0,
+                hidden: false,
+                rotated: false,
+                origin: Origin::Ocr,
+                confidence: word.score,
+            });
+        }
+        read.push(page.number);
+    }
+    if !read.is_empty() {
+        input.fonts.push(Font {
+            name: "ocr".into(),
+            bold: false,
+            italic: false,
+            mono: false,
+        });
+    }
+    Ok(read)
+}
+
 pub fn parse(pdfium: &Pdfium, path: &Path) -> Result<Parsed> {
+    parse_with(pdfium, path, None)
+}
+
+/// As `parse`. With a reader, pages that have no text of their own are read
+/// by local OCR first, and are then reconstructed like any other page.
+pub fn parse_with(pdfium: &Pdfium, path: &Path, reader: Option<&mut Reader>) -> Result<Parsed> {
     if !supported(path) {
         bail!("parse currently reads PDF files; other formats use `librarian clean`");
     }
@@ -67,7 +192,11 @@ pub fn parse(pdfium: &Pdfium, path: &Path) -> Result<Parsed> {
         anyhow::anyhow!("Cannot open {}: {reason}", path.display())
     })?;
     let opened = started.elapsed();
-    let input = pdf_input(&pdf)?;
+    let mut input = pdf_input(&pdf)?;
+    let read = match reader {
+        Some(reader) => read_scanned(&pdf, &mut input, reader)?,
+        None => Vec::new(),
+    };
     let extracted = started.elapsed();
     let document = layout::reconstruct(&input);
     let finished = started.elapsed();
@@ -83,6 +212,7 @@ pub fn parse(pdfium: &Pdfium, path: &Path) -> Result<Parsed> {
     Ok(Parsed {
         input,
         document,
+        ocr_pages: read,
         timing: Timing {
             open_ms: opened.as_secs_f64() * 1e3,
             extract_ms: (extracted - opened).as_secs_f64() * 1e3,

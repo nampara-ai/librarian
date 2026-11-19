@@ -8,15 +8,11 @@ on:
   push:
     tags: ["v*"]
   # Build the app on every PR that touches it, so Swift never meets the
-  # compiler for the first time on an immutable release tag.
+  # compiler for the first time on an immutable release tag. There is no path
+  # filter here: a workflow that a path filter skips reports nothing, and a
+  # required check that reports nothing never completes. The job "changes"
+  # decides whether the app is built, and "Mac app required" always reports.
   pull_request:
-    paths:
-      - "apps/macos/**"
-      - ".github/workflows/macapp.yml"
-      # Backend changes must exercise the bundled-runtime OCR e2e test on PRs,
-      # not meet the bundler for the first time on an immutable release tag.
-      - "src/librarian/**"
-      - "pyproject.toml"
 
 permissions:
   # This workflow only builds and uploads artifacts (actions/upload-artifact);
@@ -24,7 +20,53 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Mac app changes
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    outputs:
+      mac: ${{ steps.areas.outputs.mac }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Find whether this change touches the app
+        id: areas
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # A tag and a manual run always build. A pull request builds when it
+          # touches the app, the backend the app bundles, or this workflow.
+          # When the comparison cannot be made, the app is built.
+          mac=true
+          sha='^[0-9a-f]{40,64}$'
+          if [ "$EVENT_NAME" = "pull_request" ] \
+            && [[ "${BASE_SHA:-}" =~ $sha && "${HEAD_SHA:-}" =~ $sha ]] \
+            && git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null \
+            && git cat-file -e "${HEAD_SHA}^{commit}" 2>/dev/null \
+            && merge_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")" \
+            && [ -n "$merge_base" ]; then
+            mac=false
+            changed="${RUNNER_TEMP}/changed-paths"
+            git diff --name-only --no-renames -z "$merge_base" "$HEAD_SHA" > "$changed"
+            while IFS= read -r -d '' path; do
+              case "$path" in
+                apps/macos/*|src/librarian/*|pyproject.toml|.github/workflows/macapp.yml) mac=true ;;
+              esac
+            done < "$changed"
+          fi
+          echo "mac=${mac}" | tee -a "$GITHUB_OUTPUT"
+
   dmg:
+    needs: changes
+    if: needs.changes.outputs.mac == 'true'
     runs-on: macos-15
     timeout-minutes: 60
     strategy:
@@ -322,3 +364,35 @@ jobs:
           name: ${{ matrix.artifact }}
           path: apps/macos/dist/${{ matrix.artifact }}.dmg
           if-no-files-found: error
+
+  # Always runs and always reports. It fails when the build had to run and
+  # did not succeed, and passes when it succeeded or did not apply.
+  mac-required:
+    name: Mac app required
+    needs: [changes, dmg]
+    if: always()
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Report the result of the Mac app build
+        shell: bash
+        env:
+          MAC: ${{ needs.changes.outputs.mac }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          DMG_RESULT: ${{ needs.dmg.result }}
+        run: |
+          set -euo pipefail
+
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            echo "::error::The job that finds the changed areas ended as ${CHANGES_RESULT}."
+            exit 1
+          fi
+          if [ "$MAC" = "true" ] && [ "$DMG_RESULT" != "success" ]; then
+            echo "::error::The Mac app build ended as ${DMG_RESULT}."
+            exit 1
+          fi
+          if [ "$MAC" != "true" ] && [ "$DMG_RESULT" != "skipped" ]; then
+            echo "::error::The Mac app build did not apply but ended as ${DMG_RESULT}."
+            exit 1
+          fi
+          echo "Mac app build: ${DMG_RESULT}."

@@ -319,6 +319,16 @@ pub fn ensure_engines(
 }
 
 const BILLING: &str = "This sends one request to the provider, and the provider bills it: one small built-in image and at most 1,024 generated tokens. No document of yours is sent. It confirms the key, image input and a structured reply. It does not measure the quality of document processing.";
+const BILLING_TEXT: &str = "This sends one request to the provider, and the provider bills it: one built-in sentence and at most 1,024 generated tokens. No document of yours is sent and no image is sent, because the fast pipeline is selected with image reading off. It confirms the key, the model and a structured reply. It does not measure the quality of document processing.";
+
+/// The disclosure for the check this configuration would send.
+fn billing(config: &Config) -> &'static str {
+    if profile::text_only(config) {
+        BILLING_TEXT
+    } else {
+        BILLING
+    }
+}
 
 /// Send the connection check from a separate process that loads the profile
 /// as a worker would.
@@ -390,10 +400,19 @@ fn check_task(
                 input_tokens: report["input_tokens"].as_i64().unwrap_or(0),
                 output_tokens: report["output_tokens"].as_i64().unwrap_or(0),
                 estimated_cost: report["estimated_cost"].as_f64(),
+                image: report["image_input_and_structured_output"]
+                    .as_bool()
+                    .unwrap_or(false),
             };
             let _ = progress.send(format!(
-                "A separate worker authenticated; the image and the structured reply were correct. {} input and {} output tokens were used.",
-                check.input_tokens, check.output_tokens
+                "A separate worker authenticated; {} and the structured reply were correct. {} input and {} output tokens were used.",
+                if check.image {
+                    "the image"
+                } else {
+                    "the repaired sentence"
+                },
+                check.input_tokens,
+                check.output_tokens
             ));
             Ok(check)
         },
@@ -565,6 +584,8 @@ impl Wizard {
             .checked
             .as_ref()
             .filter(|c| c.fingerprint == fingerprint)
+            // A check that sent no image covers only the text-only configuration.
+            .filter(|c| c.image || profile::text_only(&self.config))
         {
             return Some(check);
         }
@@ -1017,14 +1038,9 @@ impl Wizard {
         let Some((_, models)) = self.models.clone().filter(|_| self.settled(Step::Models)) else {
             return Ok(Flow::Go(Step::Models));
         };
-        let eligible = models
-            .iter()
-            .filter(|m| m.vision != Some(false))
-            .collect::<Vec<_>>();
+        let eligible = models.iter().collect::<Vec<_>>();
         if eligible.is_empty() {
-            bail!(
-                "The provider lists no model that accepts images. Go back and choose another provider."
-            );
+            bail!("The provider lists no model. Go back and choose another provider.");
         }
         let mut labels = eligible
             .iter()
@@ -1032,10 +1048,10 @@ impl Wizard {
                 format!(
                     "{}  · {}{}",
                     m.name,
-                    if m.vision == Some(true) {
-                        "image input reported"
-                    } else {
-                        "image support unverified"
+                    match m.vision {
+                        Some(true) => "image input reported",
+                        Some(false) => "text only",
+                        None => "image support unverified",
                     },
                     m.input_price
                         .zip(m.output_price)
@@ -1053,7 +1069,7 @@ impl Wizard {
         let Some(index) = ui::choose(
             t,
             title,
-            "Choose the model for text and for page images.\nThe list came from the provider. A model whose image support is not reported is tested with a small image before this setup is saved. Models that report no image input are left out.\nRates, where the provider supplies them, are estimates. A missing rate is not treated as free.",
+            "Choose the model.\nThe list came from the provider. A text-only model cleans text with the fast pipeline; it cannot read pictures, and choosing one turns image reading off. Scanned pages are then read by local OCR only. A model whose image support is not reported is tested with a small image before this setup is saved, unless image reading is off.\nRates, where the provider supplies them, are estimates. A missing rate is not treated as free.",
             &labels,
             initial,
         )?
@@ -1065,6 +1081,20 @@ impl Wizard {
             return Ok(Flow::Go(Step::Models));
         }
         catalog::select(&mut self.config, eligible[index])?;
+        if eligible[index].vision == Some(false)
+            && (self.config.processing.vision || self.config.processing.pipeline != "fast")
+        {
+            self.config.processing.vision = false;
+            self.config.processing.pipeline = "fast".into();
+            ui::notice(
+                t,
+                "Image reading is now off",
+                &format!(
+                    "{} reports that it does not accept images. The fast pipeline is selected and image reading is off: text is cleaned; pictures are not read by the model, and scanned pages are read by local OCR when an engine is installed. Both settings are under Processing and take effect when Setup is saved.",
+                    eligible[index].name
+                ),
+            )?;
+        }
         Ok(Flow::Next)
     }
 
@@ -1137,8 +1167,9 @@ impl Wizard {
         let (text, labels): (String, Vec<&str>) = match self.verified() {
             Some(check) => (
                 format!(
-                    "This provider, key and model passed the connection check on {}. Nothing that the check covers has changed, so no request is needed.\n\nA new check is optional. {BILLING}",
-                    date(check.verified_at)
+                    "This provider, key and model passed the connection check on {}. Nothing that the check covers has changed, so no request is needed.\n\nA new check is optional. {}",
+                    date(check.verified_at),
+                    billing(&self.config)
                 ),
                 vec![
                     "Continue without a new request",
@@ -1148,7 +1179,8 @@ impl Wizard {
             ),
             None => (
                 format!(
-                    "The provider, key or model is new or has changed, so the connection must be checked before this setup can be saved.\n\n{BILLING}"
+                    "The provider, key or model is new or has changed, or image reading was turned on after a check that sent no image. The connection must be checked before this setup can be saved.\n\n{}",
+                    billing(&self.config)
                 ),
                 vec![
                     "Run the connection check (one billed request)",
@@ -1156,12 +1188,23 @@ impl Wizard {
                 ],
             ),
         };
+        const TEXT_ONLY: &str = "Use text only: the fast pipeline with image reading off";
+        let mut labels = labels;
+        if self.verified().is_none() && !profile::text_only(&self.config) {
+            labels.push(TEXT_ONLY);
+        }
         let Some(index) = choice(t, title, &text, &labels, 0)? else {
             return Ok(Flow::Back);
         };
         match labels[index] {
             "Continue without a new request" => Ok(Flow::Next),
             "Choose a different model" => Ok(Flow::Go(Step::Model)),
+            TEXT_ONLY => {
+                // For a model that reads no images. The check then sends a sentence.
+                self.config.processing.pipeline = "fast".into();
+                self.config.processing.vision = false;
+                Ok(Flow::Stay)
+            }
             _ => match check_task(t, title, &self.location, &self.config) {
                 Ok(ui::Ended::Continue(check)) => {
                     self.checked = Some(check);
@@ -1218,7 +1261,7 @@ impl Wizard {
             "AI provider: left for later. Cleaning with AI will ask for it.".to_owned()
         } else {
             format!(
-                "Provider: {}\nEndpoint: {}\nModel for text and images: {}\nKey: {key}\nConnection check: passed {}",
+                "Provider: {}\nEndpoint: {}\nModel: {}\nKey: {key}\nConnection check: passed {}",
                 provider_name(&self.config),
                 self.config.provider.base_url,
                 self.config.provider.model,
@@ -1521,9 +1564,10 @@ pub fn menu(t: &mut ratatui::DefaultTerminal, location: &Location) -> Result<Opt
 /// record, because access is then not established.
 fn retest(t: &mut ratatui::DefaultTerminal, location: &Location, config: &Config) -> Result<()> {
     let text = format!(
-        "Test the connection to {} with the model {}?\n\n{BILLING}",
+        "Test the connection to {} with the model {}?\n\n{}",
         provider_name(config),
-        config.provider.model
+        config.provider.model,
+        billing(config)
     );
     if choice(
         t,
@@ -1568,7 +1612,7 @@ pub fn ensure_ai(
     let reason = match profile::ai_state(location, config) {
         Ai::Ready | Ai::NotNeeded => return Ok(true),
         Ai::NotConnected => {
-            "No AI provider is connected yet. This work sends document text and page images to a language model, so it needs a provider, a key and a model."
+            "No AI provider is connected yet. This work sends document text, and with image reading on also images, to a language model, so it needs a provider, a key and a model."
         }
         Ai::KeyMissing => {
             "The key for this provider was kept for one session only and has not been entered in this session."
@@ -1704,8 +1748,13 @@ fn preferences(
                 (
                     "vision",
                     format!(
-                        "{} Visual reading of every page",
-                        check(config.processing.vision)
+                        "{} {}",
+                        check(config.processing.vision),
+                        if config.processing.pipeline == "fast" {
+                            "Read pictures and image files with the model"
+                        } else {
+                            "Visual reading of every page"
+                        }
                     ),
                 ),
                 ("ocr", ocr_label(config)),
@@ -1721,6 +1770,17 @@ fn preferences(
                 (
                     "pipeline",
                     format!("Pipeline: {}", config.processing.pipeline),
+                ),
+                (
+                    "reasoning_effort",
+                    format!(
+                        "Reasoning effort: {}",
+                        if config.provider.reasoning_effort.is_empty() {
+                            "not sent; the model's default applies"
+                        } else {
+                            &config.provider.reasoning_effort
+                        }
+                    ),
                 ),
                 (
                     "page_concurrency",
@@ -1751,6 +1811,10 @@ fn preferences(
                 ),
                 ("finish", finish.into()),
             ]);
+            // The fast pipeline reads no page images, so it has no pages to read at once.
+            rows.retain(|(key, _)| {
+                !(config.processing.pipeline == "fast" && *key == "page_concurrency")
+            });
             rows
         };
         let labels: Vec<String> = rows.iter().map(|(_, l)| l.clone()).collect();
@@ -1764,7 +1828,7 @@ fn preferences(
             } else {
                 "Processing defaults"
             },
-            "Enter or Space switches a box or opens a value. These defaults apply to documents queued from now on. They do not call for a new connection check.",
+            "Enter or Space switches a box or opens a value. These defaults apply to documents queued from now on. They do not call for a new connection check, with one exception: turning image reading on after a check that sent no image.",
             &labels,
             initial,
         )?
@@ -1864,7 +1928,7 @@ fn preferences(
                 if let Some(v) = ui::input(
                     t,
                     "House style",
-                    "Preferences for spelling, punctuation, register and formatting. They are added to the fixed Copyeditor and Reviewer roles.",
+                    "Preferences for spelling, punctuation, register and formatting. They are added to the fixed instructions of the fast pipeline and to the Copyeditor and Reviewer roles of the editorial pipeline.",
                     &config.processing.house_style,
                     false,
                 )? {
@@ -1875,12 +1939,35 @@ fn preferences(
                 if let Some(i) = choice(
                     t,
                     "Processing pipeline",
-                    "Editorial reads every page, reconciles what is seen with the text, and reviews the assembled document. Archival is kept so that older jobs can resume.",
-                    &["Editorial", "Archival"],
-                    usize::from(config.processing.pipeline == "archival"),
+                    "Fast parses the document locally, cuts the text into passages and has the model repair all of them side by side; every response is accounted for word by word. Scanned PDF pages are read by local OCR when an engine is installed.\nEditorial renders every page to an image, reads it with OCR and the model, reconciles the readings and reviews the assembled document. It is slower and sends many more requests.\nArchival is kept so that older jobs can resume.",
+                    &["Fast", "Editorial", "Archival"],
+                    match config.processing.pipeline.as_str() {
+                        "fast" => 0,
+                        "editorial" => 1,
+                        _ => 2,
+                    },
                 )? {
-                    config.processing.pipeline =
-                        if i == 0 { "editorial" } else { "archival" }.into();
+                    config.processing.pipeline = ["fast", "editorial", "archival"][i].into();
+                }
+            }
+            "reasoning_effort" => {
+                if let Some(v) = ui::input(
+                    t,
+                    "Reasoning effort",
+                    "One lower-case word sent with every request to a chat or responses endpoint, such as none, low, medium or high. Leave empty to send nothing. The accepted words depend on the model; a word the model does not accept makes every request fail with HTTP 400. Less reasoning is faster and costs less. It is set when a model is chosen and may be changed here.",
+                    &config.provider.reasoning_effort,
+                    false,
+                )? {
+                    let word = v.trim().to_lowercase();
+                    if word.len() <= 16 && word.chars().all(|c| c.is_ascii_lowercase()) {
+                        config.provider.reasoning_effort = word;
+                    } else {
+                        ui::notice(
+                            t,
+                            "That value cannot be used",
+                            "Enter one lower-case word, or nothing. The value was not changed.",
+                        )?;
+                    }
                 }
             }
             "page_concurrency" => {

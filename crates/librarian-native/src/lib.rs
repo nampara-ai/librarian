@@ -9,6 +9,7 @@ pub mod credentials;
 pub mod editorial;
 pub mod export;
 pub mod extract;
+pub mod fast;
 pub mod ocr;
 pub mod parse;
 pub mod pipeline;

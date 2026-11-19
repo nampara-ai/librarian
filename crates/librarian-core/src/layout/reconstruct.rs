@@ -145,7 +145,9 @@ fn page_elements(ctx: &Ctx, tally: &mut Tally) -> PageResult {
     let hidden_count = page.words.iter().filter(|w| w.hidden).count();
     // A page whose text is almost all invisible carries an OCR layer: that
     // text is the only reading there is, but it is not the author's.
-    let ocr_layer = total >= 8 && hidden_count * 5 >= total * 4;
+    // Words read from the page image by local OCR are likewise not the author's.
+    let ocr_read = page.words.iter().any(|w| w.origin == Origin::Ocr);
+    let ocr_layer = ocr_read || (total >= 8 && hidden_count * 5 >= total * 4);
     // Text placed outside the page box is in the file but not on the page.
     let visible = Rect::new(0.0, 0.0, page.width, page.height).grow(2.0);
     let in_flow = |w: &Word| {
@@ -469,7 +471,11 @@ fn page_elements(ctx: &Ctx, tally: &mut Tally) -> PageResult {
     }
     if ocr_layer {
         for e in &mut elements {
-            e.origin = Origin::OcrLayer;
+            e.origin = if ocr_read {
+                Origin::Ocr
+            } else {
+                Origin::OcrLayer
+            };
             e.confidence = e.confidence.min(0.8);
         }
     }
@@ -516,7 +522,11 @@ fn page_elements(ctx: &Ctx, tally: &mut Tally) -> PageResult {
         reasons.push("much of the text uses a font with no Unicode mapping".to_owned());
     } else if ocr_layer {
         raise(&mut tier, Tier::Review);
-        reasons.push("text comes from an embedded OCR layer of unknown quality".to_owned());
+        reasons.push(if ocr_read {
+            "text was read from the page image by local OCR".to_owned()
+        } else {
+            "text comes from an embedded OCR layer of unknown quality".to_owned()
+        });
     }
     if !meaningful.is_empty() {
         raise(&mut tier, Tier::Vision);

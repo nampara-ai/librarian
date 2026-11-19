@@ -8,8 +8,8 @@ The program version is 0.1.0. It is a development build. It has not been release
 
 Librarian has two independent functions.
 
-1. **Parse.** A PDF file is read locally and converted to a Markdown file and a JSON file of typed layout blocks. No provider is contacted and no model is called.
-2. **Clean.** Source documents are queued, read page by page, copyedited by a language model through a configured provider, classified, and published as Markdown. Finished documents are indexed for full-text search.
+1. **Parse.** A PDF file is read locally and converted to a Markdown file and a JSON file of typed layout blocks. No provider is contacted and no model is called. Scanned pages are read on request, by a local OCR engine.
+2. **Clean.** Source documents are queued, read, copyedited by a language model through a configured provider, classified, and published as Markdown. Finished documents are indexed for full-text search. The reading and the copyediting are done by one of three pipelines: `fast`, `editorial` or `archival`. A new configuration uses `fast`. See section 9.
 
 Both functions are available from the command line and from the terminal interface. There is no graphical interface.
 
@@ -26,7 +26,7 @@ Packages are built by the workflow "Librarian terminal builds" for four targets.
 | `x86_64-pc-windows-msvc` | Windows, x64 |
 | `x86_64-unknown-linux-gnu` | Linux, x64, built on Ubuntu 22.04 |
 
-Each package contains the program, an `engines` folder, this document as `README.md`, `PARSING_FOUNDATION.md`, `THIRD_PARTY.md`, `LICENSE`, `RUST-LICENSES.txt`, a `licenses` folder, the role prompts in `prompts/`, `Cargo.lock`, and `build.json`. The `engines` folder holds PDFium, ONNX Runtime, the two OCR models and a private LibreOffice. The Windows package also holds the Visual C++ runtime libraries.
+Each package contains the program, an `engines` folder, this document as `README.md`, `PARSING_FOUNDATION.md`, `THIRD_PARTY.md`, `LICENSE`, `RUST-LICENSES.txt`, a `licenses` folder, the prompt texts in `prompts/`, `Cargo.lock`, and `build.json`. The `engines` folder holds PDFium, ONNX Runtime, the two OCR models and a private LibreOffice. The Windows package also holds the Visual C++ runtime libraries.
 
 Unpack the package. Keep the program beside its `engines` folder. Run `./librarian`, or `.\librarian.exe` on Windows. No Python or Node installation is required.
 
@@ -58,16 +58,16 @@ Every command except `parse`, `convert`, `inspect`, `prompts`, `config`, `setup`
 | Path in the workspace | Purpose |
 | --- | --- |
 | `config.toml` | Configuration |
-| `verification.json` | The last successful connection check for this workspace: the fingerprint of what it covered, the date, the model and the token counts |
+| `verification.json` | The last successful connection check for this workspace: the fingerprint of what it covered, the date, the model, the token counts, the estimated cost where prices are known, and whether the check sent an image |
 | `setup-complete.json` | Written by earlier releases. Read while the workspace has no `verification.json`, which the terminal interface and Setup write from it at their next start. No longer written |
 | `pending-credential.json` | Present while a key is being stored, and afterwards only if that was interrupted. Names the key's account and endpoint, never the key. See section 4.3 |
-| `library.sqlite3` | Queue, checkpoints, caches, catalog and search index. The files `library.sqlite3-wal` and `library.sqlite3-shm` beside it belong to the database |
+| `library.sqlite3` | Queue, checkpoints, caches, catalog and search index, and the cleaning accounts of the fast pipeline in the table `clean_ledger`. The files `library.sqlite3-wal` and `library.sqlite3-shm` beside it belong to the database |
 | `worker.lock` | Held by the one worker that may process the queue |
 | `worker.log` | Error output of a worker started from the terminal interface |
 | `originals/` | One unmodified copy of every imported source, named by content hash |
 | `assets/` | Extracted and rendered images, named by content hash |
 | `engines/` | Installed PDF and OCR engines, each with `manifest.json` |
-| `.librarian-work/job-N/pages/` | For each page of job N, numbered with six digits: the image (`.png`), a reduced copy for the model (`.model-WIDTH.png`), and `.ocr.json`, `.visual.md`, `.copyedited.md`, `.typeset.md` |
+| `.librarian-work/job-N/pages/` | Editorial pipeline. For each page of job N, numbered with six digits: the image (`.png`), a reduced copy for the model (`.model-WIDTH.png`), and `.ocr.json`, `.visual.md`, `.copyedited.md`, `.typeset.md` |
 | `.librarian-work/job-N/office/` | The PDF made from an office document, and `conversion.log` |
 | `.librarian-work/job-N/editorial-report.json` | Diagnostics of the editorial run |
 | `prepared/` | Destination used by the `prepare` command |
@@ -98,7 +98,7 @@ Setup is in parts. Each part is asked for when it is needed, and each can be ope
 | Part | Asked for | Steps |
 | --- | --- | --- |
 | Workspace | At the first start, before Home | Welcome; choose the folder; prepare it |
-| AI provider | When work that calls a model is first queued, or from the Setup menu | Provider; key; whether to remember the key; model list; model; per-document limit; connection check; save |
+| AI provider | When work that calls a model is first queued or started, or from the Setup menu | Provider; key; whether to remember the key; model list; model; per-document limit; connection check; save |
 | Processing defaults | From the Setup menu | One screen |
 | Markdown output defaults | From the Setup menu | One screen |
 | Local engines | When an engine is first needed, or from the Setup menu | One automatic step |
@@ -120,7 +120,7 @@ Press **f** on Home. The menu shows three lines of state and the parts.
 | --- | --- |
 | Connect an AI provider, or Change the AI provider, key or model | The provider part |
 | Test the connection again (one billed request) | Shown when a provider is connected. See section 4.4 |
-| Processing defaults | Copyediting, classification, visual reading, OCR engine, Tesseract language (shown while the OCR engine is Tesseract), house style, pipeline, pages read at once, class override, office renderer |
+| Processing defaults | Copyediting, classification, image reading, OCR engine, Tesseract language, house style, pipeline, reasoning effort, pages read at once, class override, office renderer. See section 4.6 |
 | Markdown output defaults | Front matter, title, synopsis, page markers, review notes, file name pattern |
 | Install or check the local engines | Loads the engines the configuration uses and installs those that are missing |
 | Change the workspace | The workspace part, without the welcome |
@@ -151,7 +151,7 @@ A result holds for as long as what it depends on is unchanged.
 | Model list | The preset, the protocol, the endpoint and the key's account (or the name of the environment variable) |
 | Engines loaded | The workspace folder and the OCR engine setting |
 | Connection check passed in this run | The fingerprint of section 4.4, and no key having been entered or reconnected since |
-| Connection check on record | The fingerprint, no key having been entered in this run, and the record belonging to the workspace now chosen |
+| Connection check on record | The fingerprint, no key having been entered in this run, and the record belonging to the workspace now chosen. A record of a check that sent no image holds only while the pipeline is `fast` and image reading is off |
 
 A step that fails shows the reason and offers "Try this step again" and "Back". A failed step cannot be passed.
 
@@ -216,13 +216,22 @@ The configuration file holds a reference to the key: the account name, the endpo
 
 ### 4.4 The connection check
 
-The connection check sends one request to the provider from a separate worker process: one small built-in image and at most 1,024 generated tokens. The provider bills this request. The check confirms the key, image input and a structured reply. It does not measure the quality of document processing. The screen states the billing before the request is sent. The check is stopped after `timeout_seconds` plus 30 seconds.
+The connection check sends one request to the provider from a separate worker process. The provider bills this request. The check has two forms.
 
-A successful check is recorded in `verification.json` with a fingerprint. In the provider part and the full sequence it is recorded when the part is saved; the test in the Setup menu records it at once. The fingerprint covers the protocol (`kind`), the endpoint, the account name of the key (or the name of the environment variable when no key is stored), `model`, `vision_model` and `structured_output`.
+| Form | Sent when | Request | Confirms |
+| --- | --- | --- | --- |
+| Text check | `processing.pipeline` is `fast` and `processing.vision` is off | One built-in damaged sentence and at most 1,024 generated tokens. No image is sent | The key, the model and a structured reply. The reply must hold the repaired sentence |
+| Image check | In every other case | One small built-in image and at most 1,024 generated tokens | The key, image input and a structured reply |
+
+Neither form sends a document. Neither measures the quality of document processing. The screen states the billing, and what is sent, before the request is sent. The check is stopped after `timeout_seconds` plus 30 seconds.
+
+A successful check is recorded in `verification.json` with a fingerprint and the field `image`, which is `true` for an image check and `false` for a text check. In the provider part and the full sequence it is recorded when the part is saved; the test in the Setup menu records it at once. The fingerprint covers the protocol (`kind`), the endpoint, the account name of the key (or the name of the environment variable when no key is stored), `model`, `vision_model` and `structured_output`. It does not cover `reasoning_effort`.
+
+A record of an image check covers every pipeline. A record of a text check covers a configuration only while its pipeline is `fast` and its image reading is off. A record without the field `image` was written by an earlier build and is a record of an image check.
 
 | Change | New check required |
 | --- | --- |
-| Output defaults, processing defaults, house style, OCR settings | No. One exception: in a workspace set up by an earlier release, before the terminal interface or Setup has been started once with this release, a change of the OCR engine or language through `config set` or `config edit` requires a new check |
+| Output defaults, processing defaults, house style, OCR settings, reasoning effort | No. Two exceptions. After a text check, turning image reading on or choosing the editorial or archival pipeline requires a new check. In a workspace set up by an earlier release, before the terminal interface or Setup has been started once with this release, a change of the OCR engine or language through `config set` or `config edit` requires a new check |
 | Request, token and cost limits; prices; concurrency; timeouts; rate limits | No |
 | Storing a session key in the credential store under the same account | No |
 | Provider, endpoint or protocol | Yes |
@@ -230,9 +239,9 @@ A successful check is recorded in `verification.json` with a fingerprint. In the
 | Model, vision model, or structured-output mode | Yes |
 | A workspace that has no record of its own | Yes. An existing workspace opened in Setup is judged by its own record |
 
-The check step has two forms. When a check covers the configuration it shows the date and offers "Continue without a new request", "Test the connection again (one billed request)" and "Choose a different model". Otherwise it offers "Run the connection check (one billed request)" and "Choose a different model". The provider part, and the full sequence unless the provider is left for later, cannot be saved without a check that covers the configuration.
+The check step has two forms. When a check covers the configuration it shows the date and offers "Continue without a new request", "Test the connection again (one billed request)" and "Choose a different model". Otherwise it offers "Run the connection check (one billed request)" and "Choose a different model", and, unless the pipeline is already `fast` with image reading off, "Use text only: the fast pipeline with image reading off". That entry is for a model that accepts no images. It sets `processing.pipeline` to `fast` and `processing.vision` to false in the answers and shows the check step again, which then sends the text check. The provider part, and the full sequence unless the provider is left for later, cannot be saved without a check that covers the configuration.
 
-"Test the connection again" in the Setup menu sends the same request for the configuration in force. A pass is recorded. A failure withdraws the record, and work that calls a model then asks for a successful check first. A failure here includes a timeout, an invalid configuration and a session key that is not present. Esc while the request is in flight records nothing.
+"Test the connection again" in the Setup menu sends the check for the configuration in force, in the form that configuration calls for. A pass is recorded. A failure withdraws the record, and work that calls a model then asks for a successful check first. A failure here includes a timeout, an invalid configuration and a session key that is not present. Esc while the request is in flight records nothing.
 
 A test that fails inside the provider part means that no check covers that configuration in the part. If the configuration tested is the one in force, its record is withdrawn on disk as well.
 
@@ -240,15 +249,35 @@ Verified provider access, installed local engines, and the quality of a processe
 
 ### 4.5 Other particulars
 
-- **Provider list.** Ten presets carry a published vision score dated 2026-11-06 from `arena.ai/leaderboard/chat/vision` and are sorted by it. The other thirteen (gateways, hosting providers, local servers and the custom endpoint) follow, labelled "unranked / catalog-dependent". The score is a sorting aid and not a statement of quality. In the full sequence the list ends with "Leave the AI provider for later (parsing needs none)".
+- **Provider list.** Ten presets carry a published vision score dated 2026-11-06 from `arena.ai/leaderboard/chat/vision` and are sorted by it. The other fourteen (gateways, hosting providers, local servers and the custom endpoint) follow, labelled "unranked / catalog-dependent". The score is a sorting aid and not a statement of quality. In the full sequence the list ends with "Leave the AI provider for later (parsing needs none)".
 - **Custom endpoint.** The entry asks for a URL and a protocol. Both open on the present values. Changing the URL clears the key and the model.
 - **Returning to the provider in force.** Choosing another preset and then the original one restores the original settings, including its key reference and model.
-- **Model list.** The list is requested from `{endpoint}/models` (xAI and Fireworks use their own list addresses), with a time limit of 45 seconds and at most 100 pages. Entries marked inactive, entries for embedding, image, audio, moderation or reranking models, and entries that produce no text are dropped. The list always comes from the provider. If the request fails, Setup reports the failure and does not substitute a stored list. Models that report no image input are omitted. A model that does not report its image capability is labelled "image support unverified" and is tested by the connection check. A model with a context below 16,384 tokens or an output limit below 1,024 tokens is refused. "Ask the provider for the list again" repeats the request.
+- **Model list.** The list is requested from `{endpoint}/models` (xAI and Fireworks use their own list addresses), with a time limit of 45 seconds and at most 100 pages. Entries marked inactive, entries for embedding, image, audio, moderation or reranking models, and entries that produce no text are dropped. The list always comes from the provider. If the request fails, Setup reports the failure and does not substitute a stored list. Every remaining model is listed, with one of three labels: "image input reported", "text only" or "image support unverified". A model labelled "image support unverified" is tested by the connection check when the check sends an image. Choosing a model labelled "text only" while image reading is on, or while the pipeline is not `fast`, sets `processing.pipeline` to `fast` and `processing.vision` to false and shows the notice "Image reading is now off". Both values take effect when the part is saved. A text-only model cannot read images. A model with a context below 16,384 tokens or an output limit below 1,024 tokens is refused. "Ask the provider for the list again" repeats the request.
 - **Prices.** Prices are shown only where the provider's list supplies them (OpenRouter, xAI) and for one Anthropic model with a recorded rate. A missing price is not treated as zero. Without prices no dollar limit can be set, and a limit on generated tokens is offered instead.
-- **Values set by the provider part.** Choosing a preset sets `catalog_id`, `base_url`, `kind`, `structured_output`, `key_env` and `prompt_cache`, and clears the prices and `max_cost`; a preset with a different endpoint also clears `credential`, `model` and `vision_model`. The custom protocol sets `prompt_cache` to `ephemeral` for Anthropic Messages and to `off` otherwise. Choosing a model sets `model` and `vision_model`, sets `context_tokens` to the reported context but at most 32,768, sets `max_output_tokens` to the reported limit within 256 to 8,192 and at most a quarter of the context, and copies any prices. Entering a key sets `credential` and sets `namespace` to the account name.
+- **Values set by the provider part.** Choosing a preset sets `catalog_id`, `base_url`, `kind`, `structured_output`, `key_env`, `prompt_cache`, `concurrency`, `requests_per_minute` and `tokens_per_minute`, and clears the prices, `max_cost` and `reasoning_effort`; a preset with a different endpoint also clears `credential`, `model` and `vision_model`. The Cerebras and Groq presets set `concurrency` to 16, `requests_per_minute` to 900 and `tokens_per_minute` to 450000. Every other preset sets them to the defaults 3, 60 and 120000. The custom protocol sets `prompt_cache` to `ephemeral` for Anthropic Messages and to `off` otherwise. Choosing a model sets `model` and `vision_model`, sets `reasoning_effort` to `low` for a model identifier containing `gpt-oss`, to `none` for one containing `qwen-3` or `qwen3`, and to empty otherwise, sets `context_tokens` to the reported context but at most 32,768, sets `max_output_tokens` to the reported limit within 256 to 8,192 and at most a quarter of the context, and copies any prices. Entering a key sets `credential` and sets `namespace` to the account name.
 - **Changing the workspace.** A folder that already holds a configuration is opened with its own settings, its own key reference and its own verification record. A new folder starts from the settings in force; it has no verification record, so its first use of the provider asks for a connection check.
 - **`librarian setup`.** The command runs the full sequence and exits when it is saved. It does not open Home.
 - **Workspaces set up by earlier releases.** Their one verification stamp is honoured for as long as the configuration it covered is unchanged. The terminal interface and Setup write `verification.json` from it when they are next started.
+
+### 4.6 Processing defaults
+
+The screen lists the rows below. Enter or Space switches a box or opens a value. The values apply to documents queued after the part is saved.
+
+| Row | Configuration key | Notes |
+| --- | --- | --- |
+| Copyedit prose | `processing.edit` | A box |
+| Classify and describe documents | `processing.classify` | A box |
+| Read pictures and image files with the model | `processing.vision` | A box. This is the label while the pipeline is `fast`. Otherwise the label is "Visual reading of every page" |
+| OCR | `processing.ocr` | The bundled engine, Tesseract, none (the model reads the page images), or off |
+| Tesseract language | `processing.ocr_language` | Shown while the OCR engine is Tesseract. Chosen from the languages installed |
+| House style… | `processing.house_style` | Text |
+| Pipeline | `processing.pipeline` | Fast, Editorial or Archival |
+| Reasoning effort | `provider.reasoning_effort` | One word of at most 16 letters, stored in lower case, or nothing. Shown as "not sent; the model's default applies" when empty. Any other entry is refused and the value is unchanged |
+| Pages read at once | `processing.page_concurrency` | A whole number from 1 to 16. Not shown while the pipeline is `fast` |
+| Class override | `processing.classification_override` | A class code, or nothing |
+| Office renderer | `processing.office_renderer` | A path, or nothing |
+
+The last row saves the part, or continues in the full sequence. No row calls for a new connection check, with the exceptions stated in section 4.4.
 
 ## 5. Terminal interface
 
@@ -258,7 +287,7 @@ Start the terminal interface with `librarian` or `librarian tui`. It requires an
 
 Home has two panes. The left pane, "What do you want to do?", lists six actions. The right pane, "Documents · newest first", lists the jobs of the workspace. Below them are a detail panel for the selected document, a "Now" panel for the running job, a line of key hints, and a message line. The header shows counts of done, to-review, queued and running documents, and the workspace path. The screen refreshes ten times a second. The 1,000 most recent jobs are listed and counted.
 
-Each document line shows the job number, the file name, the status and, while it differs from the status, the stage (section 9.5). With no document in the workspace, the detail panel shows the state of the AI provider, the state of the local engines and the last parse. While the provider is not ready, the description of **n** reads "Asks for an AI provider when you queue." The detail panel of a document stopped at a limit begins "Stopped at a limit; press r to raise it and resume." The detail panel of a document shows any error, the status and stage, the counts of pages rendered, read by OCR, read visually, copyedited, assembled and reviewed, the source, the destination, the number of model calls and of calls answered from the cache, the tokens in and out, and the cost where prices are known. The descriptions of the actions and the longer key hints are shown only when the terminal is large enough. When the terminal interface opens, the message line shows the last parse.
+Each document line shows the job number, the file name, the status and, while it differs from the status, the stage (section 9.6). With no document in the workspace, the detail panel shows the state of the AI provider, the state of the local engines and the last parse. While the provider is not ready, the description of **n** reads "Asks for an AI provider when you queue." The detail panel of a document stopped at a limit begins "Stopped at a limit; press r to raise it and resume." The detail panel of a document shows any error, the status and stage, the counts of pages rendered, read by OCR, read visually, copyedited, assembled and reviewed, the source, the destination, the number of model calls and of calls answered from the cache, the tokens in and out, and the cost where prices are known. The descriptions of the actions and the longer key hints are shown only when the terminal is large enough. When the terminal interface opens, the message line shows the last parse.
 
 | Key | Action |
 | --- | --- |
@@ -281,18 +310,18 @@ Each document line shows the job number, the file name, the status and, while it
 
 Letter keys are lower case. They act from either pane. The keys **p**, **r** and **c** act on the document highlighted in the right pane, whichever pane has focus. The pane cannot be switched while the document list is empty. Ctrl+C has no function in the terminal interface.
 
-**q** starts one background worker for the workspace. If nothing is queued, no worker is started and the message line says so. If a worker is already running, none is started. Before the worker starts, the engines the queued jobs use are installed if they are missing: the PDF engine, and the OCR runtime and models when a queued job uses the bundled OCR. If they cannot be installed the worker is not started and the jobs stay queued. **q** does not check the provider: the provider is checked when work is queued from the import form. If a queued job uses a session key that is not present, the worker is started and the message line gives the number of saved profiles that need a session key; those jobs fail with a credential error and the others proceed.
+**q** starts one background worker for the workspace. If nothing is queued, no worker is started and the message line says so. If a worker is already running, none is started. Before the worker starts, the provider is checked. When a queued or running job calls a model, and the provider of the configuration in force is not ready, the screen "An AI provider is needed" is shown. It gives the reason (no provider connected, a session key not yet entered, or a provider not verified since it changed) and offers "Connect the AI provider now", which runs the provider part of Setup, and "Back". If the provider is not ready afterwards, the worker is not started, the jobs stay queued, and the message line reads "The queue was not started: the AI provider is not connected." A job calls a model when copyediting, classification or image reading is on in the configuration it was queued with. Next, the engines the queued jobs use are installed if they are missing: the PDF engine, and the OCR runtime and models when a queued job uses the bundled OCR. If they cannot be installed the worker is not started and the jobs stay queued. If a queued job uses a session key that is not present, the worker is started and the message line gives the number of saved profiles that need a session key; those jobs fail with a credential error and the others proceed.
 
 **r** acts on the selected document according to its status.
 
 | Status | Action |
 | --- | --- |
-| Paused, cancelled | Returned to the queue; it continues from its last checkpoint. The provider is not checked |
+| Paused, cancelled | Returned to the queue; it continues from its last checkpoint |
 | Stopped at a limit | If a ceiling still stops it, the limits screen of section 5.3 opens. If none does, it is returned to the queue |
 | Complete, needs review, prepared, failed | A new job is queued from the retained original with the current configuration; the earlier result is kept. If that configuration calls a model and the provider is not ready, the provider is asked for first; if that is declined, nothing is queued |
 | Queued, running | Unchanged |
 
-The worker is then started if there is work for it, except when the limits screen is left without a raise or the provider question is declined.
+The worker is then started as by **q**, with the same check of the provider, except when the limits screen is left without a raise or the provider question is declined.
 
 ### 5.2 Document menu
 
@@ -301,6 +330,7 @@ Enter or Space on a document opens its menu. The entries shown depend on the sta
 | Entry | Shown when the job is |
 | --- | --- |
 | Read the result | Published |
+| Read what the cleaning changed | Any state, when a cleaning account is recorded for the job. The fast pipeline records one |
 | Read diagnostics and events | Any state |
 | Pause (committed work is kept) | Queued or running |
 | Raise a limit and resume | Stopped at a limit |
@@ -309,7 +339,7 @@ Enter or Space on a document opens its menu. The entries shown depend on the sta
 | Cancel (the original is kept) | Queued, running or paused |
 | Back to Home | Any state |
 
-"Read the result" shows the first 64 KiB of the published file. "Read diagnostics and events" shows the 60 most recent events of the job.
+"Read the result" shows the first 64 KiB of the published file. "Read what the cleaning changed" shows the text that `librarian changes ID` prints (section 6.3). "Read diagnostics and events" shows the 60 most recent events of the job.
 
 ### 5.3 Limits of a document
 
@@ -325,7 +355,7 @@ The command `librarian budget` does the same from the command line. See section 
 
 ### 5.4 Parse PDFs
 
-Press **a** on Home. Parsing needs the workspace and the PDF engine only. If the PDF engine is neither supplied with the program nor installed in the workspace, it is downloaded and verified when "Parse now" is first chosen. Esc during that download returns to the form. After the installation has completed, Esc continues like **x**.
+Press **a** on Home. Parsing needs the workspace and the PDF engine only; reading scanned pages also needs a local OCR engine. If the PDF engine is neither supplied with the program nor installed in the workspace, it is downloaded and verified when "Parse now" is first chosen. Esc during that download returns to the form. After the installation has completed, Esc continues like **x**.
 
 | Field | Meaning |
 | --- | --- |
@@ -335,6 +365,7 @@ Press **a** on Home. Parsing needs the workspace and the PDF engine only. If the
 | Keep headers, footers and page numbers | Keeps them in the Markdown |
 | Plain text: no bold, italic or link markup | Omits inline markup and picture markers |
 | Include word positions in the JSON | Adds positioned words, fonts and bookmarks |
+| Read scanned pages with local OCR | Reads pages that have a picture and almost no text, as `parse --ocr` does (section 6.1). The form installs no OCR engine. With none found, a line says so and such pages are reported and not read |
 | 3 Parse now | Runs the parser |
 | Earlier results (N) | Lists up to 20 earlier results of this workspace |
 
@@ -344,7 +375,7 @@ The form has no control for page markers. The command `librarian parse --page-ma
 
 ### 5.5 Clean documents with AI
 
-Press **n** on Home. If the jobs to be queued call a model and the provider is not ready, "Queue import" first shows why (no provider connected, a session key not yet entered, or a provider not verified since it changed) and offers "Connect the AI provider now", which runs the provider part of Setup, and "Back", which returns to the form. An import with "Extraction only" set calls no model and needs no provider.
+Press **n** on Home. If the jobs to be queued call a model and the provider is not ready, "Queue import" first shows why (no provider connected, a session key not yet entered, or a provider not verified since it changed) and offers "Connect the AI provider now", which runs the provider part of Setup, and "Back", which returns to the form. An import with "Extraction only" set calls no model and needs no provider. When "Start processing as soon as it is queued" is set, the worker is started as by **q** (section 5.1).
 
 | Field | Default | Meaning |
 | --- | --- | --- |
@@ -438,7 +469,7 @@ With no command the terminal interface is started. `librarian COMMAND --help` pr
 | --- | --- |
 | `--library FOLDER` | Use this workspace instead of the active one |
 | `--config FILE` | Use this configuration file instead of `config.toml` in the workspace |
-| `--json` | Print JSON in place of text. It changes the output of `clean`, `run`, `search`, `prompts ROLE` and `parse -o`, and makes `status --watch` print instead of opening the terminal interface. Most other commands print JSON in any case |
+| `--json` | Print JSON in place of text. It changes the output of `clean`, `run`, `search`, `changes`, `prompts ROLE` and `parse -o`, and makes `status --watch` print instead of opening the terminal interface. Most other commands print JSON in any case |
 | `-V`, `--version` | Print the program version |
 | `-h`, `--help` | Print help |
 
@@ -458,14 +489,17 @@ With no command the terminal interface is started. `librarian COMMAND --help` pr
 | `--page-markers` | Write `<!-- page N -->` before the first element of each page. No marker is written where a paragraph runs on across the boundary |
 | `--plain` | Omit bold, italic, code and link markup and picture markers |
 | `--words` | Add positioned words, fonts and bookmarks to the JSON |
+| `--ocr` | Read scanned pages with a local OCR engine. See below |
 
 Only files with the extension `.pdf`, in any letter case, are read. A folder holding no PDF is an error. An existing result file is not replaced; that file is reported as a failure. All results of a recursive run go into the one folder, so two PDFs of the same name in different subfolders collide, and the second is reported as a failure. One unreadable file does not stop a folder. With `-o` and `--json`, one JSON line is printed per file. Without `-o`, `--json` and `--words` have no effect. The exit status is 1 if any file failed. With a source build, run `librarian engines install` once before the first parse. See [PARSING_FOUNDATION.md](PARSING_FOUNDATION.md).
+
+Without `--ocr`, a scanned page is reported with the tier `ocr` and is not read. With `--ocr`, a page that has a picture and fewer than 16 letters and digits of text is rendered to an image and read by a local engine: the bundled OCR engine when it is installed, otherwise the Tesseract program when it is installed. With neither, one line says that no local OCR engine was found, and parsing goes on without OCR. The Tesseract language is `processing.ocr_language` of the configuration in use, or `en` when there is no configuration. The words read are reconstructed like the other words of the file. Such a page has the tier `review`, with the reason "text was read from the page image by local OCR". The summary and each JSON line hold the count `ocr_pages`, and the text output adds "Pages read by local OCR: N" for a file with such pages. No model is called.
 
 ### 6.2 Cleaning and the queue
 
 | Command | Action |
 | --- | --- |
-| `clean [SOURCE] [-o FOLDER]` | Queue the source, then process the whole queue. On a terminal, a missing source or destination is chosen in the file browser, and a destination that does not exist is created after a question |
+| `clean [SOURCE] [-o FOLDER]` | Queue the source, then process the whole queue with the pipeline each job was queued with. On a terminal, a missing source or destination is chosen in the file browser, and a destination that does not exist is created after a question |
 | `run` | Process the queue. Work interrupted earlier is resumed |
 | `status` | Print the 1,000 most recent jobs as JSON |
 | `status --watch` | Open the terminal interface |
@@ -491,7 +525,9 @@ Only files with the extension `.pdf`, in any letter case, are read. A folder hol
 | `--start` | `resume`, `retry`, `budget` | Start the worker afterwards and wait for it. For `budget` it implies `--resume`. `resume ID --start` does not start the worker when that job is blocked |
 | `--resume` | `budget` | Return the job to the queue after raising its ceiling. Requires a ceiling option. The job is returned only if no ceiling stops it any longer; `resumed` is then 1, otherwise 0 |
 
-`pause` and `cancel` print the number of jobs changed; `resume` prints the number resumed and the jobs left blocked. A job not in a state the command can change is left as it is, and the exit status is 0. `clean`, `run` and `prepare` do not require Setup and do not check that the provider is verified; they require a usable configuration and, for model work, a key.
+`pause` and `cancel` print the number of jobs changed; `resume` prints the number resumed and the jobs left blocked. A job not in a state the command can change is left as it is, and the exit status is 0. `clean`, `run` and `prepare` do not require Setup and are not stopped by an unverified provider; they require a usable configuration and, for model work, a key.
+
+A command that starts the worker prints one line that begins "Notice:" on the error stream when a queued or running job calls a model and the provider of the configuration in use is not ready. The line gives the reason: no provider, key or model is configured; a session key is not present; or the provider has not passed a connection check with its present settings. The command then proceeds. The commands are `clean` without `--queue-only`, `run` without `--quiet`, `prepare`, `resume --start`, `retry --start` and `budget --start`.
 
 Raising a ceiling changes that one job. Its completed work, its cached replies and its counts of requests, tokens and cost are untouched, and the change is recorded with the consumption at the time and the words "from the command line". `resume ID` for a job that a ceiling still stops prints the reason on the error stream and exits with status 1. `resume` without a job number prints the reason for each blocked job and exits with status 0.
 
@@ -505,12 +541,13 @@ Only one worker may process a workspace at a time. Jobs run one at a time in ord
 | `pages ID` | A JSON array with one object per page: image path, size of the native text in bytes, and whether OCR, visual reading and copyedit are done |
 | `pages ID --page N` | The contents of page N: image path, native text, OCR, visual reading, copyedit |
 | `print ID` | The published Markdown |
+| `changes ID` | The cleaning account of a job of the fast pipeline, as text: the passages cleaned, the source words, the words in the result, the count of source words in each class of section 9.3, the words added, and the passages kept as extracted. Each passage with something to report follows, with its refusal reasons, its number differences, and the words replaced, removed and added. Added runs of fewer than three words are not listed. With `--json` the account is printed as JSON. For a job without an account one line says so |
 | `search QUERY [-l N]` | Passages containing every word of the query. The default limit is 20 and the largest is 1,000 |
 | `catalog` | Complete and needs-review jobs with metadata, class and accession number, as JSON |
 | `stats` | Documents, requests and tokens by status, and documents by class, as JSON |
 | `editorial ID` | The role contract, the reviewed segments with their `review:N` identifiers, the request packets, replies, revisions, interventions and expert feedback of an editorial run, as JSON |
 | `prompts` | The role names, versions and SHA-256 hashes |
-| `prompts ROLE` | The text of `copyeditor`, `reviewer` or `protocol`. The version name is also accepted |
+| `prompts ROLE` | The text of `copyeditor`, `reviewer`, `protocol` or `fast` (the prompt of the fast pipeline). The version name is also accepted |
 
 ### 6.4 Publication and feedback
 
@@ -569,6 +606,7 @@ The configuration file is TOML. Unknown keys are rejected. A missing file yields
 | `structured_output` | `schema` | How structured replies are requested: `schema`, `json` or `prompt` |
 | `model` | empty | Model for text |
 | `vision_model` | empty | Model for image requests. When empty, `model` is used |
+| `reasoning_effort` | empty | When not empty, sent with every request: as `reasoning_effort` to a `chat` endpoint and as `reasoning.effort` to a `responses` endpoint. It is not sent to an `anthropic` endpoint. At most 16 lower-case ASCII letters, for example `none`, `low`, `medium` or `high`. The words a model accepts depend on the model. Setup sets the key when a model is chosen (section 4.5) |
 | `credential` | none | Reference to the stored key |
 | `key_env` | `OPENAI_API_KEY` | Environment variable read when no credential is stored |
 | `namespace` | `default` | Separates caches and rate limits of different uses |
@@ -576,35 +614,37 @@ The configuration file is TOML. Unknown keys are rejected. A missing file yields
 | `cache_ttl_hours` | 168 | Lifetime of locally cached replies. 0 disables reading the cache |
 | `timeout_seconds` | 180 | Request timeout, 1 to 3600 |
 | `attempts` | 4 | Attempts per request, 1 to 8 |
-| `concurrency` | 3 | Requests in flight, 1 to 16 |
-| `requests_per_minute` | 60 | Request rate limit, at least 1 |
-| `tokens_per_minute` | 120000 | Token rate limit, at least 1024 |
+| `concurrency` | 3 | Requests in flight, 1 to 16. In the fast pipeline, the number of passages cleaned at once |
+| `requests_per_minute` | 60 | Ceiling on the request rate, at least 1. See "Pacing" in section 8 |
+| `tokens_per_minute` | 120000 | Ceiling on the token rate, at least 1024. See "Pacing" in section 8 |
 | `context_tokens` | 32768 | Context budget. At least `max_output_tokens` + `chunk_bytes` + the length of `style` + 4096 |
-| `max_output_tokens` | 8192 | Output limit per request, at least 256 |
+| `max_output_tokens` | 8192 | Output limit per request, at least 256. A cleaning request of the fast pipeline carries a smaller limit of its own (section 9.3) |
 | `input_price_per_million`, `cached_input_price_per_million`, `output_price_per_million` | none | Prices for cost accounting |
 | `vision_input_price_per_million`, `vision_cached_input_price_per_million`, `vision_output_price_per_million` | none | Prices of a separate vision model |
+
+The defaults of `concurrency`, `requests_per_minute` and `tokens_per_minute` are those of a configuration that Setup has not touched. Choosing a provider preset in Setup sets all three: to 16, 900 and 450000 for Cerebras and Groq, and to 3, 60 and 120000 for every other preset.
 
 ### 7.2 `[processing]`
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `pipeline` | `editorial` | `editorial` or `archival`. See section 9 |
+| `pipeline` | `fast` | `fast`, `editorial` or `archival`. See section 9. A configuration file that holds the key keeps its value. A file without the key uses `fast` |
 | `edit` | true | Copyedit with the model |
 | `classify` | true | Title, synopsis, tags and class from the model |
-| `vision` | true | Send page images to the model |
-| `prepare_only` | false | Page images and OCR only |
-| `ocr` | `paddle` | `paddle` or `tesseract` (local OCR), `vision` (no local OCR; in the archival pipeline the model reads the page image, in the editorial pipeline the same as `off`), or `off` |
-| `ocr_language` | `en` | Read only when `ocr` is `tesseract`: the Tesseract language, or several joined by `+`, for example `eng+deu`. The value must be non-empty and consist of ASCII letters, digits, `_`, `+` and `-`. It must name languages for which Tesseract has data on the computer; this is checked when Tesseract is chosen in Setup, by the engines step of Setup, and when Tesseract is used. A worker reads the list of installed languages once. The whole values `en`, `zh` and `ja` of earlier files are taken as `eng`, `chi_sim` and `jpn` where those are installed. With any other OCR engine the key has no effect and every value is accepted. The bundled engine recognizes English, Chinese and Japanese without a setting |
-| `page_concurrency` | 3 | Pages read at once, 1 to 16 |
-| `chunk_bytes` | 6000 | Size of a source window, 512 to 32000 |
-| `evidence_rounds` | 3 | Evidence requests allowed per passage, 0 to 8 |
-| `house_style` | empty | Editorial preferences added to the fixed role prompts |
-| `style` | built-in | Prompt of the archival pipeline. In the editorial pipeline only a changed value is used, as house style |
-| `glossary` | empty | Terms passed to the prompts |
+| `vision` | true | Send images to the model. In the fast pipeline these are pictures and image files; PDF pages are not sent |
+| `prepare_only` | false | Page images and OCR only. Read by the editorial pipeline only |
+| `ocr` | `paddle` | `paddle` or `tesseract` (local OCR), `vision` (no local OCR; in the fast and archival pipelines the model reads an image file, in the editorial pipeline the same as `off`), or `off`. In the fast pipeline the value also selects the engine that reads the scanned pages of a PDF (section 9.3) |
+| `ocr_language` | `en` | Read when Tesseract is used. That is when `ocr` is `tesseract`, and when `parse --ocr` or the fast pipeline reads a scanned PDF page with Tesseract because the bundled engine is not installed. The value is the Tesseract language, or several joined by `+`, for example `eng+deu`. The value must be non-empty and consist of ASCII letters, digits, `_`, `+` and `-`. It must name languages for which Tesseract has data on the computer; this is checked when Tesseract is chosen in Setup, by the engines step of Setup, and when Tesseract is used. A worker reads the list of installed languages once. The whole values `en`, `zh` and `ja` of earlier files are taken as `eng`, `chi_sim` and `jpn` where those are installed. Where Tesseract is not used the key has no effect and every value is accepted. The bundled engine recognizes English, Chinese and Japanese without a setting |
+| `page_concurrency` | 3 | Pages read at once, 1 to 16. Read by the editorial pipeline only |
+| `chunk_bytes` | 6000 | Size of a source window, 512 to 32000. In the fast pipeline, the largest size of a passage |
+| `evidence_rounds` | 3 | Evidence requests allowed per passage, 0 to 8. Read by the editorial pipeline only |
+| `house_style` | empty | Editorial preferences added to the fixed prompt of the fast pipeline and to the fixed role prompts of the editorial pipeline |
+| `style` | built-in | Prompt of the archival pipeline. In the editorial pipeline only a changed value is used, as house style. The fast pipeline does not use it |
+| `glossary` | empty | Terms passed to the prompts. The fast pipeline gives them as exact spellings |
 | `classification_override` | none | A class code that replaces the model's. Editorial pipeline only |
 | `office_renderer` | none | Path of the LibreOffice `soffice` executable |
 | `render_width` | 2000 | Page image width in pixels, 512 to 4096 |
-| `remove_page_furniture` | true | Remove repeated headers and footers from the text of a PDF of three or more pages |
+| `remove_page_furniture` | true | Remove repeated headers and footers from the text of a PDF of three or more pages. Not read by the fast pipeline, in which the parser leaves page furniture out |
 | `preserve_original_on_review` | true | Archival pipeline only: keep the source text when an edit raises a finding |
 | `max_file_bytes` | 2147483648 | Largest accepted source |
 | `max_requests` | 10000 | Requests allowed per job |
@@ -628,7 +668,7 @@ File name placeholders:
 | Placeholder | Value |
 | --- | --- |
 | `{title}` | Title |
-| `{class}` | Class code. `unclassified` when there is none, which occurs only in the archival pipeline; the editorial pipeline assigns `000` |
+| `{class}` | Class code. `unclassified` when there is none, which occurs only in the fast and archival pipelines; the editorial pipeline assigns `000` |
 | `{number}` | Job number, six digits |
 | `{sequence}` | Accession number within the class, six digits. The job number when there is none |
 | `{id}` | First 12 characters of the document identifier |
@@ -656,6 +696,7 @@ A table of class code to class name, given to the classification prompt. The def
 | OpenRouter · model gateway | `https://openrouter.ai/api/v1` | chat |
 | Together AI | `https://api.together.xyz/v1` | chat |
 | Fireworks AI | `https://api.fireworks.ai/inference/v1` | chat |
+| Cerebras | `https://api.cerebras.ai/v1` | chat |
 | Groq | `https://api.groq.com/openai/v1` | chat |
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` | chat |
 | Hugging Face · inference gateway | `https://router.huggingface.co/v1` | chat |
@@ -667,13 +708,15 @@ A table of class code to class name, given to the classification prompt. The def
 | LM Studio · local | `http://localhost:1234/v1` | chat |
 | Custom compatible endpoint | entered by the user | chosen by the user |
 
-Structured replies are requested in `json` mode for Qwen, Z.ai, Moonshot, DeepSeek, MiniMax, Groq, NVIDIA NIM, Novita AI, SiliconFlow and SambaNova, and in `schema` mode for the others. Every reply is also checked locally against the expected schema.
+Structured replies are requested in `json` mode for Qwen, Z.ai, Moonshot, DeepSeek, MiniMax, Cerebras, Groq, NVIDIA NIM, Novita AI, SiliconFlow and SambaNova, and in `schema` mode for the others. Every reply is also checked locally against the expected schema.
 
-The presets record each provider's published endpoint. The developers have not exercised them with live keys. The connection check of section 4.4 verifies the chosen provider, key and model.
+The presets record each provider's published endpoint. The measurements of section 9.9 were made against Cerebras. The developers have not exercised the other presets with live keys. The connection check of section 4.4 verifies the chosen provider, key and model.
 
-**Requests.** A request that receives HTTP 429 or a 5xx status, or that fails in transport, is tried at most `attempts` times in all, with increasing delay or the delay the provider states. Each try counts as one request against `max_requests`. A stated delay longer than `timeout_seconds` fails the request. Any other HTTP error fails at once. Redirects are not followed. The connection time limit is 20 seconds. A reply may be at most 16 MiB. A request estimated to exceed `context_tokens`, or the whole of `tokens_per_minute`, is not sent; for an Anthropic endpoint the provider's token-count service is consulted before such a request is refused. Requests are spaced to `requests_per_minute` and held to `tokens_per_minute`. A reply cut off at the output limit causes the source to be divided and the work continued from the source, not from generated text.
+**Requests.** A request that receives HTTP 429 or a 5xx status, or that fails in transport, is tried at most `attempts` times in all, with increasing delay or the delay the provider states. Each try counts as one request against `max_requests`. A stated delay longer than `timeout_seconds` fails the request. Any other HTTP error fails at once. Redirects are not followed. The connection time limit is 20 seconds. A reply may be at most 16 MiB. A request estimated to exceed `context_tokens`, or the whole of `tokens_per_minute`, is not sent; for an Anthropic endpoint the provider's token-count service is consulted before such a request is refused. A reply cut off at the output limit causes the source to be divided and the work continued from the source, not from generated text. When `reasoning_effort` is set and a request receives HTTP 400, the error message adds that the model may not accept that value.
 
-**Budgets.** Before each try of a request a reservation is recorded against `max_requests`, `max_generated_tokens` and `max_cost`: one request, the output allowance `provider.max_output_tokens`, and, where prices are configured, an estimated cost. A job therefore stops at the token ceiling when less than one request's allowance remains. A request that would exceed a ceiling is not sent, and the job stops with status `budget_exhausted` and a message that names the ceiling. Reservations survive a restart. A reservation is released when the reply reports token counts, on HTTP 429 and on other HTTP errors below 500. It stays held, and counts against the ceiling, for a request that failed in transport, received a 5xx status, was answered without token counts, or was in flight when the job was paused or cancelled. Cost is computed only when prices are configured and the provider reports token counts. A stopped job continues when its ceiling is raised (sections 5.3 and 6.2); nothing is reset.
+**Pacing.** Requests are spaced to `requests_per_minute`, and the tokens of the last 60 seconds are held to `tokens_per_minute`. When a response carries the provider's per-minute limits in its headers, the client uses 90 percent of each reported value in place of the configured one, where that is lower. The configured values are never exceeded. The request limit is read from `x-ratelimit-limit-requests-minute` or, when that is absent, `x-ratelimit-limit-requests`. The token limit is read from `x-ratelimit-limit-tokens-minute` or, when that is absent, `x-ratelimit-limit-tokens`. A request is entered at an estimate of its tokens. For a cleaning request of the fast pipeline the estimate is one third of the request's size in bytes plus the request's ceiling on generated tokens. When a reply reports its token counts, the estimate is replaced by the billed count.
+
+**Budgets.** Before each try of a request a reservation is recorded against `max_requests`, `max_generated_tokens` and `max_cost`: one request, the output allowance of the request, and, where prices are configured, an estimated cost. The output allowance is `provider.max_output_tokens`, or, for a cleaning request of the fast pipeline, that request's own ceiling on generated tokens (section 9.3). A job therefore stops at the token ceiling when less than one request's allowance remains. A request that would exceed a ceiling is not sent, and the job stops with status `budget_exhausted` and a message that names the ceiling. Reservations survive a restart. A reservation is released when the reply reports token counts, on HTTP 429 and on other HTTP errors below 500. It stays held, and counts against the ceiling, for a request that failed in transport, received a 5xx status, was answered without token counts, or was in flight when the job was paused or cancelled. Cost is computed only when prices are configured and the provider reports token counts. A stopped job continues when its ceiling is raised (sections 5.3 and 6.2); nothing is reset.
 
 **Caches.** A completed reply is stored in the workspace database under a hash of the request. An identical later request is answered from the store without a provider call. This is separate from the provider's own prompt caching, which is selected by `prompt_cache`.
 
@@ -685,8 +728,8 @@ The presets record each provider's published endpoint. The developers have not e
 
 | Extensions | Handling |
 | --- | --- |
-| `pdf` | PDFium. Encrypted files are refused |
-| `docx`, `pptx`, `ppt`, `doc`, `odt`, `odp`, `rtf`, `xlsx`, `ods` | When `processing.pipeline` is `editorial`: converted to PDF by LibreOffice, then handled as PDF |
+| `pdf` | PDFium. Encrypted files are refused. The reading depends on the pipeline; see below |
+| `docx`, `pptx`, `ppt`, `doc`, `odt`, `odp`, `rtf`, `xlsx`, `ods` | Office formats. The handling depends on the pipeline; see below |
 | `txt`, `text`, `log` | UTF-8 text |
 | `md`, `markdown` | Markdown, at most 64 MiB |
 | `csv`, `tsv` | Tables, in batches of records |
@@ -695,9 +738,19 @@ The presets record each provider's published endpoint. The developers have not e
 | `png`, `jpg`, `jpeg`, `bmp`, `webp` | One page image |
 | `tif`, `tiff`, `gif` | One page image per frame |
 
-Any other extension is refused when the job runs, and the original is kept. Text must be UTF-8. An office conversion is stopped after ten minutes. The handling of office formats follows the setting `processing.pipeline`, including for extraction-only jobs. When it is `archival`, `docx` is read directly from its XML and the other office formats are refused.
+Any other extension is refused when the job runs, and the original is kept. Text must be UTF-8.
 
-Further limits: an image may be at most 16,000 pixels on a side; a rendered page image is at most twice `render_width` in height; a CSV or TSV record may have at most 1,000 columns and 8 MiB; a subtitle line may be at most 1 MiB and a cue 8 MiB; a part of a DOCX file may be at most 64 MiB; Tesseract is allowed 120 seconds a page.
+The handling of PDF and office formats follows the setting `processing.pipeline`, including for extraction-only jobs.
+
+| Format | `fast` | `editorial` | `archival` |
+| --- | --- | --- | --- |
+| `pdf` | Read by the deterministic parser. Scanned pages are read by local OCR when an engine is set and installed. See section 9.3 | Every page is rendered to an image and read. See section 9.4 | The text of each page is taken from PDFium. A page without usable text, or with a complex layout, is rendered to an image |
+| `docx` | Read directly from its XML | Converted to PDF by LibreOffice, then handled as PDF | Read directly from its XML |
+| The other office formats | Refused | Converted to PDF by LibreOffice, then handled as PDF | Refused |
+
+An office conversion is stopped after ten minutes.
+
+Further limits: an image may be at most 16,000 pixels on a side; a rendered page image is at most twice `render_width` in height; a CSV or TSV record may have at most 1,000 columns and 8 MiB; a subtitle line may be at most 1 MiB and a cue 8 MiB; a part of a DOCX file may be at most 64 MiB; Tesseract is allowed 120 seconds a page, and 180 seconds for a scanned PDF page read for the parser.
 
 ### 9.2 Engines
 
@@ -713,9 +766,100 @@ Engines are pinned by URL and SHA-256. An engine is looked for in the workspace 
 
 LibreOffice is looked for in this order: `processing.office_renderer`, the workspace, the folder beside the program, the usual installation paths, and the search path. If `processing.office_renderer` is set and does not name a file, no other place is tried. It runs without a display, with a private profile and with document macros disabled.
 
-### 9.3 The editorial pipeline
+### 9.3 The fast pipeline
 
-This is the default. It is used when `pipeline` is `editorial` and at least one of `edit`, `vision` or `prepare_only` is set.
+A new configuration uses this pipeline. It is used when `pipeline` is `fast`. It reads the document locally, cuts the text into passages, sends each passage to the model in one request of bounded size, keeps several requests in flight, and accounts for every source word of a reply before the reply may replace its source.
+
+1. When the job first runs, the source is copied to `originals/`.
+2. The source is read into blocks.
+   - A PDF is read by the deterministic parser described in `PARSING_FOUNDATION.md`. The reading is that of `librarian parse` with its default options: page furniture is left out, inline styles are kept, and pictures are marked by position. The Markdown is split into blocks. A scanned page is read by local OCR as described below. No other page is rendered.
+   - Any other format is read by the extractor named in section 9.1.
+   - An image file is read by local OCR. It is read by the model instead when `vision` is on and either the OCR reports uncertainty or `ocr` is `vision`. A picture taken from a document is described by the model when `vision` is on. This is the handling of the archival pipeline.
+3. The blocks are planned into passages. With `edit` off, the plan of the archival pipeline is used and nothing is sent for cleaning.
+4. Each passage that holds a letter or a digit is cleaned by one request. `provider.concurrency` requests are in flight at a time. An accepted passage is committed at once.
+5. If `classify` is set, title, synopsis, tags and class are requested once, from excerpts of the text. `classification_override` is not applied and no accession number is assigned.
+6. The Markdown is published and indexed.
+
+**Scanned pages of a PDF.** A page that has a picture and fewer than 16 letters and digits of text is read by a local OCR engine, in the way of `parse --ocr` (section 6.1). The engine follows `processing.ocr`.
+
+| `processing.ocr` | Engine |
+| --- | --- |
+| `paddle` | The bundled OCR engine when it is installed, otherwise Tesseract when it is installed |
+| `tesseract` | Tesseract |
+| `vision`, `off` | None |
+
+Tesseract uses the language `processing.ocr_language` of the job's configuration.
+
+An info event records the reading: "Read N scanned page(s) with ENGINE". No model reads a PDF page. A page to which the parser then still assigns the tier `ocr` is named in a finding: "No text could be read from page N. A scanned page needs a local OCR engine: install the engines, or install Tesseract and set processing.ocr". The finding makes the job end as `needs_review`. A PDF from which no text at all is read fails, with the message "No text could be read from this PDF. If it is a scan, install the local OCR engines (`librarian engines install`) or Tesseract, and run the job again".
+
+**Passages.**
+
+- Neighbouring editable blocks are joined into one Markdown passage of at most `chunk_bytes` bytes. The editable blocks are prose, headings, list items and Markdown prose.
+- A paragraph larger than `chunk_bytes` is cut at white space. Each piece is a passage of its own.
+- A heading that would end a passage is moved to the next one, so that it stays with the text under it.
+- Tables, code, equations, figures and other structural Markdown are kept as they are. They are never sent to a model.
+- The cue numbers and time codes of a subtitle file are dropped.
+
+The plan depends only on the blocks and on `chunk_bytes`, so a resumed job plans the same passages.
+
+**Mechanical repairs.** Before a passage is sent, soft hyphens, zero-width spaces and byte-order marks are removed; the ligatures ff, fi, fl, ffi and ffl are written as separate letters; no-break spaces and tabs become spaces; a run of spaces becomes one space; and spaces at the end of a line are removed. The passage in this state is the source for what follows.
+
+**The request.**
+
+| Part | Content |
+| --- | --- |
+| System text | The fixed prompt `fast-clean-v1`; then `processing.house_style`, if it is set; then the terms of `processing.glossary`, as exact spellings. `processing.style` is not used. The text is the same for every passage of a job |
+| User text | Up to 60 words from the end of the passage before, and up to 60 words from the start of the passage after, as read-only context; the passage; the output contract |
+| Reply | Plain text between `<clean>` and `</clean>`. No structured reply is requested. Reasoning printed between `<think>` and `</think>` before the reply is ignored |
+| Ceiling on generated tokens | The size of the passage in bytes, divided by 3 and multiplied by 1.3, plus 256, plus an allowance for reasoning. It is never above `provider.max_output_tokens` |
+
+| `provider.reasoning_effort` | Allowance for reasoning, in tokens |
+| --- | --- |
+| `none` | 0 |
+| `minimal`, `low` | 1,024 |
+| Any other value, or empty | 4,096 |
+
+The budget reservation and the pacing estimate of section 8 use this ceiling. The prompt is the file `fast-clean-v1.txt`, in the `prompts` folder of a package and in `crates/librarian-core/prompts/` of the repository. The command `prompts fast` prints it.
+
+**The account.** The source and the reply are aligned word by word. A word is a run of letters and digits. Words are compared without regard to case. An apostrophe inside a word is ignored. Digit groups joined by a comma or a point are one number. Every source word is placed in exactly one class.
+
+| Class | A source word that |
+| --- | --- |
+| Kept | Stands in the reply |
+| Spelling repaired | Was replaced by a similar spelling. Two spellings are similar when the edit distance between them is at most two fifths of the length of the longer |
+| Split or joined, repaired | Was replaced by the same letters divided differently into words |
+| Replaced | Was replaced by a different word |
+| Filler or stutter removed | Was removed and is "um", "uh", "er", "erm", "ah", "hmm", "mm", "uhh" or "umm"; is part of "you know", "I mean", "sort of" or "kind of"; is "like", "so", "right", "well", "okay", "ok", "actually" or "basically"; or stands beside the same word in the source |
+| Repeated run removed | Was removed in a run of three or more words that stands elsewhere in the reply |
+| Other removed | Was removed for no reason above |
+
+Words added by the reply are counted. The numbers of the source and of the reply are compared as two collections, and a number that stands in one and not in the other is recorded. At most 60 changed places and 20 numbers on each side are recorded for a passage.
+
+A reply sometimes runs on into the read-only context after its passage, or opens with the context before it. When a reply adds eight or more words in one run, such a run is looked for at each end. It is cut off when at least 70 percent of its words are words of that context in the same order, and the cut lowers the count of added words by at least 70 percent of the length of the run.
+
+**Refusal.** A reply is refused when it is not an edit of its passage.
+
+| Condition | Stated reason |
+| --- | --- |
+| The reply has no `<clean>` section | "the response has no <clean> section" |
+| The reply ended before `</clean>` | "the response ended before </clean>" |
+| The provider reports that the reply reached the output limit | "the response reached the output limit before it was complete" |
+| Nothing stands between the tags, or the reply holds no words | "the response is empty", "the response holds no words" |
+| 25 or more words in one run are in the class "other removed"; or the source has 8 or more words and half or more of them are in that class | "the response dropped N of M source words (K in one run)" |
+| 25 or more words are added in one run; or the added words exceed half the source words plus 8 | "the response added N words that are not in the source (K in one run)" |
+| The differing stretches of source and reply are too large to align: the product of their lengths in words is above 16,000,000 | "the passage is too large to account for" |
+
+Repairs of words, numbers and quotations never cause refusal. A difference in numbers is recorded in the account and raises no finding.
+
+A refused passage of more than 600 bytes is cut in two at white space near its middle. Each half is requested once, with the other half as its context, and a warning event records the first refusal. A half that is refused, and a refused passage of 600 bytes or less, is kept as extracted, with the finding "Kept as extracted. The cleaning response was refused: REASON". A refused reply is not stored in the cache of replies. A document with any finding is published with status `needs_review`.
+
+**Records.** The account of each passage is stored in the table `clean_ledger` of the workspace database when the passage is committed. A stopped job resumes with the passages not yet committed. When cleaning ends, an info event records the totals and the elapsed time. It begins "Cleaned N passages in S s." The account is printed by `librarian changes ID` (section 6.3) and shown from the document menu (section 5.2).
+
+The account counts words. It detects text that was dropped or written in bulk. It does not establish that the meaning of a passage was preserved. That requires a human reader.
+
+### 9.4 The editorial pipeline
+
+It is used when `pipeline` is `editorial` and at least one of `edit`, `vision` or `prepare_only` is set.
 
 1. When the job first runs, the source is copied to `originals/`. A file changed between queueing and that moment is read as changed.
 2. Pages are prepared. A PDF page is rendered to an image. An office document is first converted to PDF. Text that has no page image is printed to page images in the bundled Noto Sans font, and every byte of the text is checked to belong to exactly one page.
@@ -739,13 +883,13 @@ The model must list every assigned unit of source text exactly once, as represen
 
 A job of this pipeline is published with status `complete`. Unresolved findings of the model are written to `editorial-report.json` and are not placed in the published file.
 
-### 9.4 The archival pipeline
+### 9.5 The archival pipeline
 
-This pipeline is kept so that older jobs can resume. It is also the path taken when `edit`, `vision` and `prepare_only` are all off, as with `clean --extract-only`.
+This pipeline is kept so that older jobs can resume. It is also the path taken when `pipeline` is `editorial` and `edit`, `vision` and `prepare_only` are all off, as with `clean --extract-only`. A job whose stored configuration names no pipeline uses it.
 
 It extracts blocks, interprets page images by OCR and, where OCR is uncertain, by the model, copyedits blocks in batches, classifies the document against the taxonomy, and publishes. An edit that changes numbers or quotations, changes the length greatly, or alters protected content raises a finding. With `preserve_original_on_review` the source text of that block is kept. A document with any finding is published with status `needs_review`. This pipeline does not apply `classification_override` and does not assign accession numbers.
 
-### 9.5 Job states
+### 9.6 Job states
 
 | Status | Meaning |
 | --- | --- |
@@ -763,21 +907,63 @@ While a job runs, its stage is shown beside its status.
 
 | Stage | Pipeline |
 | --- | --- |
-| `recovering` | Either. A job returned to the queue after an interruption |
-| `snapshotting`, `extracting`, `extracting and rendering PDF`, `laying out office pages` | Either |
+| `recovering` | Any. A job returned to the queue after an interruption |
+| `snapshotting`, `extracting`, `extracting and rendering PDF`, `laying out office pages` | Any |
 | `preparing page images + OCR`, `quick look`, `reading pages + copyediting`, `assembling`, `reviewing with evidence`, `cataloging` | Editorial |
-| `interpreting`, `cleaning`, `classifying` | Archival |
-| `exporting` | Either |
+| `interpreting`, `cleaning`, `classifying` | Fast and archival |
+| `exporting` | Any |
 
 A job found in state `running` when a worker starts is returned to the queue. Work is recorded in the database page by page and passage by passage. A resumed job does not repeat recorded work.
 
-### 9.6 Published files
+### 9.7 Published files
 
 A published file has, in this order and each subject to its setting: a front matter block; the title; a synopsis; the body; a list of review notes. Images referred to by the body are copied to an `assets` folder in the destination. The file is written under a temporary name and renamed. An existing file is never replaced.
 
-### 9.7 Search
+### 9.8 Search
 
 Finished documents are indexed in the workspace database with SQLite FTS5. The index holds one entry for each published passage. A query is split into words; every word must occur in the same passage or in the title; each word is matched literally. Diacritics are ignored. An empty query returns nothing.
+
+### 9.9 Measurements of the fast pipeline
+
+The figures below were taken on 2026-11-19 against Cerebras. Each is the result of one run. Results differ between runs by about 0.01. The runs used synthetic damage of public-domain text. No run was made on the owner's documents.
+
+**Method.** The script `tools/bench/clean_corpus.py` builds documents from the public-domain reference passages in `examples/editorial_holdout_v*.json`, grouped by category. Cases at odd positions form the development half and cases at even positions the holdout half. Each half has five documents of 649 to 1,074 words. Each document is damaged in three ways, with a fixed seed.
+
+| Damage | Content |
+| --- | --- |
+| Speech transcript | No capitals and no punctuation; fillers, stutters, false starts and sound-alike words |
+| Subtitle file | The same transcript, cut into numbered and timed cues |
+| Scanner output | Look-alike characters, split and joined words, hard line breaks with hyphens, stray marks and running heads |
+
+The damaged files are cleaned with `librarian clean DIR -o RESULTS --body-only` and scored with `tools/bench/clean_score.py`. The truth is written to the subfolder `truth` of that folder, which `clean` does not enter; the scoring script reads it there. Word error is the word-level edit distance to the truth, divided by the length of the truth, after lower-casing and removal of punctuation. The settings were the fast pipeline, `chunk_bytes` 6000, and `classify` and `vision` off. The scripts need Python with the packages in `tools/bench/requirements.txt`. The scripts and the examples are in the repository and are not part of a package.
+
+**Word error, before and after cleaning.**
+
+| Model, reasoning effort | Half | Speech transcript | Subtitle file | Scanner output |
+| --- | --- | --- | --- | --- |
+| `qwen-3.8-27b`, `none` | Development | 0.121 → 0.023 | 1.361 → 0.033 | 0.059 → 0.002 |
+| `qwen-3.8-27b`, `none` | Holdout | 0.119 → 0.032 | 1.360 → 0.027 | 0.064 → 0.002 |
+| `gpt-oss-120b`, `low` | Development | 0.121 → 0.062 | 1.361 → 0.081 | 0.059 → 0.011 |
+| `gpt-oss-120b`, `low` | Holdout | 0.119 → 0.073 | 1.360 → 0.090 | 0.064 → 0.015 |
+
+The word error of an uncleaned subtitle file is above 1 because its cue numbers and time codes count as extra words. The holdout run of `gpt-oss-120b` was made before the rule that cuts context off a reply was added. A second development run of `gpt-oss-120b` gave 0.058, 0.066 and 0.020. The script also records a score that keeps capitals and punctuation. The truth uses nineteenth-century punctuation, so that score is not a measure of correctness and is not given here.
+
+**Time.**
+
+| Work | Model | Elapsed |
+| --- | --- | --- |
+| The 15 documents of one half, one at a time, with queueing and publication | `qwen-3.8-27b` | 17 s |
+| The same | `gpt-oss-120b` | 11 to 12 s |
+| One transcript of 47,906 words, 45 passages | `gpt-oss-120b` | 4.1 s |
+| The same | `qwen-3.8-27b` | 61 s |
+
+The run of 4.1 s used 84,641 input tokens and 58,443 output tokens. The run of 61 s was held by the account's limit of 150,000 tokens per minute for that model, as the provider reported it in its response headers. The limit reported for `gpt-oss-120b` was 500,000. All 45 passages were accepted in both runs.
+
+**Refusal.** A local stand-in provider was made to return a 30-word summary for long passages. A passage of 500 words was refused, cut in two and accepted. A passage of 800 words was refused, both halves were refused, the text was published as extracted, with 800 words in and 800 words out, and the job ended as `needs_review`.
+
+**A scanned PDF.** A two-page PDF of page images only, holding 811 words, was cleaned with `qwen-3.8-27b`. Its pages were read by Tesseract. The job completed in 4.9 s. The bundled OCR engine was not run on this path, because its models could not be downloaded in the development container.
+
+**An observation.** The results of the two models for the same passages were compared. The 5 percent of words on which they differed held 53 to 62 percent of the remaining errors of the better model on speech damage. Nothing in the program uses this.
 
 ## 10. The WebAssembly package
 
@@ -786,13 +972,14 @@ The crate `librarian-wasm` exports one function, `execute_json`. It gives access
 ## 11. Limits and known conditions
 
 - **Credential stores.** Storing a key in Keychain, Credential Manager or Secret Service has not been exercised by the automated tests, which use a stand-in store to test the order of operations, the rollback and the recovery. On a computer with no credential store the key can be kept for the session only.
-- **Session keys.** A session key is not available after the program exits. Home then shows "the session key has not been entered in this session". It is entered again in the provider part, which requires a new billed connection check, and until then work that calls a model is not queued from the import form.
-- **Where the provider is not checked.** The provider is checked when work is queued from the import form and when **r** runs a finished document again. It is not checked by **q**, by **r** on a paused or cancelled document, or by the commands `clean`, `run`, `prepare`, `resume --start`, `retry --start` and `budget --start`. A job whose provider or key is missing fails when it first calls the model, with a message that says so.
+- **Session keys.** A session key is not available after the program exits. Home then shows "the session key has not been entered in this session". It is entered again in the provider part, which requires a new billed connection check, and until then work that calls a model is not queued from the import form and the queue is not started from the terminal interface.
+- **Where the provider is checked.** In the terminal interface the provider is checked when work is queued from the import form, when **r** runs a finished document again, and whenever the worker is started. The check is of the configuration in force. A job keeps the configuration it was queued with, so a job queued under another provider is not covered by it. The commands `clean`, `run`, `prepare`, `resume --start`, `retry --start` and `budget --start` are not stopped by the check; they print a notice (section 6.2). A job whose provider or key is missing fails when it first calls the model, with a message that says so.
 - **OCR models.** The bundled OCR models recognize English, Chinese and Japanese. Other languages need Tesseract or the model's own reading of the page.
 - **Engines from the command line.** The commands install no engine by themselves; `librarian engines install` does.
 - **Print layout.** Text printed to page images is set in one font without complex-script shaping. The native text is kept separately and is not affected.
-- **Scanned PDFs in `parse`.** The parser reports pages that need OCR and does not read them.
-- **Quality.** A status of `complete` records that the pipeline ran to its end. It is not a statement that the document is correct. The developers have made no paid document runs; the two document runs on record were made by the owner with an earlier version.
+- **Scanned PDFs.** `parse` reads scanned pages only with `--ocr` or the box of the Parse form, and the fast pipeline only when `processing.ocr` is `paddle` or `tesseract`. Both need a local OCR engine to be installed. Otherwise such pages are reported and not read. The reading by Tesseract was run by the developers on one two-page document. The reading by the bundled engine on this path was not run, because its models could not be downloaded in the development container.
+- **The fast pipeline.** No model reads a page of a PDF, and a picture in a PDF is marked by position and not described. Of the office formats only `docx` is read. The account of section 9.3 counts words and does not establish that meaning was preserved.
+- **Quality.** A status of `complete` records that the pipeline ran to its end. It is not a statement that the document is correct. The developers' paid runs were made on synthetic damage of public-domain text and on one scanned test document (section 9.9). No run was made on the owner's documents, and acceptance on the owner's documents and keys has not been carried out. The two document runs on record were made by the owner with an earlier version.
 - **Platforms.** The four packages are built and their engines are loaded by the workflow. Operation on other systems, and on every configuration of the four, has not been established.
 
 ## 12. Building and checking
@@ -811,8 +998,10 @@ The package is written to `dist/` as `librarian-TARGET.tar.gz`, or `.zip` on Win
 
 The workflow "Librarian terminal builds" starts on every pull request, on each push that changes the Rust sources, the toolchain file, the three packaging tools, the packaged documents and licenses or the workflow itself, and on request. On a pull request a first job finds which files changed. The build jobs run only when the Rust sources, the packaging tools or the packaged documents changed. A lint of the Python scripts under `tools/` runs only when a file under `tools/`, `pyproject.toml` or the workflow file changed. A job that verifies the office renderer and fetches the OCR models precedes the builds. A job that does not apply is reported as skipped. The last job, "Rust required", always runs; it fails if a job that had to run did not succeed. It is the check to require on `main`.
 
-For each of the four targets the build jobs run the linter with warnings as errors, a release build, the tests, and the package check. The format check runs on Linux. The workflow also builds the WebAssembly package.
+For each target the build jobs run the linter with warnings as errors, a release build, the tests, and the package check. A pull request, a push to `main` and a run on request use all four targets. Any other push uses the Linux target only. The format check runs on Linux. The workflow also builds the WebAssembly package.
 
-The legacy Python application is checked by the workflow "CI" in the same manner: its jobs run when its files change, and "Legacy required" reports the result.
+The legacy Python application is checked by the workflow "CI" in the same manner: its jobs run when its files change, and "Legacy required" reports the result. The workflow "Mac App" builds the legacy macOS application on a version tag, on request, and on a pull request that changes `apps/macos/`, `src/librarian/`, `pyproject.toml` or the workflow file. It has no path filter on pull requests. Its job "Mac app changes" finds whether the build applies, and its last job, "Mac app required", always runs and reports the result.
 
-There are 18 automated tests. Five concern the PDF parser. The others concern text ownership across chunk boundaries, protection of literal content, budget reservations across concurrent database connections and a reopened database, continuation of a job after its ceiling is raised, the activation transaction and its recovery from interruption, what a connection check covers, the Tesseract language, the image size limit, page coverage of printed text, pause and resume, atomic application of revisions to earlier passages, and recovery of publication after an interruption. They do not establish the quality of any model's editing.
+The measurements of section 9.9 are made with the scripts `tools/bench/clean_corpus.py` and `tools/bench/clean_score.py`. The measurements of the parser are made with the other scripts in `tools/bench/`, as described in `PARSING_FOUNDATION.md`.
+
+There are 19 automated tests. Five concern the PDF parser. One concerns the word account of the fast pipeline: that every source word is placed in one class, that gross loss and gross addition are refused, that a changed number is accepted and recorded, and that context is cut off a reply. The others concern text ownership across chunk boundaries, protection of literal content, budget reservations across concurrent database connections and a reopened database, continuation of a job after its ceiling is raised, the activation transaction and its recovery from interruption, what a connection check covers, the Tesseract language, the image size limit, page coverage of printed text, pause and resume, atomic application of revisions to earlier passages, and recovery of publication after an interruption. They do not establish the quality of any model's editing.

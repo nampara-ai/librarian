@@ -27,6 +27,9 @@ pub struct Provider {
     pub base_url: String,
     pub model: String,
     pub vision_model: String,
+    /// Sent with every chat or responses request when not empty (for example
+    /// none, low, medium, high). Not sent to an anthropic endpoint.
+    pub reasoning_effort: String,
     pub key_env: String,
     pub namespace: String,
     /// off, implicit, explicit (Responses), or ephemeral (Anthropic).
@@ -50,7 +53,8 @@ pub struct Provider {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Processing {
-    /// editorial: multimodal synthesis; archival: compatibility for saved old jobs.
+    /// fast: parse, then repair every passage in parallel; editorial: multimodal
+    /// synthesis from page images; archival: compatibility for saved old jobs.
     pub pipeline: String,
     pub office_renderer: Option<PathBuf>,
     pub classification_override: Option<String>,
@@ -101,6 +105,7 @@ impl Default for Provider {
             base_url: "https://api.openai.com/v1".into(),
             model: String::new(),
             vision_model: String::new(),
+            reasoning_effort: String::new(),
             key_env: "OPENAI_API_KEY".into(),
             namespace: "default".into(),
             prompt_cache: "implicit".into(),
@@ -124,7 +129,7 @@ impl Default for Provider {
 impl Default for Processing {
     fn default() -> Self {
         Self {
-            pipeline: "editorial".into(),
+            pipeline: "fast".into(),
             office_renderer: None,
             classification_override: None,
             page_concurrency: 3,
@@ -250,11 +255,24 @@ impl Config {
         Ok(())
     }
     pub fn validate(&self) -> Result<()> {
-        if !matches!(self.processing.pipeline.as_str(), "editorial" | "archival")
-            || !(1..=16).contains(&self.processing.page_concurrency)
+        if !matches!(
+            self.processing.pipeline.as_str(),
+            "fast" | "editorial" | "archival"
+        ) || !(1..=16).contains(&self.processing.page_concurrency)
         {
             bail!(
-                "processing.pipeline must be editorial or archival; page_concurrency must be from 1 to 16"
+                "processing.pipeline must be fast, editorial or archival; page_concurrency must be from 1 to 16"
+            );
+        }
+        if self.provider.reasoning_effort.len() > 16
+            || !self
+                .provider
+                .reasoning_effort
+                .chars()
+                .all(|c| c.is_ascii_lowercase())
+        {
+            bail!(
+                "provider.reasoning_effort must be empty or one lower-case word, such as none or low"
             );
         }
         if self.processing.evidence_rounds > 8 {

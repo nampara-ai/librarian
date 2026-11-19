@@ -1,6 +1,7 @@
 //! Deterministic document rules. No filesystem, clock, network, or host bindings.
 #![forbid(unsafe_code)]
 
+pub mod clean;
 pub mod corpus;
 mod document;
 pub mod editorial;
